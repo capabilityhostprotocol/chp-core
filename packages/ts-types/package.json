@@ -1,0 +1,55 @@
+{
+  "name": "@auxo/ts-types",
+  "version": "0.1.0",
+  "description": "TypeScript protocol types for CHP, including schema-aligned v0.1 types.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./legacy": {
+      "types": "./dist/legacy.d.ts",
+      "import": "./dist/legacy.mjs",
+      "require": "./dist/legacy.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/legacy.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts src/legacy.ts --format cjs,esm --dts --watch",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --target ES2022 examples/v0_1.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "chp",
+    "capability-host-protocol",
+    "auxo",
+    "governance",
+    "evidence",
+    "capabilities",
+    "typescript"
+  ],
+  "author": "Auxo Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "rad:auxo-chp",
+    "directory": "packages/ts-types"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}

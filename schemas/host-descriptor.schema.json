@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/host-descriptor.schema.json",
+  "title": "HostDescriptor",
+  "type": "object",
+  "required": ["id", "version", "protocol_version", "kind", "capabilities", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "protocol_version": {
+      "type": "string",
+      "const": "0.1"
+    },
+    "kind": {
+      "type": "string",
+      "description": "Host implementation kind, for example local, service, mcp-wrapper, cli, device."
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "https://chp.dev/schemas/v0.1/capability-descriptor.schema.json"
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["store", "append_only"],
+      "additionalProperties": true,
+      "properties": {
+        "store": { "type": "string" },
+        "append_only": { "type": "boolean" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    }
+  }
+}

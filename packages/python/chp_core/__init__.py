@@ -1,0 +1,98 @@
+"""CHP v0.1 reference local host."""
+
+from .adapters import (
+    CHP_ADAPTER_GROUP,
+    BaseAdapter,
+    CapabilityAdapter,
+    HostedCapability,
+    SimpleAdapter,
+    auto_register_adapters,
+    discover_adapters,
+    register_adapter,
+    register_capability_once,
+    register_hosted_capabilities,
+)
+from .capabilities import (
+    register_builtin_capabilities,
+    register_evaluate_counterfactual,
+    register_explain_execution,
+    register_trace_execution,
+)
+from .host import CapabilityExecutionContext, LocalCapabilityHost
+from .http import CapabilityHostHTTPServer, create_http_server, serve_http
+from .store import SQLiteEvidenceStore
+from .decorators import capability
+from .codex import (
+    CODEX_CAPABILITY_IDS,
+    record_codex_action,
+    register_codex_observation_capabilities,
+)
+from .otel import evidence_to_otel_span, replay_to_otel_spans
+from .redaction import DEFAULT_SENSITIVE_KEYS, redact_payload
+from .types import (
+    AssuranceMetadata,
+    CapabilityCategory,
+    CapabilityDescriptor,
+    CapabilityIdempotency,
+    CapabilityStatus,
+    CorrelationContext,
+    DenialReason,
+    ExecutionEvidence,
+    ExecutionOutcome,
+    HostDescriptor,
+    HostRequirements,
+    InvariantDescriptor,
+    InvocationEnvelope,
+    InvocationResult,
+    PolicyDescriptor,
+    ReplayQuery,
+    ReplayResult,
+)
+
+__all__ = [
+    "AssuranceMetadata",
+    "BaseAdapter",
+    "CHP_ADAPTER_GROUP",
+    "CODEX_CAPABILITY_IDS",
+    "CapabilityAdapter",
+    "CapabilityCategory",
+    "CapabilityIdempotency",
+    "CapabilityStatus",
+    "CapabilityDescriptor",
+    "CapabilityHostHTTPServer",
+    "CapabilityExecutionContext",
+    "capability",
+    "CorrelationContext",
+    "DEFAULT_SENSITIVE_KEYS",
+    "DenialReason",
+    "ExecutionEvidence",
+    "ExecutionOutcome",
+    "HostedCapability",
+    "HostDescriptor",
+    "HostRequirements",
+    "InvariantDescriptor",
+    "InvocationEnvelope",
+    "InvocationResult",
+    "LocalCapabilityHost",
+    "PolicyDescriptor",
+    "ReplayQuery",
+    "ReplayResult",
+    "SQLiteEvidenceStore",
+    "create_http_server",
+    "evidence_to_otel_span",
+    "redact_payload",
+    "SimpleAdapter",
+    "auto_register_adapters",
+    "discover_adapters",
+    "register_adapter",
+    "register_builtin_capabilities",
+    "register_capability_once",
+    "record_codex_action",
+    "register_codex_observation_capabilities",
+    "register_evaluate_counterfactual",
+    "register_explain_execution",
+    "register_hosted_capabilities",
+    "register_trace_execution",
+    "replay_to_otel_spans",
+    "serve_http",
+]

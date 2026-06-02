@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/assurance-metadata.schema.json",
+  "title": "AssuranceMetadata",
+  "type": "object",
+  "required": ["level"],
+  "additionalProperties": false,
+  "properties": {
+    "level": {
+      "type": "string",
+      "enum": ["S1", "S2", "S3"],
+      "default": "S1"
+    },
+    "evidence_policy": {
+      "type": "string",
+      "default": "local-append-only"
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/invocation-result.schema.json",
+  "title": "InvocationResult",
+  "type": "object",
+  "required": ["invocation_id", "capability_id", "correlation", "outcome", "success", "evidence_ids", "completed_at"],
+  "additionalProperties": false,
+  "properties": {
+    "invocation_id": { "type": "string", "minLength": 1 },
+    "capability_id": { "type": "string", "minLength": 1 },
+    "capability_version": { "type": ["string", "null"] },
+    "correlation": { "$ref": "https://chp.dev/schemas/v0.1/correlation-context.schema.json" },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "failure", "denied", "skipped"]
+    },
+    "success": { "type": "boolean" },
+    "data": true,
+    "error": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "denial": {
+      "anyOf": [
+        { "$ref": "https://chp.dev/schemas/v0.1/invocation-result.schema.json#/$defs/DenialReason" },
+        { "type": "null" }
+      ]
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "started_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "DenialReason": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "invariant_id": { "type": ["string", "null"] },
+        "retryable": { "type": "boolean" },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/execution-evidence.schema.json",
+  "title": "ExecutionEvidence",
+  "$ref": "https://chp.dev/schemas/v0.1/evidence-event.schema.json"
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/correlation-context.schema.json",
+  "title": "CorrelationContext",
+  "type": "object",
+  "required": ["correlation_id"],
+  "additionalProperties": false,
+  "properties": {
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier linking causally related invocations and evidence events."
+    },
+    "causation_id": {
+      "type": ["string", "null"],
+      "description": "Optional identifier for the immediate cause of this invocation."
+    },
+    "parent_correlation_id": {
+      "type": ["string", "null"],
+      "description": "Optional parent trace or process correlation."
+    },
+    "trace_id": {
+      "type": ["string", "null"],
+      "description": "Optional distributed trace identifier, such as a W3C trace ID."
+    },
+    "baggage": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      },
+      "default": {}
+    }
+  }
+}

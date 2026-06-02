@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/replay-query.schema.json",
+  "title": "ReplayQuery",
+  "type": "object",
+  "required": ["correlation_id"],
+  "additionalProperties": false,
+  "properties": {
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "limit": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "since_sequence": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "include_payloads": {
+      "type": "boolean",
+      "default": true
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/denial-reason.schema.json",
+  "title": "DenialReason",
+  "type": "object",
+  "required": ["code", "message", "retryable"],
+  "additionalProperties": false,
+  "properties": {
+    "code": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message": {
+      "type": "string"
+    },
+    "invariant_id": {
+      "type": ["string", "null"]
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    }
+  }
+}

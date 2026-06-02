@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/replay-result.schema.json",
+  "title": "ReplayResult",
+  "type": "object",
+  "required": ["correlation_id", "events", "event_count", "replayed_at"],
+  "additionalProperties": false,
+  "properties": {
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "https://chp.dev/schemas/v0.1/evidence-event.schema.json"
+      }
+    },
+    "event_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "replayed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

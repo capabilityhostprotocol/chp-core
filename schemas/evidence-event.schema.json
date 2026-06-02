@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/evidence-event.schema.json",
+  "title": "ExecutionEvidence",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "invocation_id",
+    "capability_id",
+    "host_id",
+    "correlation",
+    "timestamp",
+    "sequence",
+    "payload",
+    "redacted",
+    "assurance"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1 },
+    "event_type": {
+      "type": "string",
+      "description": "Core values include execution_started, execution_completed, execution_failed, execution_denied, and execution_skipped. Capability-specific event types are allowed."
+    },
+    "invocation_id": { "type": "string", "minLength": 1 },
+    "capability_id": { "type": "string", "minLength": 1 },
+    "capability_version": { "type": ["string", "null"] },
+    "host_id": { "type": "string", "minLength": 1 },
+    "correlation": { "$ref": "https://chp.dev/schemas/v0.1/correlation-context.schema.json" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic local sequence assigned by the evidence store."
+    },
+    "outcome": {
+      "type": ["string", "null"],
+      "enum": ["success", "failure", "denied", "skipped", null]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "redacted": {
+      "type": "boolean",
+      "default": true
+    },
+    "error": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "denial": {
+      "anyOf": [
+        { "$ref": "https://chp.dev/schemas/v0.1/evidence-event.schema.json#/$defs/DenialReason" },
+        { "type": "null" }
+      ]
+    },
+    "assurance": { "$ref": "https://chp.dev/schemas/v0.1/evidence-event.schema.json#/$defs/AssuranceMetadata" }
+  },
+  "$defs": {
+    "DenialReason": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "invariant_id": { "type": ["string", "null"] },
+        "retryable": { "type": "boolean" },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    },
+    "AssuranceMetadata": {
+      "type": "object",
+      "required": ["level"],
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["S1", "S2", "S3"],
+          "default": "S1"
+        },
+        "evidence_policy": {
+          "type": "string",
+          "default": "local-append-only"
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    }
+  }
+}

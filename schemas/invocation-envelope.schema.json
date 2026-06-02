@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/invocation-envelope.schema.json",
+  "title": "InvocationEnvelope",
+  "type": "object",
+  "required": ["invocation_id", "capability_id", "mode", "correlation", "subject", "payload", "requested_at"],
+  "additionalProperties": false,
+  "properties": {
+    "invocation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capability_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": ["string", "null"]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["sync", "async", "stream", "fire_and_forget"],
+      "default": "sync"
+    },
+    "correlation": {
+      "$ref": "https://chp.dev/schemas/v0.1/correlation-context.schema.json"
+    },
+    "subject": {
+      "type": "object",
+      "description": "Caller identity and caller-local attributes. CHP v0.1 does not prescribe an identity provider.",
+      "additionalProperties": true
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    }
+  }
+}

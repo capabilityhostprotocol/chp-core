@@ -1,0 +1,9 @@
+{
+  "name": "capabilityhostprotocol",
+  "private": true,
+  "workspaces": ["packages/ts-types"],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspace packages/ts-types",
+    "build": "npm run build --workspace packages/ts-types"
+  }
+}

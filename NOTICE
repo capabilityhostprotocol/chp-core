@@ -1,0 +1,11 @@
+Capability Host Protocol (CHP)
+Copyright 2026 Auxo
+
+This product includes software developed by the CHP project contributors.
+
+Source code (packages/, conformance/, examples/, scripts/) is licensed under
+the Apache License, Version 2.0. See LICENSE for the full text.
+
+Specification, schemas, and documentation (spec/, docs/, schemas/) are
+licensed under the Creative Commons Attribution 4.0 International License.
+See LICENSE-DOCS for the full text.

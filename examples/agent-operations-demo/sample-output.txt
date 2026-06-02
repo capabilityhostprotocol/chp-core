@@ -1,0 +1,40 @@
+User task: Add 2 and 3, then double the result.
+Final answer: 10
+
+## Replay
+[
+  {"sequence": 1, "event_type": "execution_started", "capability_id": "trace_execution", "outcome": null},
+  {"sequence": 2, "event_type": "execution_observed", "capability_id": "trace_execution", "outcome": null},
+  {"sequence": 3, "event_type": "execution_completed", "capability_id": "trace_execution", "outcome": "success"},
+  {"sequence": 7, "event_type": "execution_started", "capability_id": "tool.add", "outcome": null},
+  {"sequence": 8, "event_type": "execution_completed", "capability_id": "tool.add", "outcome": "success"},
+  {"sequence": 12, "event_type": "execution_started", "capability_id": "tool.multiply", "outcome": null},
+  {"sequence": 13, "event_type": "execution_completed", "capability_id": "tool.multiply", "outcome": "success"}
+]
+
+## Explanation
+{
+  "correlation_id": "demo-agent-run-001",
+  "facts": [
+    {"event_type": "execution_started", "capability_id": "trace_execution"},
+    {"event_type": "execution_observed", "capability_id": "trace_execution"},
+    {"event_type": "execution_completed", "capability_id": "tool.multiply"}
+  ],
+  "inferences": [
+    {
+      "statement": "Observed invocations in this trace completed without recorded failure or denial.",
+      "confidence": 0.85
+    }
+  ]
+}
+
+## Counterfactual
+{
+  "invariant": {"id": "deny_multiply_tool", "kind": "capability_id_matches"},
+  "would_have_denied": true,
+  "would_have_warned": false,
+  "violating_events": [
+    {"capability_id": "tool.multiply", "event_type": "execution_started"},
+    {"capability_id": "tool.multiply", "event_type": "execution_completed"}
+  ]
+}
