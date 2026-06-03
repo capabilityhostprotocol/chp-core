@@ -314,5 +314,71 @@ class LocalHostTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(counterfactual.data["violating_events"]), 1)
 
 
+    async def test_query_evidence_by_outcome(self) -> None:
+        async def success_handler(_ctx, _payload):
+            return {"ok": True}
+
+        async def fail_handler(_ctx, _payload):
+            raise RuntimeError("expected failure")
+
+        self.host.register(CapabilityDescriptor(id="q.success", version="1.0.0", description=""), success_handler)
+        self.host.register(CapabilityDescriptor(id="q.fail", version="1.0.0", description=""), fail_handler)
+
+        await self.host.ainvoke("q.success", {}, correlation={"correlation_id": "corr-q1"})
+        await self.host.ainvoke("q.fail", {}, correlation={"correlation_id": "corr-q2"})
+
+        successes = self.host.query_evidence(outcome="success")
+        failures = self.host.query_evidence(outcome="failure")
+
+        self.assertTrue(all(e["outcome"] == "success" for e in successes))
+        self.assertTrue(all(e["outcome"] == "failure" for e in failures))
+        self.assertGreaterEqual(len(successes), 1)
+        self.assertGreaterEqual(len(failures), 1)
+
+    async def test_query_evidence_by_capability(self) -> None:
+        async def handler_a(_ctx, _payload):
+            return {"source": "a"}
+
+        async def handler_b(_ctx, _payload):
+            return {"source": "b"}
+
+        self.host.register(CapabilityDescriptor(id="cap.a", version="1.0.0", description=""), handler_a)
+        self.host.register(CapabilityDescriptor(id="cap.b", version="1.0.0", description=""), handler_b)
+
+        await self.host.ainvoke("cap.a", {}, correlation={"correlation_id": "corr-qa"})
+        await self.host.ainvoke("cap.b", {}, correlation={"correlation_id": "corr-qb"})
+
+        events_a = self.host.query_evidence(capability_id="cap.a")
+        events_b = self.host.query_evidence(capability_id="cap.b")
+
+        self.assertTrue(all(e["capability_id"] == "cap.a" for e in events_a))
+        self.assertTrue(all(e["capability_id"] == "cap.b" for e in events_b))
+        self.assertEqual(len(events_a), 2)
+        self.assertEqual(len(events_b), 2)
+
+    async def test_evidence_count(self) -> None:
+        async def handler(_ctx, _payload):
+            return {}
+
+        self.host.register(CapabilityDescriptor(id="count.cap", version="1.0.0", description=""), handler)
+
+        corr = "corr-count"
+        for _ in range(3):
+            await self.host.ainvoke("count.cap", {}, correlation={"correlation_id": corr})
+
+        self.assertEqual(self.host.evidence_count(corr), 6)
+
+    async def test_invoke_in_async_context_raises(self) -> None:
+        async def handler(_ctx, _payload):
+            return {}
+
+        self.host.register(CapabilityDescriptor(id="async.check", version="1.0.0", description=""), handler)
+
+        with self.assertRaises(RuntimeError) as cm:
+            self.host.invoke("async.check", {})
+
+        self.assertIn("ainvoke", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

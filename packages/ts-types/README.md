@@ -1,4 +1,4 @@
-# @chp/types
+# @auxo/ts-types
 
 TypeScript protocol types for CHP v0.1.
 
@@ -12,9 +12,9 @@ older internal mesh/governance model.
 ## Installation
 
 ```bash
-npm install @chp/types
+npm install @auxo/ts-types
 # or
-pnpm add @chp/types
+pnpm add @auxo/ts-types
 ```
 
 ## Usage
@@ -28,7 +28,7 @@ import type {
   InvocationEnvelope,
   InvocationResult,
   ReplayResult,
-} from '@chp/types';
+} from '@auxo/ts-types';
 ```
 
 ```typescript
@@ -69,7 +69,7 @@ import {
   type Evidence,
   type RiskClass,
   type AssuranceTier,
-} from '@chp/types/legacy';
+} from '@auxo/ts-types/legacy';
 
 // Create a subject
 const subject = createSubjectContext({
@@ -100,7 +100,7 @@ const evidence = createEvidence({
 
 ## Type Correspondence
 
-| CHP v0.1 Concept | Python `chp_core` | TypeScript `@chp/types` |
+| CHP v0.1 Concept | Python `chp_core` | TypeScript `@auxo/ts-types` |
 |---|---|---|
 | Capability descriptor | `CapabilityDescriptor` | `CapabilityDescriptor` |
 | Host descriptor | `HostDescriptor` | `HostDescriptor` |
@@ -114,10 +114,10 @@ const evidence = createEvidence({
 ## Verification
 
 ```bash
-npm run typecheck --workspace @chp/types
-npm run build --workspace @chp/types
+npm run typecheck --workspace @auxo/ts-types
+npm run build --workspace @auxo/ts-types
 ```
 
 ## License
 
-Apache-2.0. See [LICENSE](../../LICENSE).
+MIT

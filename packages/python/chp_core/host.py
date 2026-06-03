@@ -197,6 +197,26 @@ class LocalCapabilityHost:
             event_count=len(events),
         )
 
+    def query_evidence(
+        self,
+        *,
+        capability_id: str | None = None,
+        outcome: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int | None = None,
+    ) -> list[JSON]:
+        return self.store.query(
+            capability_id=capability_id,
+            outcome=outcome,
+            since=since,
+            until=until,
+            limit=limit,
+        )
+
+    def evidence_count(self, correlation_id: str) -> int:
+        return self.store.count_by_correlation(correlation_id)
+
     def invoke(
         self,
         capability_id: str,

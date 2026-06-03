@@ -1,7 +1,7 @@
 {
-  "name": "@capabilityhostprotocol/types",
-  "version": "0.1.0",
-  "description": "TypeScript protocol types for the Capability Host Protocol (CHP v0.1).",
+  "name": "@auxo/ts-types",
+  "version": "0.1.1",
+  "description": "TypeScript protocol types for CHP, including schema-aligned v0.1 types.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -32,16 +32,17 @@
   "keywords": [
     "chp",
     "capability-host-protocol",
+    "auxo",
     "governance",
     "evidence",
     "capabilities",
     "typescript"
   ],
-  "author": "Auxo",
-  "license": "Apache-2.0",
+  "author": "Auxo Team",
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/capabilityhostprotocol/chp-core.git",
+    "url": "rad:auxo-chp",
     "directory": "packages/ts-types"
   },
   "engines": {

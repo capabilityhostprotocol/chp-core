@@ -67,6 +67,10 @@ class SQLiteEvidenceStore:
                 "ON evidence_events(capability_id, sequence)"
             )
             self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_evidence_outcome "
+                "ON evidence_events(outcome, sequence)"
+            )
+            self._conn.execute(
                 """
                 INSERT OR IGNORE INTO evidence_sequence(sequence)
                 SELECT sequence FROM evidence_events
@@ -154,6 +158,46 @@ class SQLiteEvidenceStore:
                 "SELECT sequence, event_json FROM evidence_events ORDER BY sequence ASC"
             ).fetchall()
         return [self._row_to_event(row) for row in rows]
+
+    def query(
+        self,
+        *,
+        capability_id: str | None = None,
+        outcome: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int | None = None,
+    ) -> list[JSON]:
+        clauses: list[str] = []
+        params: list[str | int] = []
+        if capability_id is not None:
+            clauses.append("capability_id = ?")
+            params.append(capability_id)
+        if outcome is not None:
+            clauses.append("outcome = ?")
+            params.append(outcome)
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("timestamp <= ?")
+            params.append(until)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+        sql = f"SELECT sequence, event_json FROM evidence_events {where} ORDER BY sequence ASC {limit_clause}".strip()
+
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_event(row) for row in rows]
+
+    def count_by_correlation(self, correlation_id: str) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS count FROM evidence_events WHERE correlation_id = ?",
+                (correlation_id,),
+            ).fetchone()
+        return int(row["count"])
 
     @staticmethod
     def _row_to_event(row: sqlite3.Row) -> JSON:

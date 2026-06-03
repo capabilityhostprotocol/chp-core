@@ -22,13 +22,7 @@ CHP is not another agent framework, tool protocol, or workflow engine. It is an 
 
 ## Quickstart
 
-Install the Python reference host:
-
-```bash
-pip install chp-core
-```
-
-Or from this repository:
+Install the Python reference host from this checkout:
 
 ```bash
 python -m pip install -e packages/python
@@ -112,20 +106,23 @@ The host emits `execution_started` and `execution_completed` evidence for the in
 
 ## Repository Map
 
-- `spec/chp-v0.1.md`: normative CHP v0.1 specification
-- `schemas/`: JSON Schemas for all protocol objects
-- `packages/python/chp_core/`: Python reference host (`chp-core` on PyPI)
-- `packages/ts-types/`: TypeScript protocol types (`@auxo/ts-types`)
-- `conformance/`: conformance test runner
-- `examples/simple-tool-call/`: minimal single-capability example
-- `examples/agent-operations-demo/`: agent/tool observability demo
+- `spec/chp-v0.1.md`: minimal CHP v0.1 specification
+- `schemas/`: JSON Schemas for protocol objects
+- `packages/python/chp_core/`: reference local host
 - `examples/capability-host-endpoint-demo/`: HTTP-served host demo
-- `examples/codex-self-observation-demo/`: self-observation pattern demo
-- `examples/mcp-bridge-demo/`: experimental MCP bridge prototype
-- `docs/quickstart.md`: 15-minute getting started guide
-- `docs/comparisons/chp-vs-mcp.md`: how CHP and MCP compose
-- `docs/comparisons/chp-and-opentelemetry.md`: CHP evidence vs OTel telemetry
-- `docs/security/threat-model-v0.1.md`: v0.1 trust model and limits
+- `examples/agent-operations-demo/`: agent/tool observability demo
+- `examples/codex-self-observation-demo/`: Codex dogfooding demo
+- `examples/mcp-bridge-demo/`: experimental MCP-style bridge prototype
+- `conformance/`: conformance runner
+- `docs/comparisons/chp-vs-mcp.md`: precise MCP comparison
+- `docs/comparisons/chp-and-opentelemetry.md`: OpenTelemetry alignment note
+- `docs/comparisons/landscape.md`: adjacent framework comparison
+- `docs/design/codex-self-observation.md`: Codex dogfooding pattern
+- `docs/design/public-v0.1-internal-legacy-boundary.md`: public/internal boundary
+- `docs/design/evidence-integrity-v0.2.md`: future evidence integrity proposal
+- `docs/security/threat-model-v0.1.md`: v0.1 threat model
+- `docs/release-checklist-v0.1.md`: release-readiness checklist
+- `docs/packaging-v0.1.md`: packaging and versioning plan
 
 ## CHP vs MCP
 
@@ -165,5 +162,4 @@ Guiding rule:
 
 ## License
 
-Source code is licensed under the [Apache License 2.0](LICENSE).
-Specification, schemas, and documentation are licensed under [CC BY 4.0](LICENSE-DOCS).
+MIT. See `LICENSE`.
