@@ -1,14 +1,55 @@
 name: Release
 
+# Only fires on bare version tags: v0.2.3, v1.0.0, etc. (NOT rc tags).
+# Before pushing a production tag, a matching RC tag (v0.2.3-rc.*) must
+# have passed the staging workflow. The verify-staged job enforces this.
+#
+# Release flow:
+#   1. Merge version-bump PR to main
+#   2. git tag v0.2.3-rc.1 && git push github v0.2.3-rc.1  → staging.yml
+#   3. All staging jobs green
+#   4. git tag v0.2.3   && git push github v0.2.3            → this workflow
+#   5. verify-staged passes → publish-python + publish-npm → create-release
+
 on:
   push:
     tags:
       - 'v*.*.*'
+    branches-ignore:
+      - '**'  # tags only — branch pushes do not trigger release
 
 jobs:
+  # ── Guard: a matching RC tag must exist in the repo ──────────────────────
+  verify-staged:
+    name: Verify RC was staged
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository (full history for tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Confirm matching RC tag exists
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"   # e.g. 0.2.3
+          RC_PATTERN="v${VERSION}-rc.*"
+          echo "Looking for RC tags matching: $RC_PATTERN"
+          MATCHES=$(git tag --list "$RC_PATTERN")
+          if [ -z "$MATCHES" ]; then
+            echo ""
+            echo "ERROR: No RC tag found for v${VERSION}."
+            echo "Push a staging tag first:"
+            echo "  git tag v${VERSION}-rc.1 && git push github v${VERSION}-rc.1"
+            echo "Then wait for staging.yml to pass before pushing the production tag."
+            exit 1
+          fi
+          echo "Found RC tags: $MATCHES"
+
+  # ── Publish Python to PyPI ────────────────────────────────────────────────
   publish-python:
     name: Publish Python package
     runs-on: ubuntu-latest
+    needs: [verify-staged]
     environment: release
     permissions:
       id-token: write  # required for PyPI trusted publishing (OIDC)
@@ -33,9 +74,11 @@ jobs:
           packages-dir: packages/python/dist/
           skip-existing: true
 
+  # ── Publish TypeScript types to npm ──────────────────────────────────────
   publish-npm:
     name: Publish TypeScript types
     runs-on: ubuntu-latest
+    needs: [verify-staged]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -60,6 +103,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+  # ── Create GitHub Release ─────────────────────────────────────────────────
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
