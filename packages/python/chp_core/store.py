@@ -191,6 +191,29 @@ class SQLiteEvidenceStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_event(row) for row in rows]
 
+    def children_of(self, session_id: str) -> list[str]:
+        """Return child session IDs spawned by the given session (via session_spawn events)."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT event_json
+                FROM evidence_events
+                WHERE correlation_id = ? AND event_type = 'session_spawn'
+                ORDER BY sequence ASC
+                """,
+                (session_id,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            try:
+                event = json.loads(row["event_json"])
+                child_id = event.get("payload", {}).get("child_session_id")
+                if child_id and isinstance(child_id, str):
+                    result.append(child_id)
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        return result
+
     def count_by_correlation(self, correlation_id: str) -> int:
         with self._lock:
             row = self._conn.execute(

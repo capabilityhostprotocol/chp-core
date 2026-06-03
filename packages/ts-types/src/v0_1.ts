@@ -40,6 +40,7 @@ export const CHP_AGENTIC_EVIDENCE_TYPES = [
   "tool_use",
   "tool_use_requested",
   "session_completed",
+  "session_spawn",
 ] as const;
 
 export interface AssuranceMetadata {
@@ -176,6 +177,15 @@ export interface SessionEvidence extends ExecutionEvidence {
   payload: {
     tool_count: number;
     transcript_path?: string;
+  };
+}
+
+export interface SessionSpawnEvidence extends ExecutionEvidence {
+  event_type: "session_spawn";
+  payload: {
+    parent_session_id: string;
+    child_session_id: string;
+    tool_name: string;
   };
 }
 

@@ -242,6 +242,12 @@ def build_parser() -> argparse.ArgumentParser:
     session_show_p.add_argument("--store", default=None)
     session_show_p.set_defaults(func=cmd_session_show)
 
+    session_tree_p = session_sub.add_parser("tree", help="Show the multi-agent call tree for a session.")
+    session_tree_p.add_argument("session_id")
+    session_tree_p.add_argument("--store", default=None)
+    session_tree_p.add_argument("--depth", type=int, default=10, help="Max recursion depth.")
+    session_tree_p.set_defaults(func=cmd_session_tree)
+
     session_export_p = session_sub.add_parser("export", help="Export a session as a portable JSON bundle.")
     session_export_p.add_argument("session_id")
     session_export_p.add_argument("--store", default=None)
@@ -873,6 +879,50 @@ def cmd_session_show(args: argparse.Namespace) -> int:
         summary["transcript_path"] = session_ev.get("payload", {}).get("transcript_path", "")
 
     print_json(summary)
+    return 0
+
+
+def _build_session_node(
+    session_id: str,
+    store_path: str,
+    depth: int,
+    visited: set[str],
+) -> dict[str, Any]:
+    """Recursively build a session tree node."""
+    from .store import SQLiteEvidenceStore
+
+    if depth <= 0 or session_id in visited:
+        return {"session_id": session_id, "truncated": True, "children": []}
+
+    visited.add(session_id)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(session_id)
+        children_ids = store.children_of(session_id)
+    finally:
+        store.close()
+
+    tool_events = [e for e in events if e.get("event_type") == "tool_use"]
+    requested_events = [e for e in events if e.get("event_type") == "tool_use_requested"]
+
+    children = [
+        _build_session_node(child_id, store_path, depth - 1, visited)
+        for child_id in children_ids
+    ]
+    return {
+        "session_id": session_id,
+        "tool_count": len(tool_events),
+        "requested_count": len(requested_events),
+        "child_count": len(children),
+        "children": children,
+    }
+
+
+def cmd_session_tree(args: argparse.Namespace) -> int:
+    store_path = _resolve_store(args.store)
+    visited: set[str] = set()
+    tree = _build_session_node(args.session_id, store_path, args.depth, visited)
+    print_json(tree)
     return 0
 
 

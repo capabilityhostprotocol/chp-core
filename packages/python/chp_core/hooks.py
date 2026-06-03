@@ -1,4 +1,4 @@
-"""Claude Code hook processing for CHP v0.2.2.
+"""Claude Code hook processing for CHP v0.2.3.
 
 Reads Claude Code hook JSON from stdin and emits evidence directly to a
 SQLiteEvidenceStore — bypassing LocalCapabilityHost.invoke() for speed.
@@ -167,6 +167,23 @@ def process_post_tool_use(payload: dict[str, Any], store_path: str) -> None:
         outcome=outcome,
         payload=event_payload,
     )
+
+    # When an Agent/Task tool completes, link the spawned sub-session
+    if tool_name in ("Agent", "Task") and isinstance(tool_response, dict):
+        child_session_id = tool_response.get("session_id")
+        if child_session_id and isinstance(child_session_id, str):
+            _append_event(
+                store_path=store_path,
+                event_type="session_spawn",
+                capability_id="claude_code.session_spawn",
+                session_id=session_id,
+                outcome=outcome,
+                payload={
+                    "parent_session_id": session_id,
+                    "child_session_id": child_session_id,
+                    "tool_name": tool_name,
+                },
+            )
 
 
 def process_stop(payload: dict[str, Any], store_path: str) -> None:
