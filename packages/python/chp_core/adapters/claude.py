@@ -53,9 +53,8 @@ class ClaudeAdapter(ModelAdapter):
             raise ImportError(
                 "anthropic package is required: pip install chp-core[claude]"
             ) from exc
-        self._client = anthropic.Anthropic(
-            **({"api_key": self._api_key} if self._api_key else {})
-        )
+        kwargs = {"api_key": self._api_key} if self._api_key else {}
+        self._client = anthropic.Anthropic(**kwargs)  # type: ignore[arg-type]
         return self._client
 
     @capability(

@@ -114,6 +114,7 @@ class LocalCapabilityHost:
             handler = adapt_callable(fn)
         if handler is None:
             raise ValueError("capability handler is required")
+        assert isinstance(descriptor, CapabilityDescriptor)
         if not descriptor.id:
             raise ValueError("capability descriptor id is required")
         if not descriptor.version:

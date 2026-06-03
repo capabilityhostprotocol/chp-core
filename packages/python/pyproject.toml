@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-core"
-version = "0.2.1"
+version = "0.2.2"
 description = "Capability Host Protocol — local execution evidence for agents, tools, and systems"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,7 +42,7 @@ models = ["anthropic>=0.30", "openai>=1.0", "google-generativeai>=0.5"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--cov=chp_core --cov-report=term-missing --cov-fail-under=75"
+addopts = "--cov=packages/python/chp_core --cov-report=term-missing --cov-fail-under=75"
 markers = [
   "integration: tests that touch filesystem, git, or network sockets",
   "slow: tests that take more than 1s",

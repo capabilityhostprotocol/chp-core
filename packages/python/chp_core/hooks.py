@@ -1,10 +1,11 @@
-"""Claude Code hook processing for CHP v0.2.1.
+"""Claude Code hook processing for CHP v0.2.2.
 
 Reads Claude Code hook JSON from stdin and emits evidence directly to a
 SQLiteEvidenceStore — bypassing LocalCapabilityHost.invoke() for speed.
 Each write must complete in < 5ms so the hook doesn't slow down the agent.
 
 Usage (via chp CLI):
+    echo '<PreToolUse JSON>'  | chp hook pre-tool [--policy PATH]
     echo '<PostToolUse JSON>' | chp hook post-tool
     echo '<Stop JSON>'        | chp hook stop
 
@@ -19,6 +20,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .policy import PolicyConfig, PreToolResult, evaluate_policy
 from .redaction import redact_payload
 from .store import SQLiteEvidenceStore
 from .types import AssuranceMetadata, CorrelationContext, ExecutionEvidence, new_id, utc_now
@@ -100,6 +102,42 @@ def _outcome_from_response(tool_response: Any) -> str:
         if tool_response.get("exit_code", 0) not in (0, None):
             return "failure"
     return "success"
+
+
+def process_pre_tool_use(
+    payload: dict[str, Any],
+    store_path: str,
+    policy: PolicyConfig | None = None,
+) -> PreToolResult:
+    """Emit a tool_use_requested evidence event and evaluate pre-tool policy."""
+    session_id = payload.get("session_id", "unknown-session")
+    tool_name = payload.get("tool_name", "unknown")
+    tool_input = payload.get("tool_input") or {}
+    cwd = payload.get("cwd", "")
+
+    cap_id = capability_id_for_tool(tool_name)
+
+    result = (
+        evaluate_policy(cap_id, tool_input, policy)
+        if policy is not None
+        else PreToolResult(should_block=False, capability_id=cap_id)
+    )
+
+    _append_event(
+        store_path=store_path,
+        event_type="tool_use_requested",
+        capability_id=cap_id,
+        session_id=session_id,
+        outcome="denied" if result.should_block else "success",
+        payload=redact_payload({
+            "tool_name": tool_name,
+            "cwd": cwd,
+            "tool_input": tool_input,
+            "blocked": result.should_block,
+            "block_reason": result.reason,
+        }),
+    )
+    return result
 
 
 def process_post_tool_use(payload: dict[str, Any], store_path: str) -> None:

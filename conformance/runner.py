@@ -196,6 +196,42 @@ async def check_replay_by_correlation(host: Any) -> None:
     assert sequences == sorted(sequences)
 
 
+async def check_pretool_governance(_host: Any) -> None:
+    """Pre-tool governance emits evidence and honours block policies."""
+    import os
+    import tempfile
+
+    from chp_core.hooks import process_pre_tool_use
+    from chp_core.policy import BlockPattern, PolicyConfig
+    from chp_core.store import SQLiteEvidenceStore
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "session_id": "conf-pretool-001",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hello"},
+            "cwd": "/tmp",
+        }
+        result = process_pre_tool_use(payload, store_path, policy=None)
+        assert not result.should_block, "expected pass without policy"
+
+        policy = PolicyConfig(block_capability_ids=["claude_code.bash"], block_patterns=[])
+        result2 = process_pre_tool_use(payload, store_path, policy=policy)
+        assert result2.should_block, "expected block with policy"
+
+        store = SQLiteEvidenceStore(store_path)
+        events = store.by_correlation("conf-pretool-001")
+        store.close()
+        assert len(events) == 2, f"expected 2 events, got {len(events)}"
+        types = [e["event_type"] for e in events]
+        assert types.count("tool_use_requested") == 2, f"missing events: {types}"
+    finally:
+        os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -205,6 +241,7 @@ CHECKS: list[tuple[str, Check]] = [
     ("evidence emission on failure", check_failure_evidence),
     ("evidence emission on denial", check_denial_evidence),
     ("replay by correlation id", check_replay_by_correlation),
+    ("pre-tool governance", check_pretool_governance),
 ]
 
 

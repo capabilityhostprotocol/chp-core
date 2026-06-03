@@ -187,6 +187,11 @@ def build_parser() -> argparse.ArgumentParser:
     hook_p = subcommands.add_parser("hook", help="Process a Claude Code hook event from stdin.")
     hook_sub = hook_p.add_subparsers(dest="hook_command", required=True)
 
+    pre_tool_p = hook_sub.add_parser("pre-tool", help="Process a PreToolUse hook event.")
+    pre_tool_p.add_argument("--store", default=None, help="Evidence store path.")
+    pre_tool_p.add_argument("--policy", default=None, help="Policy file path (default: auto-locate).")
+    pre_tool_p.set_defaults(func=cmd_hook_pre_tool)
+
     post_tool_p = hook_sub.add_parser("post-tool", help="Process a PostToolUse hook event.")
     post_tool_p.add_argument("--store", default=None, help="Evidence store path.")
     post_tool_p.set_defaults(func=cmd_hook_post_tool)
@@ -204,6 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="Install to ~/.claude/settings.json (default).")
     hooks_install_p.add_argument("--project", action="store_true",
                                  help="Install to .claude/settings.json in cwd.")
+    hooks_install_p.add_argument("--with-governance", dest="with_governance", action="store_true",
+                                 help="Also install the PreToolUse governance hook.")
     hooks_install_p.set_defaults(func=cmd_hooks_install)
 
     hooks_uninstall_p = hooks_sub.add_parser("uninstall", help="Remove CHP hooks from Claude Code settings.")
@@ -234,6 +241,12 @@ def build_parser() -> argparse.ArgumentParser:
     session_show_p.add_argument("session_id")
     session_show_p.add_argument("--store", default=None)
     session_show_p.set_defaults(func=cmd_session_show)
+
+    session_export_p = session_sub.add_parser("export", help="Export a session as a portable JSON bundle.")
+    session_export_p.add_argument("session_id")
+    session_export_p.add_argument("--store", default=None)
+    session_export_p.add_argument("--output", default=None, help="Output file path (default: stdout).")
+    session_export_p.set_defaults(func=cmd_session_export)
 
     return parser
 
@@ -592,7 +605,7 @@ def _settings_path(global_scope: bool, project: bool) -> str:
     return str(Path.home() / ".claude" / "settings.json")
 
 
-def _install_hooks(settings_path: str) -> None:
+def _install_hooks(settings_path: str, with_governance: bool = False) -> None:
     """Add CHP hooks to a Claude Code settings.json file (idempotent)."""
     from pathlib import Path
 
@@ -604,25 +617,27 @@ def _install_hooks(settings_path: str) -> None:
 
     hooks = settings.setdefault("hooks", {})
 
-    post_commands = [
-        h["command"]
-        for entry in hooks.get("PostToolUse", [])
-        for h in entry.get("hooks", [])
-        if h.get("type") == "command"
-    ]
-    if "chp hook post-tool" not in post_commands:
+    def _existing_commands(event: str) -> list[str]:
+        return [
+            h["command"]
+            for entry in hooks.get(event, [])
+            for h in entry.get("hooks", [])
+            if h.get("type") == "command"
+        ]
+
+    if with_governance and "chp hook pre-tool" not in _existing_commands("PreToolUse"):
+        hooks.setdefault("PreToolUse", []).append({
+            "matcher": "",
+            "hooks": [{"type": "command", "command": "chp hook pre-tool", "timeout": 5}],
+        })
+
+    if "chp hook post-tool" not in _existing_commands("PostToolUse"):
         hooks.setdefault("PostToolUse", []).append({
             "matcher": "",
             "hooks": [{"type": "command", "command": "chp hook post-tool", "timeout": 5}],
         })
 
-    stop_commands = [
-        h["command"]
-        for entry in hooks.get("Stop", [])
-        for h in entry.get("hooks", [])
-        if h.get("type") == "command"
-    ]
-    if "chp hook stop" not in stop_commands:
+    if "chp hook stop" not in _existing_commands("Stop"):
         hooks.setdefault("Stop", []).append({
             "hooks": [{"type": "command", "command": "chp hook stop", "timeout": 5}],
         })
@@ -644,9 +659,9 @@ def _uninstall_hooks(settings_path: str) -> None:
         settings = json.load(f)
 
     hooks = settings.get("hooks", {})
-    chp_commands = {"chp hook post-tool", "chp hook stop"}
+    chp_commands = {"chp hook pre-tool", "chp hook post-tool", "chp hook stop"}
 
-    for event in ("PostToolUse", "Stop"):
+    for event in ("PreToolUse", "PostToolUse", "Stop"):
         entries = hooks.get(event, [])
         cleaned = []
         for entry in entries:
@@ -660,6 +675,24 @@ def _uninstall_hooks(settings_path: str) -> None:
 
     with path.open("w") as f:
         json.dump(settings, f, indent=2)
+
+
+def cmd_hook_pre_tool(args: argparse.Namespace) -> int:
+    import sys
+    from .hooks import default_store_path, process_pre_tool_use
+    from .policy import load_policy
+
+    store_path = args.store if args.store else default_store_path()
+    try:
+        payload = json.loads(sys.stdin.read())
+        policy = load_policy(getattr(args, "policy", None))
+        result = process_pre_tool_use(payload, store_path, policy=policy)
+        if result.should_block:
+            print(f"CHP: blocked — {result.reason}", file=sys.stderr)
+            return 2
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
 
 
 def cmd_hook_post_tool(args: argparse.Namespace) -> int:
@@ -690,7 +723,7 @@ def cmd_hook_stop(args: argparse.Namespace) -> int:
 
 def cmd_hooks_install(args: argparse.Namespace) -> int:
     path = _settings_path(getattr(args, "global_scope", False), getattr(args, "project", False))
-    _install_hooks(path)
+    _install_hooks(path, with_governance=getattr(args, "with_governance", False))
     print(f"CHP hooks installed in {path}")
     return 0
 
@@ -715,22 +748,19 @@ def cmd_hooks_status(args: argparse.Namespace) -> int:
         settings = json.load(f)
 
     hooks = settings.get("hooks", {})
-    post_commands = [
-        h["command"]
-        for entry in hooks.get("PostToolUse", [])
-        for h in entry.get("hooks", [])
-        if h.get("type") == "command"
-    ]
-    stop_commands = [
-        h["command"]
-        for entry in hooks.get("Stop", [])
-        for h in entry.get("hooks", [])
-        if h.get("type") == "command"
-    ]
+
+    def _has_command(event: str, cmd: str) -> bool:
+        return cmd in [
+            h["command"]
+            for entry in hooks.get(event, [])
+            for h in entry.get("hooks", [])
+            if h.get("type") == "command"
+        ]
 
     print(f"Settings: {path}")
-    print(f"  PostToolUse hook: {'installed' if 'chp hook post-tool' in post_commands else 'not installed'}")
-    print(f"  Stop hook:        {'installed' if 'chp hook stop' in stop_commands else 'not installed'}")
+    print(f"  PreToolUse hook:  {'installed' if _has_command('PreToolUse', 'chp hook pre-tool') else 'not installed'}")
+    print(f"  PostToolUse hook: {'installed' if _has_command('PostToolUse', 'chp hook post-tool') else 'not installed'}")
+    print(f"  Stop hook:        {'installed' if _has_command('Stop', 'chp hook stop') else 'not installed'}")
     return 0
 
 
@@ -770,6 +800,12 @@ def cmd_session_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+_FILE_TOOLS = {
+    "claude_code.read", "claude_code.edit", "claude_code.write",
+    "claude_code.grep", "claude_code.glob",
+}
+
+
 def cmd_session_show(args: argparse.Namespace) -> int:
     from collections import Counter
 
@@ -787,15 +823,47 @@ def cmd_session_show(args: argparse.Namespace) -> int:
         return 1
 
     tool_events = [e for e in events if e.get("event_type") == "tool_use"]
+    requested_events = [e for e in events if e.get("event_type") == "tool_use_requested"]
     session_ev = next((e for e in events if e.get("event_type") == "session_completed"), None)
     failures = [e for e in tool_events if e.get("outcome") == "failure"]
+
+    files_touched: set[str] = set()
+    commands_run: list[dict[str, Any]] = []
+    for event in tool_events:
+        cap_id = event.get("capability_id", "")
+        inp = event.get("payload", {}).get("tool_input", {}) or {}
+        if cap_id in _FILE_TOOLS:
+            for key in ("file_path", "path", "pattern"):
+                if val := inp.get(key):
+                    files_touched.add(val)
+        if cap_id == "claude_code.bash":
+            commands_run.append({
+                "command": (inp.get("command") or "")[:120],
+                "outcome": event.get("outcome"),
+            })
+
+    timestamps = [e.get("timestamp") for e in events if e.get("timestamp")]
+    duration_seconds: float | None = None
+    if len(timestamps) >= 2:
+        try:
+            from datetime import datetime
+            fmt = "%Y-%m-%dT%H:%M:%S"
+            t0 = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
+            t1 = datetime.fromisoformat(timestamps[-1].replace("Z", "+00:00"))
+            duration_seconds = round((t1 - t0).total_seconds(), 1)
+        except Exception:  # noqa: BLE001
+            pass
 
     tool_counts: Counter[str] = Counter(e.get("capability_id") for e in tool_events)
     summary: JSON = {
         "session_id": args.session_id,
         "tool_count": len(tool_events),
+        "requested_count": len(requested_events),
         "failure_count": len(failures),
+        "duration_seconds": duration_seconds,
         "tools_used": dict(tool_counts.most_common()),
+        "files_touched": sorted(files_touched),
+        "commands_run": commands_run,
         "failures": [
             {"capability_id": e.get("capability_id"), "timestamp": e.get("timestamp")}
             for e in failures
@@ -805,6 +873,40 @@ def cmd_session_show(args: argparse.Namespace) -> int:
         summary["transcript_path"] = session_ev.get("payload", {}).get("transcript_path", "")
 
     print_json(summary)
+    return 0
+
+
+def cmd_session_export(args: argparse.Namespace) -> int:
+    import sys
+    from .store import SQLiteEvidenceStore
+    from .types import utc_now
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    if not events:
+        print(f"No events found for session: {args.session_id}", file=sys.stderr)
+        return 1
+
+    bundle = {
+        "format": "chp-session-bundle/1",
+        "session_id": args.session_id,
+        "exported_at": utc_now(),
+        "event_count": len(events),
+        "events": events,
+    }
+
+    output = json.dumps(bundle, indent=2, sort_keys=True)
+    if args.output:
+        from pathlib import Path
+        Path(args.output).write_text(output)
+        print(f"Exported {len(events)} events to {args.output}")
+    else:
+        print(output)
     return 0
 
 

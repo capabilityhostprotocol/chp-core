@@ -1,5 +1,5 @@
 /**
- * CHP v0.1 protocol types.
+ * CHP v0.2 protocol types.
  *
  * These interfaces mirror the JSON Schemas in the repository root `schemas/`
  * directory. They are intentionally transport-neutral and do not depend on the
@@ -34,6 +34,12 @@ export const CHP_V0_1_CORE_EVIDENCE_TYPES = [
   "execution_failed",
   "execution_denied",
   "execution_skipped",
+] as const;
+
+export const CHP_AGENTIC_EVIDENCE_TYPES = [
+  "tool_use",
+  "tool_use_requested",
+  "session_completed",
 ] as const;
 
 export interface AssuranceMetadata {
@@ -141,6 +147,36 @@ export interface ExecutionEvidence {
   error?: JsonObject | null;
   denial?: DenialReason | null;
   assurance: AssuranceMetadata;
+}
+
+export interface ToolUseEvidence extends ExecutionEvidence {
+  event_type: "tool_use";
+  payload: {
+    tool_name: string;
+    cwd?: string;
+    tool_input?: Record<string, unknown>;
+    tool_output_preview?: string;
+    exit_code?: number | null;
+  };
+}
+
+export interface PreToolEvidence extends ExecutionEvidence {
+  event_type: "tool_use_requested";
+  payload: {
+    tool_name: string;
+    cwd?: string;
+    tool_input?: Record<string, unknown>;
+    blocked: boolean;
+    block_reason?: string | null;
+  };
+}
+
+export interface SessionEvidence extends ExecutionEvidence {
+  event_type: "session_completed";
+  payload: {
+    tool_count: number;
+    transcript_path?: string;
+  };
 }
 
 export interface ReplayQuery {

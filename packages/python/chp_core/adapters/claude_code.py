@@ -21,9 +21,12 @@ Usage::
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Literal
 
 from ..types import CapabilityDescriptor
 from . import BaseAdapter, HostedCapability
+
+CapabilityRisk = Literal["low", "medium", "high", "critical"]
 
 
 def _noop(ctx, payload):  # noqa: ANN001
@@ -33,7 +36,7 @@ def _noop(ctx, payload):  # noqa: ANN001
 def _cap(
     capability_id: str,
     description: str,
-    risk: str = "low",
+    risk: CapabilityRisk = "low",
     tags: list[str] | None = None,
     emits: list[str] | None = None,
 ) -> HostedCapability:
