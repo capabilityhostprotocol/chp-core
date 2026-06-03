@@ -200,6 +200,22 @@ def build_parser() -> argparse.ArgumentParser:
     stop_p.add_argument("--store", default=None, help="Evidence store path.")
     stop_p.set_defaults(func=cmd_hook_stop)
 
+    codex_post_p = hook_sub.add_parser("codex-post-tool", help="Process an OpenAI Codex CLI PostToolUse event.")
+    codex_post_p.add_argument("--store", default=None)
+    codex_post_p.set_defaults(func=cmd_hook_codex_post_tool)
+
+    codex_stop_p = hook_sub.add_parser("codex-stop", help="Process an OpenAI Codex CLI Stop event.")
+    codex_stop_p.add_argument("--store", default=None)
+    codex_stop_p.set_defaults(func=cmd_hook_codex_stop)
+
+    gemini_post_p = hook_sub.add_parser("gemini-post-tool", help="Process a Gemini CLI PostToolUse event.")
+    gemini_post_p.add_argument("--store", default=None)
+    gemini_post_p.set_defaults(func=cmd_hook_gemini_post_tool)
+
+    gemini_stop_p = hook_sub.add_parser("gemini-stop", help="Process a Gemini CLI Stop event.")
+    gemini_stop_p.add_argument("--store", default=None)
+    gemini_stop_p.set_defaults(func=cmd_hook_gemini_stop)
+
     # --- hooks group (user-facing setup) ---
     hooks_p = subcommands.add_parser("hooks", help="Manage Claude Code hook registration.")
     hooks_sub = hooks_p.add_subparsers(dest="hooks_command", required=True)
@@ -727,6 +743,58 @@ def cmd_hook_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hook_codex_post_tool(args: argparse.Namespace) -> int:
+    import sys
+    from .hooks import CODEX_TOOL_CAPABILITY_MAP, default_store_path, process_post_tool_use
+
+    store_path = args.store if args.store else default_store_path()
+    try:
+        payload = json.loads(sys.stdin.read())
+        process_post_tool_use(payload, store_path, tool_map=CODEX_TOOL_CAPABILITY_MAP, agent_prefix="codex")
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def cmd_hook_codex_stop(args: argparse.Namespace) -> int:
+    import sys
+    from .hooks import default_store_path, process_stop
+
+    store_path = args.store if args.store else default_store_path()
+    try:
+        payload = json.loads(sys.stdin.read())
+        process_stop(payload, store_path, agent_prefix="codex")
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def cmd_hook_gemini_post_tool(args: argparse.Namespace) -> int:
+    import sys
+    from .hooks import GEMINI_TOOL_CAPABILITY_MAP, default_store_path, process_post_tool_use
+
+    store_path = args.store if args.store else default_store_path()
+    try:
+        payload = json.loads(sys.stdin.read())
+        process_post_tool_use(payload, store_path, tool_map=GEMINI_TOOL_CAPABILITY_MAP, agent_prefix="gemini")
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def cmd_hook_gemini_stop(args: argparse.Namespace) -> int:
+    import sys
+    from .hooks import default_store_path, process_stop
+
+    store_path = args.store if args.store else default_store_path()
+    try:
+        payload = json.loads(sys.stdin.read())
+        process_stop(payload, store_path, agent_prefix="gemini")
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
 def cmd_hooks_install(args: argparse.Namespace) -> int:
     path = _settings_path(getattr(args, "global_scope", False), getattr(args, "project", False))
     _install_hooks(path, with_governance=getattr(args, "with_governance", False))
@@ -848,19 +916,18 @@ def cmd_session_show(args: argparse.Namespace) -> int:
                 "outcome": event.get("outcome"),
             })
 
-    timestamps = [e.get("timestamp") for e in events if e.get("timestamp")]
+    timestamps: list[str] = [t for e in events if (t := e.get("timestamp")) and isinstance(t, str)]
     duration_seconds: float | None = None
     if len(timestamps) >= 2:
         try:
             from datetime import datetime
-            fmt = "%Y-%m-%dT%H:%M:%S"
             t0 = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
             t1 = datetime.fromisoformat(timestamps[-1].replace("Z", "+00:00"))
             duration_seconds = round((t1 - t0).total_seconds(), 1)
         except Exception:  # noqa: BLE001
             pass
 
-    tool_counts: Counter[str] = Counter(e.get("capability_id") for e in tool_events)
+    tool_counts: Counter[str] = Counter(str(e["capability_id"]) for e in tool_events if e.get("capability_id"))
     summary: JSON = {
         "session_id": args.session_id,
         "tool_count": len(tool_events),

@@ -82,7 +82,7 @@ class SQLiteEvidenceStore:
         with self._lock:
             try:
                 cursor = self._conn.execute("INSERT INTO evidence_sequence DEFAULT VALUES")
-                event.sequence = int(cursor.lastrowid)
+                event.sequence = int(cursor.lastrowid or 0)
                 data = event.to_dict()
                 self._conn.execute(
                     """

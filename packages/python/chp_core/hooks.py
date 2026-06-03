@@ -48,19 +48,61 @@ TOOL_CAPABILITY_MAP: dict[str, str] = {
     "mcp__memory__create_entities": "claude_code.mcp.memory.create_entities",
 }
 
+# Maps OpenAI Codex CLI tool names to CHP capability IDs.
+CODEX_TOOL_CAPABILITY_MAP: dict[str, str] = {
+    "shell": "codex.shell",
+    "str_replace_editor": "codex.edit",
+    "str_replace_based_edit_tool": "codex.edit",
+    "create_file": "codex.write",
+    "delete_file": "codex.delete",
+    "read_file": "codex.read",
+    "list_directory": "codex.ls",
+    "web_search": "codex.web_search",
+    "web_fetch": "codex.web_fetch",
+}
 
-def capability_id_for_tool(tool_name: str) -> str:
-    """Map a Claude Code tool name to a CHP capability ID."""
-    if tool_name in TOOL_CAPABILITY_MAP:
-        return TOOL_CAPABILITY_MAP[tool_name]
-    # mcp__<server>__<tool> → claude_code.mcp.<server>.<tool>
+# Maps Google Gemini CLI tool names to CHP capability IDs.
+GEMINI_TOOL_CAPABILITY_MAP: dict[str, str] = {
+    "run_shell_command": "gemini.run_shell_command",
+    "read_file": "gemini.read_file",
+    "write_file": "gemini.write_file",
+    "replace_in_file": "gemini.edit",
+    "edit_file": "gemini.edit",
+    "list_directory": "gemini.ls",
+    "read_many_files": "gemini.read_many_files",
+    "move_file": "gemini.move_file",
+    "copy_file": "gemini.copy_file",
+    "remove_files_and_dirs": "gemini.delete",
+    "web_search": "gemini.web_search",
+    "web_fetch": "gemini.web_fetch",
+    "save_memory": "gemini.save_memory",
+    "run_notebook_cell": "gemini.notebook_run",
+    "edit_notebook_cell": "gemini.notebook_edit",
+    "add_notebook_cell": "gemini.notebook_edit",
+    "call_mcp_tool": "gemini.mcp_tool",
+}
+
+
+def capability_id_for_tool(
+    tool_name: str,
+    tool_map: dict[str, str] | None = None,
+    prefix: str = "claude_code",
+) -> str:
+    """Map an agent tool name to a CHP capability ID.
+
+    Uses ``tool_map`` if supplied, otherwise falls back to the built-in
+    Claude Code map. Unknown tool names fall back to ``<prefix>.tool.<name>``.
+    """
+    effective_map = tool_map if tool_map is not None else TOOL_CAPABILITY_MAP
+    if tool_name in effective_map:
+        return effective_map[tool_name]
+    # mcp__<server>__<tool> pattern (Claude Code and compatible agents)
     if tool_name.startswith("mcp__"):
         parts = tool_name.split("__", 2)
         server = parts[1] if len(parts) > 1 else "unknown"
         tool = parts[2].replace("__", ".") if len(parts) > 2 else "unknown"
-        return f"claude_code.mcp.{server}.{tool}"
-    # Anything else → claude_code.tool.<name>
-    return f"claude_code.tool.{tool_name.lower()}"
+        return f"{prefix}.mcp.{server}.{tool}"
+    return f"{prefix}.tool.{tool_name.lower()}"
 
 
 def default_store_path() -> str:
@@ -108,6 +150,9 @@ def process_pre_tool_use(
     payload: dict[str, Any],
     store_path: str,
     policy: PolicyConfig | None = None,
+    *,
+    tool_map: dict[str, str] | None = None,
+    agent_prefix: str = "claude_code",
 ) -> PreToolResult:
     """Emit a tool_use_requested evidence event and evaluate pre-tool policy."""
     session_id = payload.get("session_id", "unknown-session")
@@ -115,7 +160,7 @@ def process_pre_tool_use(
     tool_input = payload.get("tool_input") or {}
     cwd = payload.get("cwd", "")
 
-    cap_id = capability_id_for_tool(tool_name)
+    cap_id = capability_id_for_tool(tool_name, tool_map, agent_prefix)
 
     result = (
         evaluate_policy(cap_id, tool_input, policy)
@@ -140,7 +185,13 @@ def process_pre_tool_use(
     return result
 
 
-def process_post_tool_use(payload: dict[str, Any], store_path: str) -> None:
+def process_post_tool_use(
+    payload: dict[str, Any],
+    store_path: str,
+    *,
+    tool_map: dict[str, str] | None = None,
+    agent_prefix: str = "claude_code",
+) -> None:
     """Emit a tool_use evidence event from a PostToolUse hook payload."""
     session_id = payload.get("session_id", "unknown-session")
     tool_name = payload.get("tool_name", "unknown")
@@ -148,7 +199,7 @@ def process_post_tool_use(payload: dict[str, Any], store_path: str) -> None:
     tool_response = payload.get("tool_response") or {}
     cwd = payload.get("cwd", "")
 
-    cap_id = capability_id_for_tool(tool_name)
+    cap_id = capability_id_for_tool(tool_name, tool_map, agent_prefix)
     outcome = _outcome_from_response(tool_response)
 
     event_payload = redact_payload({
@@ -186,7 +237,12 @@ def process_post_tool_use(payload: dict[str, Any], store_path: str) -> None:
             )
 
 
-def process_stop(payload: dict[str, Any], store_path: str) -> None:
+def process_stop(
+    payload: dict[str, Any],
+    store_path: str,
+    *,
+    agent_prefix: str = "claude_code",
+) -> None:
     """Emit a session_completed evidence event from a Stop hook payload."""
     session_id = payload.get("session_id", "unknown-session")
     transcript_path = payload.get("transcript_path", "")
@@ -200,7 +256,7 @@ def process_stop(payload: dict[str, Any], store_path: str) -> None:
     _append_event(
         store_path=store_path,
         event_type="session_completed",
-        capability_id="claude_code.session",
+        capability_id=f"{agent_prefix}.session",
         session_id=session_id,
         outcome="success",
         payload={
@@ -218,6 +274,7 @@ def _append_event(
     session_id: str,
     outcome: str,
     payload: dict[str, Any],
+    host_id: str = _HOOK_HOST_ID,
 ) -> None:
     store = SQLiteEvidenceStore(store_path)
     try:
@@ -227,7 +284,7 @@ def _append_event(
             invocation_id=new_id("inv"),
             capability_id=capability_id,
             capability_version=_CAPABILITY_VERSION,
-            host_id=_HOOK_HOST_ID,
+            host_id=host_id,
             correlation=CorrelationContext(correlation_id=session_id),
             timestamp=utc_now(),
             outcome=outcome,  # type: ignore[arg-type]
