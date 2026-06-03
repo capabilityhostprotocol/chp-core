@@ -7,9 +7,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .decorators import adapt_callable, get_capability_descriptor
-from .host import CapabilityHandler, LocalCapabilityHost
-from .types import CapabilityDescriptor
+from ..decorators import adapt_callable, get_capability_descriptor
+from ..host import CapabilityHandler, LocalCapabilityHost
+from ..types import CapabilityDescriptor
 
 
 @dataclass(slots=True)

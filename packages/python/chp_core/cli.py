@@ -135,6 +135,18 @@ def build_parser() -> argparse.ArgumentParser:
     conformance.add_argument("--timeout-seconds", type=int, default=120)
     conformance.set_defaults(func=cmd_work_conformance_matrix)
 
+    validate_contract = subcommands.add_parser(
+        "validate-contract",
+        help="Validate a capability descriptor JSON file against the CHP schema.",
+    )
+    validate_contract.add_argument("descriptor", help="Path to capability-descriptor JSON file.")
+    validate_contract.add_argument(
+        "--schema",
+        default=None,
+        help="Path to the schema file (default: auto-located from schemas/).",
+    )
+    validate_contract.set_defaults(func=cmd_validate_contract)
+
     vc = work_subcommands.add_parser("vc", help="Govern local version-control work through CHP.")
     vc_subcommands = vc.add_subparsers(dest="vc_command", required=True)
 
@@ -512,6 +524,64 @@ def cmd_work_radicle_patch_merge(args: argparse.Namespace) -> int:
         args,
         pass_field="passed",
     )
+
+
+def cmd_validate_contract(args: argparse.Namespace) -> int:
+    import sys
+    from pathlib import Path
+
+    descriptor_path = Path(args.descriptor)
+    if not descriptor_path.exists():
+        print(f"Error: file not found: {descriptor_path}", file=sys.stderr)
+        return 1
+
+    try:
+        with descriptor_path.open() as f:
+            descriptor = json.load(f)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid JSON in {descriptor_path}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.schema:
+        schema_path = Path(args.schema)
+    else:
+        # Locate schema relative to this module
+        schema_path = Path(__file__).resolve().parent.parent.parent.parent / "schemas" / "capability-descriptor.schema.json"
+        if not schema_path.exists():
+            # Try next to the installed package
+            schema_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "schemas" / "capability-descriptor.schema.json"
+
+    if not schema_path.exists():
+        print(
+            f"Error: schema not found at {schema_path}. Pass --schema <path> to specify.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        import jsonschema
+    except ImportError:
+        print(
+            "Error: jsonschema is required: pip install chp-core[dev]",
+            file=sys.stderr,
+        )
+        return 1
+
+    with schema_path.open() as f:
+        schema = json.load(f)
+
+    validator = jsonschema.Draft7Validator(schema)
+    errors = sorted(validator.iter_errors(descriptor), key=lambda e: list(e.path))
+
+    if not errors:
+        print(f"PASS  {descriptor_path}")
+        return 0
+
+    print(f"FAIL  {descriptor_path}  ({len(errors)} error(s))")
+    for err in errors:
+        path = " > ".join(str(p) for p in err.absolute_path) or "(root)"
+        print(f"  [{path}]  {err.message}")
+    return 1
 
 
 def invoke_work_capability(

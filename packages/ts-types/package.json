@@ -1,6 +1,6 @@
 {
   "name": "@auxo/ts-types",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "TypeScript protocol types for CHP, including schema-aligned v0.1 types.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-core"
-version = "0.1.1"
+version = "0.2.0"
 description = "Capability Host Protocol — local execution evidence for agents, tools, and systems"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,7 +33,11 @@ chp = "chp_core.cli:main"
 chp-git = "chp_core.version_control:GitAdapter"
 
 [project.optional-dependencies]
-dev = ["jsonschema>=4.23", "pytest>=8.0"]
+dev    = ["jsonschema>=4.23", "pytest>=8.0"]
+claude = ["anthropic>=0.30"]
+openai = ["openai>=1.0"]
+gemini = ["google-generativeai>=0.5"]
+models = ["anthropic>=0.30", "openai>=1.0", "google-generativeai>=0.5"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
