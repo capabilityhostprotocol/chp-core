@@ -1,5 +1,5 @@
 {
-  "name": "@chp/types",
+  "name": "@capabilityhostprotocol/types",
   "version": "0.1.0",
   "description": "TypeScript protocol types for the Capability Host Protocol (CHP v0.1).",
   "main": "./dist/index.js",
@@ -41,7 +41,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/capabilityhostprotocol/chp-core",
+    "url": "git+https://github.com/capabilityhostprotocol/chp-core.git",
     "directory": "packages/ts-types"
   },
   "engines": {
