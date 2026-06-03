@@ -293,5 +293,26 @@ class HooksInstallTests(unittest.TestCase):
             os.unlink(path)
 
 
+class HookPerformanceTests(unittest.TestCase):
+    @unittest.skipIf(False, "perf")  # always runs; pytest -m perf selects it explicitly
+    def test_post_tool_use_completes_under_5ms(self) -> None:
+        import os
+        import tempfile
+        import time
+
+        with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+            path = f.name
+        try:
+            # Warm up (first call initialises the schema)
+            process_post_tool_use(_post_tool(session_id="warmup"), path)
+            # Measured call
+            start = time.perf_counter()
+            process_post_tool_use(_post_tool(session_id="perf-test"), path)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            self.assertLess(elapsed_ms, 5.0, f"hook took {elapsed_ms:.2f}ms — limit is 5ms")
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -33,7 +33,7 @@ chp = "chp_core.cli:main"
 chp-git = "chp_core.version_control:GitAdapter"
 
 [project.optional-dependencies]
-dev    = ["jsonschema>=4.23", "pytest>=8.0"]
+dev    = ["jsonschema>=4.23", "pytest>=8.0", "pytest-cov>=5.0"]
 claude = ["anthropic>=0.30"]
 openai = ["openai>=1.0"]
 gemini = ["google-generativeai>=0.5"]
@@ -42,6 +42,22 @@ models = ["anthropic>=0.30", "openai>=1.0", "google-generativeai>=0.5"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "--cov=chp_core --cov-report=term-missing --cov-fail-under=75"
+markers = [
+  "integration: tests that touch filesystem, git, or network sockets",
+  "slow: tests that take more than 1s",
+  "perf: performance contract assertions",
+]
+
+[tool.coverage.run]
+omit = ["tests/*", "*/demo*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["chp_core"]

@@ -2,28 +2,29 @@
 
 > CHP makes capability execution visible, replayable, and ready for governance.
 
-## v0.1 — Local Execution Evidence (shipped)
+## Shipped
 
-- Minimal protocol spec and JSON schemas
-- Python reference host (`chp-core`) and TypeScript types (`@capabilityhostprotocol/types`)
-- Append-only local evidence store, replay by correlation ID
-- Conformance suite and examples
+**v0.1 — Local Execution Evidence**  
+Minimal protocol spec, JSON schemas, Python reference host (`chp-core`), TypeScript types (`@capabilityhostprotocol/types`), append-only SQLite evidence store, replay by correlation ID, conformance suite.
 
-## v0.2 — Capability Contracts and Model Adapters
+**v0.2.0 — Model Adapters**  
+First-class adapters for Claude, OpenAI, and Gemini. Every LLM call becomes a governed, replayable CHP capability. `chp validate-contract` CLI.
 
-Capability contract extensions and first-class adapters for Claude, OpenAI, and Gemini — wrapping LLM tool calls as evidenced CHP capabilities.
+**v0.2.1 — Agentic Emission**  
+Zero-config evidence from Claude Code sessions. `chp hooks install` → every tool call and session stored automatically. No application code changes required.
 
-## v0.3+ — Agent-Native Operations
+## Active — v0.2 Series
 
-Agent sessions, wrap-tool primitives, tamper-evidence, observability alignment (OpenTelemetry export), and a local capability registry.
+The v0.2 series focuses on making agentic development fully observable by default. Upcoming patches (no dates, no promises):
 
-## v1.0 — Ecosystem Boundary
-
-**Open source:**
-spec · schemas · local host · conformance · contract template · registry seed · maturity model · local replay · OTel export · model adapters · stable MCP adapter
-
-**Commercial / hosted:**
-hosted capability graph · multi-host trace stitching · long-term retention · team workspaces · enterprise RBAC · compliance exports · marketplace
+- **Session intelligence** — pre-tool governance hooks, session export, richer session view
+- **Multi-agent correlation** — parent-child session trees when agents spawn agents
+- **More agent adapters** — Codex, Gemini CLI, others following the same hook pattern
+- **Programmatic wrapping** — `AgentSession` context manager, `wrap_tool_call()` one-shot wrapper
+- **Evidence integrity** — hash chaining, portable signed bundles, `chp verify-evidence`
+- **Policy gates** — pre-tool invariant enforcement, risk tiers, approval events
+- **Observability alignment** — OpenTelemetry export, capability health endpoints
+- **Local registry** — `~/.chp/registry.yaml`, maturity assessment, `chp registry`
 
 ## Guiding Rule
 

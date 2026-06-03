@@ -378,6 +378,44 @@ Manual evidence (emit from your handler):
 - [ ] When ready: remove mock, connect to Zenoh mesh
 - [ ] When ready: add entitlements for sensitive operations
 
+## Auto-instrumenting Claude Code
+
+Once `chp-core` is installed, one command wires every Claude Code session:
+
+```bash
+chp hooks install --global
+```
+
+This writes two entries to `~/.claude/settings.json`:
+- **PostToolUse** → `chp hook post-tool` (fires after every tool call)
+- **Stop** → `chp hook stop` (fires when the session ends)
+
+Evidence is stored at `.chp/claude-code-sessions.sqlite` in your working directory, falling back to `~/.chp/sessions.sqlite`.
+
+### View sessions
+
+```bash
+chp session list                          # recent sessions
+chp session show <session_id>             # tools used, failures, files touched
+chp session replay <session_id>           # full evidence stream as JSON
+```
+
+### Change the store path
+
+```bash
+export CHP_HOOK_STORE=/path/to/store.sqlite
+```
+
+### Project-scoped hooks
+
+```bash
+chp hooks install --project   # writes to .claude/settings.json in cwd
+chp hooks status              # verify installation
+chp hooks uninstall --global  # remove
+```
+
+---
+
 ## Resources
 
 - **Zenoh Transport Binding**: `docs/transports/zenoh.md`
