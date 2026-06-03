@@ -11,7 +11,7 @@ They are complementary:
 - An MCP server can be wrapped as a CHP host.
 - A CHP capability can be exposed through an MCP-compatible tool surface.
 
-CHP should not claim to replace MCP.
+CHP does not replace MCP.
 
 ## MCP Model
 
@@ -55,35 +55,15 @@ CHP does not require a specific transport, model provider, agent loop, or workfl
 
 ## Gaps CHP Covers
 
-Evidence:
+**Evidence:** MCP does not require every tool attempt to emit structured started/completed/failed/denied evidence. CHP makes evidence mandatory.
 
-- MCP does not require every tool attempt to emit structured started/completed/failed/denied evidence.
-- CHP makes evidence mandatory.
+**Correlation:** MCP JSON-RPC IDs correlate requests and responses. CHP correlation IDs reconstruct causal execution across tools, agents, systems, and replay.
 
-Correlation:
+**Denial semantics:** MCP has protocol errors and tool execution errors. CHP has explicit denial outcomes for boundary decisions before execution begins.
 
-- MCP JSON-RPC IDs correlate requests and responses.
-- CHP correlation IDs reconstruct causal execution across tools, agents, systems, and replay.
+**Replay:** MCP does not define replay by correlation ID. CHP v0.1 requires it.
 
-Denial semantics:
-
-- MCP has protocol errors and tool execution errors.
-- CHP has explicit denial outcomes for boundary decisions before execution.
-
-Replay:
-
-- MCP does not define replay by correlation ID.
-- CHP v0.1 requires it.
-
-Invariants:
-
-- MCP tool annotations describe behavior but are not policy.
-- CHP declares invariants at the capability boundary.
-
-Assurance:
-
-- MCP does not define evidence assurance levels.
-- CHP includes minimal assurance metadata and leaves stronger trust layers for later.
+**Invariants:** MCP tool annotations describe behavior but are not policy. CHP declares invariants at the capability boundary.
 
 ## Where MCP Is Stronger
 
@@ -93,30 +73,8 @@ Assurance:
 - Prompts, resources, tools, sampling, roots, and elicitation in one integration protocol.
 - User consent and UI guidance around model-controlled tools.
 
-## Integration Recommendation
+## Composing CHP With MCP
 
-Support an experimental MCP bridge at launch, but keep it separate from the protocol core.
+The repository includes an experimental MCP bridge prototype in `examples/mcp-bridge-demo/` that demonstrates wrapping MCP tools as CHP capabilities so invocations emit structured evidence. It is a prototype, not a production integration.
 
-Recommended packages:
-
-- `chp-core`: spec, schemas, local host, conformance, local replay.
-- `chp-mcp-bridge`: MCP SDK integration that can wrap MCP tools as CHP capabilities and expose CHP capabilities as MCP tools.
-
-The repository now includes a dependency-light experimental prototype in `examples/mcp-bridge-demo/`.
-
-## Launch Risks
-
-- MCP changes over time. The bridge must track current MCP SDK and protocol revisions independently from CHP core.
-- Tool name collisions require deterministic namespacing.
-- MCP tool descriptions and annotations are not sufficient trust signals.
-- MCP tool results can be unstructured; CHP evidence must stay structured even when tool output is text.
-- User consent and confirmation prompts remain the MCP client or host application's responsibility.
-
-## Recommendation
-
-At launch:
-
-- Position CHP as the execution evidence layer for MCP and non-MCP tools.
-- Ship the MCP bridge as an experimental prototype or separate package, not as part of the core spec.
-- Do not claim MCP equivalence or replacement.
-- Demonstrate one MCP-style tool wrapped by CHP evidence.
+The right mental model: MCP connects tools to models; CHP evidences what those tools actually did.

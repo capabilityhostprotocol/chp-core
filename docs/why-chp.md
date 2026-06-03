@@ -20,7 +20,6 @@ They often do not standardize:
 - denial records
 - replay by causal trace
 - capability-level invariants
-- future assurance and capability graph construction
 
 Logs help, but logs are inconsistent, optional, and usually not a protocol contract.
 
@@ -53,13 +52,3 @@ That makes it possible to ask:
 - Did it start?
 - Did it succeed, fail, get denied, or get skipped?
 - What evidence supports that answer?
-
-## Launch Positioning
-
-Lead with local visibility:
-
-> See what your agents and tools actually did.
-
-Avoid positioning CHP as a substitute for MCP, tool calling, workflow engines,
-or tracing systems. CHP integrates with them by adding capability-level
-execution evidence.
