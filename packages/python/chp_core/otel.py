@@ -1,7 +1,15 @@
-"""No-dependency OpenTelemetry export mapping helpers."""
+"""No-dependency OpenTelemetry export mapping helpers.
+
+Span mapping functions (evidence_to_otel_span, replay_to_otel_spans) convert
+CHP evidence events to OTLP-compatible span dicts. export_otlp_http sends them
+to any OTLP HTTP collector using only stdlib urllib — no opentelemetry-sdk dep.
+"""
 
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from typing import Any
 
@@ -84,6 +92,68 @@ def replay_to_otel_spans(events: list[JSON]) -> list[JSON]:
         )
 
     return spans
+
+
+def export_otlp_http(
+    spans: list[JSON],
+    *,
+    endpoint: str = "http://localhost:4318/v1/traces",
+    service_name: str = "chp",
+    timeout_seconds: float = 5.0,
+) -> dict[str, Any]:
+    """POST spans to an OTLP HTTP collector.
+
+    Uses only stdlib urllib — no opentelemetry-sdk required. The payload is
+    wrapped in a minimal OTLP ResourceSpans envelope.
+
+    Returns a dict with exported count, endpoint, and HTTP status code.
+    Raises urllib.error.URLError on connection failure.
+    """
+    otlp_body = {
+        "resourceSpans": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": service_name}}
+                    ]
+                },
+                "scopeSpans": [
+                    {
+                        "scope": {"name": "chp", "version": "0.2"},
+                        "spans": [
+                            {
+                                "traceId": span.get("trace_id", ""),
+                                "spanId": span.get("span_id", ""),
+                                "name": span.get("name", ""),
+                                "startTimeUnixNano": span.get("start_time", ""),
+                                "endTimeUnixNano": span.get("end_time", span.get("start_time", "")),
+                                "attributes": [
+                                    {"key": k, "value": {"stringValue": str(v)}}
+                                    for k, v in (span.get("attributes") or {}).items()
+                                    if v is not None
+                                ],
+                                "status": span.get("status", {"code": "UNSET"}),
+                                "events": span.get("events", []),
+                            }
+                            for span in spans
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    body = json.dumps(otlp_body).encode()
+    req = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+        status = resp.status
+
+    return {"exported": len(spans), "endpoint": endpoint, "status": status}
 
 
 def _flatten_payload(prefix: str, payload: Any) -> dict[str, Any]:

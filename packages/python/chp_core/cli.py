@@ -264,6 +264,13 @@ def build_parser() -> argparse.ArgumentParser:
     session_tree_p.add_argument("--depth", type=int, default=10, help="Max recursion depth.")
     session_tree_p.set_defaults(func=cmd_session_tree)
 
+    session_otel_p = session_sub.add_parser("otel", help="Export a session as OTLP spans.")
+    session_otel_p.add_argument("session_id")
+    session_otel_p.add_argument("--store", default=None)
+    session_otel_p.add_argument("--endpoint", default="http://localhost:4318/v1/traces")
+    session_otel_p.add_argument("--dry-run", action="store_true", help="Print spans as JSON instead of exporting.")
+    session_otel_p.set_defaults(func=cmd_session_otel)
+
     session_export_p = session_sub.add_parser("export", help="Export a session as a portable JSON bundle.")
     session_export_p.add_argument("session_id")
     session_export_p.add_argument("--store", default=None)
@@ -996,6 +1003,37 @@ def cmd_session_tree(args: argparse.Namespace) -> int:
     tree = _build_session_node(args.session_id, store_path, args.depth, visited)
     print_json(tree)
     return 0
+
+
+def cmd_session_otel(args: argparse.Namespace) -> int:
+    import sys
+    from .otel import export_otlp_http, replay_to_otel_spans
+    from .store import SQLiteEvidenceStore
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    if not events:
+        print(f"No events found for session: {args.session_id}", file=sys.stderr)
+        return 1
+
+    spans = replay_to_otel_spans(events)
+
+    if args.dry_run:
+        print(json.dumps(spans, indent=2))
+        return 0
+
+    try:
+        result = export_otlp_http(spans, endpoint=args.endpoint)
+        print(json.dumps(result))
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"OTLP export failed: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_session_export(args: argparse.Namespace) -> int:

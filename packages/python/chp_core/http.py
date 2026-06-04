@@ -29,7 +29,15 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/" or path == "/health":
-            self._write_json({"ok": True, "protocol": "chp", "version": "0.1"})
+            host_desc = self.server.chp_host.discover()
+            cap_count = len(host_desc.get("capabilities", []))
+            self._write_json({
+                "status": "ok",
+                "host_id": host_desc.get("id", "unknown"),
+                "protocol": "chp",
+                "version": "0.1",
+                "capability_count": cap_count,
+            })
             return
         if path == "/host":
             self._write_json(self.server.chp_host.discover())
