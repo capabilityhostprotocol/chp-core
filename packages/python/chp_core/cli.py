@@ -277,6 +277,31 @@ def build_parser() -> argparse.ArgumentParser:
     session_export_p.add_argument("--output", default=None, help="Output file path (default: stdout).")
     session_export_p.set_defaults(func=cmd_session_export)
 
+    registry_p = subcommands.add_parser("registry", help="Manage the local CHP adapter registry.")
+    registry_sub = registry_p.add_subparsers(dest="registry_command", required=True)
+
+    registry_list_p = registry_sub.add_parser("list", help="List registered adapters.")
+    registry_list_p.add_argument("--registry", default=None, help="Path to registry.json")
+    registry_list_p.set_defaults(func=cmd_registry_list)
+
+    registry_add_p = registry_sub.add_parser("add", help="Add or update an adapter entry.")
+    registry_add_p.add_argument("adapter_id")
+    registry_add_p.add_argument("--package", default=None)
+    registry_add_p.add_argument("--version", default=None)
+    registry_add_p.add_argument("--tag", action="append", dest="tags", default=[])
+    registry_add_p.add_argument("--disabled", action="store_true")
+    registry_add_p.add_argument("--registry", default=None)
+    registry_add_p.set_defaults(func=cmd_registry_add)
+
+    registry_remove_p = registry_sub.add_parser("remove", help="Remove an adapter entry.")
+    registry_remove_p.add_argument("adapter_id")
+    registry_remove_p.add_argument("--registry", default=None)
+    registry_remove_p.set_defaults(func=cmd_registry_remove)
+
+    registry_status_p = registry_sub.add_parser("status", help="Show maturity status of registered adapters.")
+    registry_status_p.add_argument("--registry", default=None)
+    registry_status_p.set_defaults(func=cmd_registry_status)
+
     verify_p = subcommands.add_parser("verify-evidence", help="Verify the SHA256 hash chain for a session.")
     verify_p.add_argument("session_id")
     verify_p.add_argument("--store", default=None)
@@ -1071,6 +1096,75 @@ def cmd_session_export(args: argparse.Namespace) -> int:
         print(f"Exported {len(events)} events to {args.output}")
     else:
         print(output)
+    return 0
+
+
+def cmd_registry_list(args: argparse.Namespace) -> int:
+    from .registry import load_registry
+    entries = load_registry(args.registry)
+    print(json.dumps([e.to_dict() for e in entries], indent=2))
+    return 0
+
+
+def cmd_registry_add(args: argparse.Namespace) -> int:
+    from .registry import RegistryEntry, add_entry
+    entry = RegistryEntry(
+        id=args.adapter_id,
+        package=args.package,
+        version=args.version,
+        enabled=not args.disabled,
+        tags=args.tags or [],
+    )
+    add_entry(entry, args.registry)
+    print(json.dumps(entry.to_dict(), indent=2))
+    return 0
+
+
+def cmd_registry_remove(args: argparse.Namespace) -> int:
+    import sys
+    from .registry import remove_entry
+    removed = remove_entry(args.adapter_id, args.registry)
+    if removed:
+        print(f"Removed adapter: {args.adapter_id}")
+        return 0
+    print(f"Adapter not found: {args.adapter_id}", file=sys.stderr)
+    return 1
+
+
+def cmd_registry_status(args: argparse.Namespace) -> int:
+    from .registry import load_registry
+    from .adapters import auto_register_adapters
+    from .host import LocalCapabilityHost
+
+    entries = load_registry(args.registry)
+    if not entries:
+        print("No adapters registered. Use: chp registry add <id>")
+        return 0
+
+    host = LocalCapabilityHost("registry-status-host")
+    try:
+        auto_register_adapters(host)
+    except Exception:  # noqa: BLE001
+        pass
+
+    caps_by_adapter: dict[str, list[dict]] = {}
+    for cap in host.discover().get("capabilities", []):
+        prefix = cap["id"].split(".")[0]
+        caps_by_adapter.setdefault(prefix, []).append(cap)
+
+    result = []
+    for entry in entries:
+        adapter_caps = caps_by_adapter.get(entry.id, [])
+        statuses = {c.get("status", "draft") for c in adapter_caps}
+        result.append({
+            "id": entry.id,
+            "enabled": entry.enabled,
+            "package": entry.package,
+            "capability_count": len(adapter_caps),
+            "statuses": sorted(statuses),
+        })
+
+    print(json.dumps(result, indent=2))
     return 0
 
 
