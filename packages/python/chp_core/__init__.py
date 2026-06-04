@@ -28,6 +28,7 @@ from .codex import (
     register_codex_observation_capabilities,
 )
 from .otel import evidence_to_otel_span, replay_to_otel_spans
+from .session import AgentSession, wrap_tool_call
 from .redaction import DEFAULT_SENSITIVE_KEYS, redact_payload
 from .types import (
     AssuranceMetadata,
@@ -95,4 +96,6 @@ __all__ = [
     "register_trace_execution",
     "replay_to_otel_spans",
     "serve_http",
+    "AgentSession",
+    "wrap_tool_call",
 ]
