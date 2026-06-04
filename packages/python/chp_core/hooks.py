@@ -82,6 +82,50 @@ GEMINI_TOOL_CAPABILITY_MAP: dict[str, str] = {
     "call_mcp_tool": "gemini.mcp_tool",
 }
 
+# Risk levels for known built-in capability IDs (sourced from adapter descriptors).
+CAPABILITY_RISK_MAP: dict[str, str] = {
+    # Claude Code
+    "claude_code.bash": "medium",
+    "claude_code.edit": "medium",
+    "claude_code.write": "medium",
+    "claude_code.read": "low",
+    "claude_code.grep": "low",
+    "claude_code.glob": "low",
+    "claude_code.ls": "low",
+    "claude_code.web_fetch": "low",
+    "claude_code.web_search": "low",
+    "claude_code.agent": "medium",
+    "claude_code.todo_read": "low",
+    "claude_code.todo_write": "low",
+    "claude_code.notebook_read": "low",
+    "claude_code.notebook_edit": "medium",
+    # Codex CLI
+    "codex.shell": "medium",
+    "codex.edit": "medium",
+    "codex.write": "medium",
+    "codex.read": "low",
+    "codex.ls": "low",
+    "codex.delete": "high",
+    "codex.web_search": "low",
+    "codex.web_fetch": "low",
+    # Gemini CLI
+    "gemini.run_shell_command": "medium",
+    "gemini.write_file": "medium",
+    "gemini.edit": "medium",
+    "gemini.move_file": "medium",
+    "gemini.copy_file": "medium",
+    "gemini.delete": "high",
+    "gemini.read_file": "low",
+    "gemini.read_many_files": "low",
+    "gemini.ls": "low",
+    "gemini.web_search": "low",
+    "gemini.web_fetch": "low",
+    "gemini.save_memory": "low",
+    "gemini.notebook_run": "medium",
+    "gemini.notebook_edit": "medium",
+    "gemini.mcp_tool": "medium",
+}
+
 
 def capability_id_for_tool(
     tool_name: str,
@@ -161,9 +205,10 @@ def process_pre_tool_use(
     cwd = payload.get("cwd", "")
 
     cap_id = capability_id_for_tool(tool_name, tool_map, agent_prefix)
+    capability_risk = CAPABILITY_RISK_MAP.get(cap_id)
 
     result = (
-        evaluate_policy(cap_id, tool_input, policy)
+        evaluate_policy(cap_id, tool_input, policy, capability_risk=capability_risk)
         if policy is not None
         else PreToolResult(should_block=False, capability_id=cap_id)
     )
