@@ -270,6 +270,11 @@ def build_parser() -> argparse.ArgumentParser:
     session_export_p.add_argument("--output", default=None, help="Output file path (default: stdout).")
     session_export_p.set_defaults(func=cmd_session_export)
 
+    verify_p = subcommands.add_parser("verify-evidence", help="Verify the SHA256 hash chain for a session.")
+    verify_p.add_argument("session_id")
+    verify_p.add_argument("--store", default=None)
+    verify_p.set_defaults(func=cmd_verify_evidence)
+
     return parser
 
 
@@ -1001,7 +1006,8 @@ def cmd_session_export(args: argparse.Namespace) -> int:
     store_path = _resolve_store(args.store)
     store = SQLiteEvidenceStore(store_path)
     try:
-        events = store.by_correlation(args.session_id)
+        events = store.by_correlation_with_hashes(args.session_id)
+        chain = store.verify_chain(args.session_id)
     finally:
         store.close()
 
@@ -1009,11 +1015,14 @@ def cmd_session_export(args: argparse.Namespace) -> int:
         print(f"No events found for session: {args.session_id}", file=sys.stderr)
         return 1
 
+    hashes_included = any("content_hash" in e for e in events)
     bundle = {
         "format": "chp-session-bundle/1",
         "session_id": args.session_id,
         "exported_at": utc_now(),
         "event_count": len(events),
+        "hashes_included": hashes_included,
+        "chain_valid": chain.valid if hashes_included else None,
         "events": events,
     }
 
@@ -1024,6 +1033,32 @@ def cmd_session_export(args: argparse.Namespace) -> int:
         print(f"Exported {len(events)} events to {args.output}")
     else:
         print(output)
+    return 0
+
+
+def cmd_verify_evidence(args: argparse.Namespace) -> int:
+    import sys
+    from .store import SQLiteEvidenceStore
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        result = store.verify_chain(args.session_id)
+    finally:
+        store.close()
+
+    output = {
+        "correlation_id": result.correlation_id,
+        "event_count": result.event_count,
+        "verified_count": result.verified_count,
+        "unverified_count": result.unverified_count,
+        "valid": result.valid,
+        "first_broken_sequence": result.first_broken_sequence,
+    }
+    print(json.dumps(output, indent=2))
+    if not result.valid:
+        print(f"Chain broken at sequence {result.first_broken_sequence}", file=sys.stderr)
+        return 1
     return 0
 
 

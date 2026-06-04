@@ -2,20 +2,53 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from .types import ExecutionEvidence, JSON
 
 
+@dataclass
+class ChainVerificationResult:
+    """Result of verifying the SHA256 hash chain for a correlation ID."""
+    correlation_id: str
+    event_count: int
+    verified_count: int      # events with stored content_hash
+    unverified_count: int    # legacy events without hash (NULL)
+    valid: bool
+    first_broken_sequence: int | None
+
+
+def _compute_event_hash(event_dict: JSON, prev_hash: str | None) -> str:
+    """SHA256 of stable event fields + prev_hash link."""
+    correlation = event_dict.get("correlation") or {}
+    stable: JSON = {
+        "event_id": event_dict.get("event_id"),
+        "event_type": event_dict.get("event_type"),
+        "invocation_id": event_dict.get("invocation_id"),
+        "capability_id": event_dict.get("capability_id"),
+        "host_id": event_dict.get("host_id"),
+        "correlation_id": correlation.get("correlation_id") if isinstance(correlation, dict) else None,
+        "timestamp": event_dict.get("timestamp"),
+        "outcome": event_dict.get("outcome"),
+        "payload": event_dict.get("payload"),
+        "prev_hash": prev_hash,
+    }
+    return hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()
+
+
 class SQLiteEvidenceStore:
     """SQLite-backed evidence store.
 
     The store uses insert-only writes. Existing events are never updated or
-    replaced. This is an integrity baseline, not a tamper-proof ledger.
+    replaced. v0.2.6+ adds SHA256 hash chaining: each event stores its own
+    content_hash and the prev_hash of the preceding event in the same
+    correlation. Use verify_chain() to detect tampering.
     """
 
     def __init__(self, path: str | Path = ".chp/evidence.sqlite") -> None:
@@ -54,6 +87,15 @@ class SQLiteEvidenceStore:
                 )
                 """
             )
+            # Add hash columns to existing stores (graceful migration)
+            for ddl in (
+                "ALTER TABLE evidence_events ADD COLUMN content_hash TEXT",
+                "ALTER TABLE evidence_events ADD COLUMN prev_hash TEXT",
+            ):
+                try:
+                    self._conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass  # column already exists
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_evidence_correlation "
                 "ON evidence_events(correlation_id, sequence)"
@@ -84,6 +126,15 @@ class SQLiteEvidenceStore:
                 cursor = self._conn.execute("INSERT INTO evidence_sequence DEFAULT VALUES")
                 event.sequence = int(cursor.lastrowid or 0)
                 data = event.to_dict()
+                # Look up the most recent hash for this correlation to chain from
+                prev_row = self._conn.execute(
+                    "SELECT content_hash FROM evidence_events "
+                    "WHERE correlation_id = ? ORDER BY sequence DESC LIMIT 1",
+                    (event.correlation.correlation_id,),
+                ).fetchone()
+                prev_hash: str | None = prev_row["content_hash"] if prev_row else None
+                content_hash = _compute_event_hash(data, prev_hash)
+
                 self._conn.execute(
                     """
                     INSERT INTO evidence_events (
@@ -98,9 +149,11 @@ class SQLiteEvidenceStore:
                       timestamp,
                       outcome,
                       payload_json,
-                      event_json
+                      event_json,
+                      content_hash,
+                      prev_hash
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.sequence,
@@ -115,6 +168,8 @@ class SQLiteEvidenceStore:
                         event.outcome,
                         json.dumps(event.payload, sort_keys=True),
                         json.dumps(data, sort_keys=True),
+                        content_hash,
+                        prev_hash,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -191,6 +246,29 @@ class SQLiteEvidenceStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_event(row) for row in rows]
 
+    def by_correlation_with_hashes(self, correlation_id: str) -> list[JSON]:
+        """Like by_correlation but includes content_hash and prev_hash in each dict."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT sequence, event_json, content_hash, prev_hash
+                FROM evidence_events
+                WHERE correlation_id = ?
+                ORDER BY sequence ASC
+                """,
+                (correlation_id,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            data = json.loads(row["event_json"])
+            data["sequence"] = int(row["sequence"])
+            if row["content_hash"] is not None:
+                data["content_hash"] = row["content_hash"]
+            if row["prev_hash"] is not None:
+                data["prev_hash"] = row["prev_hash"]
+            result.append(data)
+        return result
+
     def children_of(self, session_id: str) -> list[str]:
         """Return child session IDs spawned by the given session (via session_spawn events)."""
         with self._lock:
@@ -213,6 +291,63 @@ class SQLiteEvidenceStore:
             except (json.JSONDecodeError, AttributeError):
                 pass
         return result
+
+    def verify_chain(self, correlation_id: str) -> ChainVerificationResult:
+        """Walk stored events in sequence order and verify the SHA256 hash chain.
+
+        Events without a stored hash (legacy, written before v0.2.6) are counted
+        separately and do not break the chain.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT sequence, event_json, content_hash, prev_hash
+                FROM evidence_events
+                WHERE correlation_id = ?
+                ORDER BY sequence ASC
+                """,
+                (correlation_id,),
+            ).fetchall()
+
+        verified_count = 0
+        unverified_count = 0
+        expected_prev: str | None = None
+        first_broken: int | None = None
+
+        for row in rows:
+            stored_hash: str | None = row["content_hash"]
+            stored_prev: str | None = row["prev_hash"]
+
+            if stored_hash is None:
+                unverified_count += 1
+                # Don't advance expected_prev — legacy events break the chain tracking
+                continue
+
+            # Re-compute hash from stored event_json
+            try:
+                event_dict = json.loads(row["event_json"])
+            except json.JSONDecodeError:
+                if first_broken is None:
+                    first_broken = int(row["sequence"])
+                continue
+
+            recomputed = _compute_event_hash(event_dict, stored_prev)
+            if recomputed != stored_hash or stored_prev != expected_prev:
+                if first_broken is None:
+                    first_broken = int(row["sequence"])
+            else:
+                verified_count += 1
+
+            expected_prev = stored_hash
+
+        return ChainVerificationResult(
+            correlation_id=correlation_id,
+            event_count=len(rows),
+            verified_count=verified_count,
+            unverified_count=unverified_count,
+            valid=first_broken is None,
+            first_broken_sequence=first_broken,
+        )
 
     def count_by_correlation(self, correlation_id: str) -> int:
         with self._lock:
