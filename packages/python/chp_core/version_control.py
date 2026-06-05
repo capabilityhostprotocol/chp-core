@@ -559,6 +559,7 @@ async def _rc_tag(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
     require_mutation_allowed(payload)
     version = require_payload_value(payload, "version")
     repo_root = resolve_repo_root(payload)
+    remote = find_push_remote(repo_root)
     list_result = run_git(repo_root, ["tag", "--list", f"v{version}-rc.*"])
     existing_tags = [t.strip() for t in list_result.stdout.splitlines() if t.strip()]
     rc_nums = [int(m.group(1)) for t in existing_tags if (m := re.search(r"-rc\.(\d+)$", t))]
@@ -568,16 +569,18 @@ async def _rc_tag(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
     if tag_result.returncode != 0:
         ctx.emit("rc_tag_pushed", {"version": version, "tag": tag_name, "passed": False})
         return {"passed": False, "version": version, "tag": tag_name, "error": tag_result.stderr.strip()}
-    push_result = run_git(repo_root, ["push", "origin", tag_name])
+    push_result = run_git(repo_root, ["push", remote, tag_name])
     passed = push_result.returncode == 0
-    ctx.emit("rc_tag_pushed", {"version": version, "tag": tag_name, "passed": passed, "pushed": passed})
-    return {"passed": passed, "version": version, "tag": tag_name, "pushed": passed}
+    ctx.emit("rc_tag_pushed", {"version": version, "tag": tag_name, "passed": passed, "pushed": passed, "remote": remote})
+    return {"passed": passed, "version": version, "tag": tag_name, "pushed": passed, "remote": remote,
+            "push_error": push_result.stderr.strip() if not passed else None}
 
 
 async def _release_tag(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
     require_mutation_allowed(payload)
     version = require_payload_value(payload, "version")
     repo_root = resolve_repo_root(payload)
+    remote = find_push_remote(repo_root)
     bundle_cid = optional_payload_string(payload, "release_bundle_correlation_id")
     if bundle_cid:
         events = ctx.host.replay(bundle_cid)
@@ -588,14 +591,15 @@ async def _release_tag(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
     if tag_result.returncode != 0:
         ctx.emit("release_tag_pushed", {"version": version, "tag": tag_name, "passed": False})
         return {"passed": False, "version": version, "tag": tag_name, "error": tag_result.stderr.strip()}
-    push_result = run_git(repo_root, ["push", "origin", tag_name])
+    push_result = run_git(repo_root, ["push", remote, tag_name])
     passed = push_result.returncode == 0
     ctx.emit("release_tag_pushed", {
         "version": version, "tag": tag_name, "passed": passed,
-        "pushed": passed, "release_bundle_correlation_id": bundle_cid,
+        "pushed": passed, "release_bundle_correlation_id": bundle_cid, "remote": remote,
     })
     return {"passed": passed, "version": version, "tag": tag_name, "pushed": passed,
-            "release_bundle_correlation_id": bundle_cid}
+            "release_bundle_correlation_id": bundle_cid, "remote": remote,
+            "push_error": push_result.stderr.strip() if not passed else None}
 
 
 def bump_version_files(repo_root: Path, new_version: str) -> JSON:
@@ -1280,6 +1284,22 @@ def run_git(repo_root: Path, args: list[str]) -> subprocess.CompletedProcess[str
         capture_output=True,
         text=True,
     )
+
+
+def find_push_remote(repo_root: Path) -> str:
+    """Return the best remote name for pushing: upstream branch remote, then 'origin', then first available."""
+    branch_result = run_git(repo_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    if branch_result.returncode == 0:
+        upstream = branch_result.stdout.strip()
+        if "/" in upstream:
+            return upstream.split("/", 1)[0]
+    for candidate in ("origin", "github"):
+        check = run_git(repo_root, ["remote", "get-url", candidate])
+        if check.returncode == 0:
+            return candidate
+    remotes_result = run_git(repo_root, ["remote"])
+    remotes = [r.strip() for r in remotes_result.stdout.splitlines() if r.strip()]
+    return remotes[0] if remotes else "origin"
 
 
 def parse_porcelain(output: str) -> list[JSON]:
