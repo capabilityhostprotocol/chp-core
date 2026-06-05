@@ -159,6 +159,7 @@ class WorkCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = str(Path(tmpdir) / "work.sqlite")
             correlation_id = "corr-check-alignment"
+            repo_root = str(Path(__file__).resolve().parents[3])
 
             alignment = self.run_cli(
                 [
@@ -168,6 +169,8 @@ class WorkCLITests(unittest.TestCase):
                     store,
                     "--correlation-id",
                     correlation_id,
+                    "--repo-root",
+                    repo_root,
                 ]
             )
 
@@ -193,6 +196,7 @@ class WorkCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = str(Path(tmpdir) / "work.sqlite")
             correlation_id = "corr-check-messaging"
+            repo_root = str(Path(__file__).resolve().parents[3])
 
             messaging = self.run_cli(
                 [
@@ -202,6 +206,8 @@ class WorkCLITests(unittest.TestCase):
                     store,
                     "--correlation-id",
                     correlation_id,
+                    "--repo-root",
+                    repo_root,
                 ]
             )
 
@@ -335,6 +341,7 @@ class WorkCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = str(Path(tmpdir) / "work.sqlite")
             correlation_id = "corr-conformance-matrix"
+            repo_root = str(Path(__file__).resolve().parents[3])
 
             matrix = self.run_cli(
                 [
@@ -344,6 +351,8 @@ class WorkCLITests(unittest.TestCase):
                     store,
                     "--correlation-id",
                     correlation_id,
+                    "--repo-root",
+                    repo_root,
                     "--target",
                     "sample-passing",
                     "--target",
