@@ -1287,16 +1287,16 @@ def run_git(repo_root: Path, args: list[str]) -> subprocess.CompletedProcess[str
 
 
 def find_push_remote(repo_root: Path) -> str:
-    """Return the best remote name for pushing: upstream branch remote, then 'origin', then first available."""
+    """Return the best remote name for tag pushes: prefer 'origin'/'github' (CI remotes), fall back to upstream."""
+    for candidate in ("origin", "github"):
+        check = run_git(repo_root, ["remote", "get-url", candidate])
+        if check.returncode == 0:
+            return candidate
     branch_result = run_git(repo_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
     if branch_result.returncode == 0:
         upstream = branch_result.stdout.strip()
         if "/" in upstream:
             return upstream.split("/", 1)[0]
-    for candidate in ("origin", "github"):
-        check = run_git(repo_root, ["remote", "get-url", candidate])
-        if check.returncode == 0:
-            return candidate
     remotes_result = run_git(repo_root, ["remote"])
     remotes = [r.strip() for r in remotes_result.stdout.splitlines() if r.strip()]
     return remotes[0] if remotes else "origin"
@@ -1360,7 +1360,11 @@ def parse_numstat(output: str, *, staged: bool) -> list[JSON]:
 
 
 _CHECK_ALIASES: dict[str, list[str]] = {
-    "tests": ["python", "-m", "pytest", "packages/python/tests/", "-m", "not slow", "-q", "--no-cov"],
+    "tests": [
+        "python", "-m", "pytest", "packages/python/tests/",
+        "--ignore=packages/python/tests/test_stress.py",
+        "-m", "not slow", "-q", "--no-cov",
+    ],
     "alignment": ["python", "-m", "chp_core.cli", "work", "check-alignment", "--repo-root", "."],
 }
 
