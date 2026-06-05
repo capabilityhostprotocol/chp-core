@@ -6,19 +6,26 @@ import argparse
 import sys
 from pathlib import Path
 
-_DEFAULT_STORE = str(Path.home() / ".chp" / "claude-code-sessions.sqlite")
+
+def _default_store() -> str:
+    try:
+        from chp_core.hooks import default_store_path
+        return default_store_path()
+    except Exception:
+        return str(Path.home() / ".chp" / "claude-code-sessions.sqlite")
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    default_store = _default_store()
     p = argparse.ArgumentParser(
         prog="python -m tools.chp_inspector",
         description="Inspect, query, and govern CHP session evidence.",
     )
     p.add_argument(
         "--store",
-        default=_DEFAULT_STORE,
+        default=default_store,
         metavar="PATH",
-        help=f"SQLite evidence store (default: {_DEFAULT_STORE})",
+        help=f"SQLite evidence store (default: {default_store})",
     )
     sub = p.add_subparsers(dest="command", metavar="<command>")
 

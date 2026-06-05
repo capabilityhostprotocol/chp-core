@@ -21,12 +21,19 @@ from .pages import (
     tree_page,
 )
 
-_DEFAULT_STORE = str(Path.home() / ".chp" / "claude-code-sessions.sqlite")
-_DEFAULT_PORT  = 8080
+_DEFAULT_PORT = 8080
+
+
+def _default_store() -> str:
+    try:
+        from chp_core.hooks import default_store_path
+        return default_store_path()
+    except Exception:
+        return str(Path.home() / ".chp" / "claude-code-sessions.sqlite")
 
 
 class _Handler(BaseHTTPRequestHandler):
-    store_path: str = _DEFAULT_STORE
+    store_path: str = ""  # set in main()
 
     def log_message(self, fmt, *args):
         pass  # suppress default Apache-style logging
@@ -154,8 +161,9 @@ def main() -> int:
         prog="python -m tools.chp_dashboard",
         description=f"CHP Dashboard v{__version__} — web UI for CHP session evidence.",
     )
-    parser.add_argument("--store", default=_DEFAULT_STORE, metavar="PATH",
-                        help=f"SQLite evidence store (default: {_DEFAULT_STORE})")
+    default_store = _default_store()
+    parser.add_argument("--store", default=default_store, metavar="PATH",
+                        help=f"SQLite evidence store (default: {default_store})")
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT, metavar="PORT",
                         help=f"HTTP port (default: {_DEFAULT_PORT})")
     parser.add_argument("--bind", default="127.0.0.1", metavar="ADDR",

@@ -43,6 +43,14 @@ def add_vc_common_args(parser: argparse.ArgumentParser, default_correlation_id: 
     parser.add_argument("--repo-root", default=".")
 
 
+def add_radicle_common_args(parser: argparse.ArgumentParser, default_correlation_id: str) -> None:
+    parser.add_argument("--correlation-id", default=default_correlation_id)
+    parser.add_argument("--store", default=DEFAULT_WORK_STORE)
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--rad-path", default="rad")
+    parser.add_argument("--timeout-seconds", type=int, default=30)
+
+
 def invoke_work_capability(
     capability_id: str,
     payload: JSON,
@@ -272,6 +280,41 @@ def cmd_work_vc_merge_readiness(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_work_vc_version_bump(args: argparse.Namespace) -> int:
+    return invoke_work_capability(
+        "chp.version_control.version_bump",
+        {"repo_root": args.repo_root, "new_version": args.new_version},
+        args,
+        pass_field="passed",
+    )
+
+
+def cmd_work_vc_rc_tag(args: argparse.Namespace) -> int:
+    payload: JSON = {"repo_root": args.repo_root, "version": args.version}
+    if args.allow_mutation:
+        payload["allow_mutation"] = True
+    return invoke_work_capability(
+        "chp.version_control.rc_tag",
+        payload,
+        args,
+        pass_field="passed",
+    )
+
+
+def cmd_work_vc_release_tag(args: argparse.Namespace) -> int:
+    payload: JSON = {"repo_root": args.repo_root, "version": args.version}
+    if args.release_bundle_correlation_id:
+        payload["release_bundle_correlation_id"] = args.release_bundle_correlation_id
+    if args.allow_mutation:
+        payload["allow_mutation"] = True
+    return invoke_work_capability(
+        "chp.version_control.release_tag",
+        payload,
+        args,
+        pass_field="passed",
+    )
+
+
 def cmd_work_radicle_identity(args: argparse.Namespace) -> int:
     return invoke_work_capability(
         "chp.radicle.identity",
@@ -348,6 +391,73 @@ def cmd_work_radicle_patch_merge(args: argparse.Namespace) -> int:
         payload["allow_mutation"] = True
     return invoke_work_capability(
         "chp.radicle.patches.merge",
+        payload,
+        args,
+        pass_field="passed",
+    )
+
+
+def cmd_work_radicle_issues_list(args: argparse.Namespace) -> int:
+    payload = radicle_payload(args)
+    payload["state"] = args.state
+    return invoke_work_capability(
+        "chp.radicle.issues.list",
+        payload,
+        args,
+        pass_field="passed",
+    )
+
+
+def cmd_work_radicle_issue_inspect(args: argparse.Namespace) -> int:
+    payload = radicle_payload(args)
+    payload["issue_id"] = args.issue_id
+    return invoke_work_capability(
+        "chp.radicle.issues.inspect",
+        payload,
+        args,
+        pass_field="passed",
+    )
+
+
+def cmd_work_radicle_issue_open(args: argparse.Namespace) -> int:
+    payload = radicle_payload(args)
+    payload["title"] = args.title
+    if args.description:
+        payload["description"] = args.description
+    if args.labels:
+        payload["labels"] = args.labels
+    if args.allow_mutation:
+        payload["allow_mutation"] = True
+    return invoke_work_capability(
+        "chp.radicle.issues.open",
+        payload,
+        args,
+        pass_field="passed",
+    )
+
+
+def cmd_work_radicle_issue_comment(args: argparse.Namespace) -> int:
+    payload = radicle_payload(args)
+    payload["issue_id"] = args.issue_id
+    payload["message"] = args.message
+    if args.allow_mutation:
+        payload["allow_mutation"] = True
+    return invoke_work_capability(
+        "chp.radicle.issues.comment",
+        payload,
+        args,
+        pass_field="passed",
+    )
+
+
+def cmd_work_radicle_issue_state(args: argparse.Namespace) -> int:
+    payload = radicle_payload(args)
+    payload["issue_id"] = args.issue_id
+    payload["state"] = args.state
+    if args.allow_mutation:
+        payload["allow_mutation"] = True
+    return invoke_work_capability(
+        "chp.radicle.issues.state",
         payload,
         args,
         pass_field="passed",

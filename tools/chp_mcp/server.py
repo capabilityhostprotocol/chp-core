@@ -16,7 +16,13 @@ from pathlib import Path
 from . import __version__
 from .tools import TOOL_SCHEMAS, dispatch
 
-_DEFAULT_STORE = str(Path.home() / ".chp" / "claude-code-sessions.sqlite")
+
+def _default_store() -> str:
+    try:
+        from chp_core.hooks import default_store_path
+        return default_store_path()
+    except Exception:
+        return str(Path.home() / ".chp" / "claude-code-sessions.sqlite")
 _PROTOCOL_VERSION = "2024-11-05"
 
 
@@ -90,11 +96,12 @@ def main() -> int:
         prog="python -m tools.chp_mcp",
         description="CHP MCP server — expose session evidence as Claude Code tools.",
     )
+    default_store = _default_store()
     parser.add_argument(
         "--store",
-        default=_DEFAULT_STORE,
+        default=default_store,
         metavar="PATH",
-        help=f"SQLite evidence store (default: {_DEFAULT_STORE})",
+        help=f"SQLite evidence store (default: {default_store})",
     )
     args = parser.parse_args()
     run(args.store)

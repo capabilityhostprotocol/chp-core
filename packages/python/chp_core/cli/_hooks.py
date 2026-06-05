@@ -181,10 +181,36 @@ def cmd_hook_gemini_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+_PRECOMMIT_HOOK = """\
+#!/bin/sh
+cd "$(git rev-parse --show-toplevel)"
+PYTHONPATH=packages/python python -m chp_core.cli work vc precommit \\
+  --check tests \\
+  --check alignment \\
+  --repo-root . 2>&1
+"""
+
+
+def _install_precommit_hook() -> str:
+    from pathlib import Path
+    import stat
+
+    git_hooks = Path(".git") / "hooks"
+    if not git_hooks.is_dir():
+        raise FileNotFoundError(".git/hooks not found — run from the repo root")
+    hook_path = git_hooks / "pre-commit"
+    hook_path.write_text(_PRECOMMIT_HOOK)
+    hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return str(hook_path)
+
+
 def cmd_hooks_install(args: argparse.Namespace) -> int:
     path = _settings_path(getattr(args, "global_scope", False), getattr(args, "project", False))
     _install_hooks(path, with_governance=getattr(args, "with_governance", False))
     print(f"CHP hooks installed in {path}")
+    if getattr(args, "with_precommit", False):
+        hook_path = _install_precommit_hook()
+        print(f"Pre-commit hook installed in {hook_path}")
     return 0
 
 

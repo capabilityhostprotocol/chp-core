@@ -156,7 +156,7 @@ def cmd_ci_check(args: argparse.Namespace) -> int:
 
         for sid in session_ids:
             events = store.by_correlation(sid)
-            tool_events = [e for e in events if e["event_type"] == "tool_use_requested"]
+            tool_events = [e for e in events if e["event_type"] in ("tool_use_requested", "tool_use")]
             for ev in tool_events:
                 seq = ev.get("sequence", "?")
                 cap_id = ev.get("capability_id") or ""

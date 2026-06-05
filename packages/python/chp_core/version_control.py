@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -13,7 +14,7 @@ from .host import CapabilityExecutionContext, LocalCapabilityHost
 from .types import CapabilityDescriptor, InvariantDescriptor, JSON, utc_now
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 120
-RADICLE_SENSITIVE_VALUE_FLAGS = {"--message", "-m"}
+RADICLE_SENSITIVE_VALUE_FLAGS = {"--message", "-m", "--description", "-d"}
 
 
 class GitAdapter(CapabilityAdapter):
@@ -203,6 +204,98 @@ def git_capabilities() -> list[HostedCapability]:
             ),
             _verify_merge_readiness,
         ),
+        HostedCapability(
+            CapabilityDescriptor(
+                id="chp.version_control.version_bump",
+                version="0.1.0",
+                description=(
+                    "Validate that pyproject.toml and package.json versions match, "
+                    "then write the new version to both files."
+                ),
+                input_schema={
+                    "type": "object",
+                    "required": ["new_version"],
+                    "properties": {
+                        "repo_root": {"type": "string"},
+                        "new_version": {"type": "string"},
+                    },
+                },
+                output_schema={"type": "object"},
+                tags=["chp", "development", "version-control", "release"],
+                risk="medium",
+                emits=[
+                    "execution_started",
+                    "version_bumped",
+                    "execution_completed",
+                    "execution_failed",
+                ],
+            ),
+            _version_bump,
+        ),
+        HostedCapability(
+            CapabilityDescriptor(
+                id="chp.version_control.rc_tag",
+                version="0.1.0",
+                description=(
+                    "Create and push the next RC git tag (v{version}-rc.{n}) to origin. "
+                    "Triggers CI + TestPyPI staging pipeline."
+                ),
+                input_schema={
+                    "type": "object",
+                    "required": ["version"],
+                    "properties": {
+                        "repo_root": {"type": "string"},
+                        "version": {"type": "string"},
+                        "allow_mutation": {"type": "boolean"},
+                    },
+                },
+                output_schema={"type": "object"},
+                invariants=[required_field_invariant("allow_mutation")],
+                tags=["chp", "development", "version-control", "release"],
+                risk="high",
+                emits=[
+                    "execution_started",
+                    "rc_tag_pushed",
+                    "execution_completed",
+                    "execution_denied",
+                    "execution_failed",
+                ],
+            ),
+            _rc_tag,
+        ),
+        HostedCapability(
+            CapabilityDescriptor(
+                id="chp.version_control.release_tag",
+                version="0.1.0",
+                description=(
+                    "Create and push the release git tag (v{version}) to origin. "
+                    "Triggers PyPI + npm production publish via CI. "
+                    "Requires release_bundle_correlation_id pointing to prior release evidence."
+                ),
+                input_schema={
+                    "type": "object",
+                    "required": ["version"],
+                    "properties": {
+                        "repo_root": {"type": "string"},
+                        "version": {"type": "string"},
+                        "release_bundle_correlation_id": {"type": "string"},
+                        "allow_mutation": {"type": "boolean"},
+                    },
+                },
+                output_schema={"type": "object"},
+                invariants=[required_field_invariant("allow_mutation")],
+                tags=["chp", "development", "version-control", "release"],
+                risk="critical",
+                emits=[
+                    "execution_started",
+                    "release_tag_pushed",
+                    "execution_completed",
+                    "execution_denied",
+                    "execution_failed",
+                ],
+            ),
+            _release_tag,
+        ),
     ]
 
 
@@ -263,6 +356,46 @@ def radicle_capabilities() -> list[HostedCapability]:
             _radicle_patch_merge,
             "radicle_patch_merged",
             "critical",
+            [required_field_invariant("allow_mutation")],
+        ),
+        (
+            "chp.radicle.issues.list",
+            "List Radicle issues through the local rad CLI.",
+            _radicle_issues_list,
+            "radicle_issues_listed",
+            "low",
+            [],
+        ),
+        (
+            "chp.radicle.issues.inspect",
+            "Inspect a Radicle issue through the local rad CLI.",
+            _radicle_issue_inspect,
+            "radicle_issue_inspected",
+            "low",
+            [],
+        ),
+        (
+            "chp.radicle.issues.open",
+            "Open a new Radicle issue with explicit mutation approval.",
+            _radicle_issue_open,
+            "radicle_issue_opened",
+            "high",
+            [required_field_invariant("allow_mutation")],
+        ),
+        (
+            "chp.radicle.issues.comment",
+            "Comment on a Radicle issue with explicit mutation approval.",
+            _radicle_issue_comment,
+            "radicle_issue_commented",
+            "high",
+            [required_field_invariant("allow_mutation")],
+        ),
+        (
+            "chp.radicle.issues.state",
+            "Change a Radicle issue state (open/closed) with explicit mutation approval.",
+            _radicle_issue_state,
+            "radicle_issue_state_changed",
+            "high",
             [required_field_invariant("allow_mutation")],
         ),
     ]:
@@ -409,6 +542,106 @@ async def _verify_merge_readiness(ctx: CapabilityExecutionContext, payload: JSON
     return result
 
 
+async def _version_bump(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
+    new_version = require_payload_value(payload, "new_version")
+    repo_root = resolve_repo_root(payload)
+    result = bump_version_files(repo_root, new_version)
+    ctx.emit("version_bumped", {
+        "old_version": result.get("old_version"),
+        "new_version": result.get("new_version"),
+        "passed": result.get("passed", False),
+        "files_modified": result.get("files_modified", []),
+    })
+    return result
+
+
+async def _rc_tag(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
+    require_mutation_allowed(payload)
+    version = require_payload_value(payload, "version")
+    repo_root = resolve_repo_root(payload)
+    list_result = run_git(repo_root, ["tag", "--list", f"v{version}-rc.*"])
+    existing_tags = [t.strip() for t in list_result.stdout.splitlines() if t.strip()]
+    rc_nums = [int(m.group(1)) for t in existing_tags if (m := re.search(r"-rc\.(\d+)$", t))]
+    next_rc = (max(rc_nums) + 1) if rc_nums else 1
+    tag_name = f"v{version}-rc.{next_rc}"
+    tag_result = run_git(repo_root, ["tag", tag_name])
+    if tag_result.returncode != 0:
+        ctx.emit("rc_tag_pushed", {"version": version, "tag": tag_name, "passed": False})
+        return {"passed": False, "version": version, "tag": tag_name, "error": tag_result.stderr.strip()}
+    push_result = run_git(repo_root, ["push", "origin", tag_name])
+    passed = push_result.returncode == 0
+    ctx.emit("rc_tag_pushed", {"version": version, "tag": tag_name, "passed": passed, "pushed": passed})
+    return {"passed": passed, "version": version, "tag": tag_name, "pushed": passed}
+
+
+async def _release_tag(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
+    require_mutation_allowed(payload)
+    version = require_payload_value(payload, "version")
+    repo_root = resolve_repo_root(payload)
+    bundle_cid = optional_payload_string(payload, "release_bundle_correlation_id")
+    if bundle_cid:
+        events = ctx.host.replay(bundle_cid)
+        if not events:
+            return {"passed": False, "error": f"No release bundle evidence for correlation_id: {bundle_cid}"}
+    tag_name = f"v{version}"
+    tag_result = run_git(repo_root, ["tag", tag_name])
+    if tag_result.returncode != 0:
+        ctx.emit("release_tag_pushed", {"version": version, "tag": tag_name, "passed": False})
+        return {"passed": False, "version": version, "tag": tag_name, "error": tag_result.stderr.strip()}
+    push_result = run_git(repo_root, ["push", "origin", tag_name])
+    passed = push_result.returncode == 0
+    ctx.emit("release_tag_pushed", {
+        "version": version, "tag": tag_name, "passed": passed,
+        "pushed": passed, "release_bundle_correlation_id": bundle_cid,
+    })
+    return {"passed": passed, "version": version, "tag": tag_name, "pushed": passed,
+            "release_bundle_correlation_id": bundle_cid}
+
+
+def bump_version_files(repo_root: Path, new_version: str) -> JSON:
+    pyproject = repo_root / "packages" / "python" / "pyproject.toml"
+    package_json = repo_root / "packages" / "ts-types" / "package.json"
+    errors: list[str] = []
+    old_version: str | None = None
+
+    py_content = pyproject.read_text()
+    py_match = re.search(r'^version\s*=\s*"([^"]+)"', py_content, re.MULTILINE)
+    if py_match:
+        py_old = py_match.group(1)
+        old_version = py_old
+    else:
+        errors.append("could not find version in pyproject.toml")
+
+    pkg_content = package_json.read_text()
+    pkg_match = re.search(r'"version"\s*:\s*"([^"]+)"', pkg_content)
+    if pkg_match:
+        pkg_old = pkg_match.group(1)
+        if old_version is None:
+            old_version = pkg_old
+        elif old_version != pkg_old:
+            errors.append(f"version mismatch: pyproject.toml={old_version}, package.json={pkg_old}")
+    else:
+        errors.append("could not find version in package.json")
+
+    if errors:
+        return {"passed": False, "error": "; ".join(errors), "old_version": old_version,
+                "new_version": new_version, "files_modified": []}
+
+    new_py = re.sub(r'^(version\s*=\s*)"[^"]+"', f'\\g<1>"{new_version}"', py_content, flags=re.MULTILINE)
+    pyproject.write_text(new_py)
+    new_pkg = re.sub(r'("version"\s*:\s*)"[^"]+"', f'\\g<1>"{new_version}"', pkg_content, count=1)
+    package_json.write_text(new_pkg)
+    return {
+        "passed": True,
+        "old_version": old_version,
+        "new_version": new_version,
+        "files_modified": [
+            str(pyproject.relative_to(repo_root)),
+            str(package_json.relative_to(repo_root)),
+        ],
+    }
+
+
 async def _radicle_identity(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
     result = inspect_radicle_identity(payload)
     ctx.emit(
@@ -474,6 +707,61 @@ async def _radicle_patch_merge(ctx: CapabilityExecutionContext, payload: JSON) -
         args.extend(["--revision", str(revision)])
     result = run_radicle_operation(payload, args, mutating=True)
     ctx.emit("radicle_patch_merged", radicle_evidence_payload(result, patch_id=patch_id))
+    return result
+
+
+async def _radicle_issues_list(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
+    args = ["issue", "list"]
+    state = str(payload.get("state") or "")
+    if state and state != "all":
+        args.append(f"--{state}")
+    result = run_radicle_operation(payload, args, mutating=False)
+    ctx.emit("radicle_issues_listed", radicle_evidence_payload(result))
+    return result
+
+
+async def _radicle_issue_inspect(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
+    issue_id = require_payload_value(payload, "issue_id")
+    result = run_radicle_operation(payload, ["issue", "show", issue_id], mutating=False)
+    ctx.emit("radicle_issue_inspected", radicle_evidence_payload(result, issue_id=issue_id))
+    return result
+
+
+async def _radicle_issue_open(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
+    require_mutation_allowed(payload)
+    title = require_payload_value(payload, "title")
+    args = ["issue", "open", "--title", title]
+    description = optional_payload_string(payload, "description")
+    if description:
+        args.extend(["--description", description])
+    for label in (payload.get("labels") or []):
+        args.extend(["--label", str(label)])
+    result = run_radicle_operation(payload, args, mutating=True)
+    ctx.emit("radicle_issue_opened", radicle_evidence_payload(result))
+    return result
+
+
+async def _radicle_issue_comment(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
+    require_mutation_allowed(payload)
+    issue_id = require_payload_value(payload, "issue_id")
+    message = require_payload_value(payload, "message")
+    result = run_radicle_operation(
+        payload,
+        ["issue", "comment", issue_id, "--message", message],
+        mutating=True,
+    )
+    ctx.emit("radicle_issue_commented", radicle_evidence_payload(result, issue_id=issue_id))
+    return result
+
+
+async def _radicle_issue_state(ctx: CapabilityExecutionContext, payload: JSON) -> JSON:
+    require_mutation_allowed(payload)
+    issue_id = require_payload_value(payload, "issue_id")
+    state = require_payload_value(payload, "state")
+    if state not in ("open", "closed"):
+        raise ValueError(f"state must be 'open' or 'closed', got {state!r}")
+    result = run_radicle_operation(payload, ["issue", "state", issue_id, state], mutating=True)
+    ctx.emit("radicle_issue_state_changed", radicle_evidence_payload(result, issue_id=issue_id, state=state))
     return result
 
 
@@ -1051,8 +1339,16 @@ def parse_numstat(output: str, *, staged: bool) -> list[JSON]:
     return results
 
 
+_CHECK_ALIASES: dict[str, list[str]] = {
+    "tests": ["python", "-m", "pytest", "packages/python/tests/", "-m", "not slow", "-q", "--no-cov"],
+    "alignment": ["python", "-m", "chp_core.cli", "work", "check-alignment", "--repo-root", "."],
+}
+
+
 def normalize_check_command(check: Any) -> list[str]:
     if isinstance(check, str):
+        if check in _CHECK_ALIASES:
+            return _CHECK_ALIASES[check]
         return shlex.split(check)
     if isinstance(check, list):
         return [str(part) for part in check]

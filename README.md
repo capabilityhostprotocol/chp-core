@@ -8,6 +8,16 @@ The first launch goal is simple:
 
 CHP is not another agent framework, tool protocol, or workflow engine. It is an execution evidence layer at the capability boundary.
 
+## Quick Start
+
+```bash
+pip install chp-core
+chp hooks install
+chp session list
+```
+
+One command wires automatic evidence capture for every Claude Code session. See [docs/adopter-quickstart.md](docs/adopter-quickstart.md) for the full 10-minute path — including how to govern your own capabilities and set up policy enforcement.
+
 ## What CHP Defines
 
 - Capability descriptors

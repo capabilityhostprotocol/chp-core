@@ -48,6 +48,7 @@ from ._ci import (
     cmd_policy_lint,
 )
 from ._work import (
+    add_radicle_common_args,
     add_vc_common_args,
     add_work_record_args,
     cmd_work_audit_evidence,
@@ -57,6 +58,11 @@ from ._work import (
     cmd_work_explain,
     cmd_work_inventory,
     cmd_work_radicle_identity,
+    cmd_work_radicle_issue_comment,
+    cmd_work_radicle_issue_inspect,
+    cmd_work_radicle_issue_open,
+    cmd_work_radicle_issue_state,
+    cmd_work_radicle_issues_list,
     cmd_work_radicle_patch_comment,
     cmd_work_radicle_patch_inspect,
     cmd_work_radicle_patch_merge,
@@ -72,7 +78,10 @@ from ._work import (
     cmd_work_vc_inspect,
     cmd_work_vc_merge_readiness,
     cmd_work_vc_precommit,
+    cmd_work_vc_rc_tag,
     cmd_work_vc_release_bundle,
+    cmd_work_vc_release_tag,
+    cmd_work_vc_version_bump,
 )
 
 __all__ = ["main", "build_parser"]
@@ -233,6 +242,98 @@ def build_parser() -> argparse.ArgumentParser:
     vc_readiness.add_argument("--timeout-seconds", type=int, default=120)
     vc_readiness.set_defaults(func=cmd_work_vc_merge_readiness)
 
+    vc_version_bump = vc_subcommands.add_parser("version-bump", help="Bump version in pyproject.toml and package.json.")
+    add_vc_common_args(vc_version_bump, "chp-vc-version-bump")
+    vc_version_bump.add_argument("--new-version", required=True, help="New semver string (e.g. 0.3.0)")
+    vc_version_bump.set_defaults(func=cmd_work_vc_version_bump)
+
+    vc_rc_tag = vc_subcommands.add_parser("rc-tag", help="Create and push the next RC tag to origin.")
+    add_vc_common_args(vc_rc_tag, "chp-vc-rc-tag")
+    vc_rc_tag.add_argument("--version", required=True, help="Version string (e.g. 0.3.0)")
+    vc_rc_tag.add_argument("--allow-mutation", action="store_true")
+    vc_rc_tag.set_defaults(func=cmd_work_vc_rc_tag)
+
+    vc_release_tag = vc_subcommands.add_parser("release-tag", help="Create and push the release tag to origin.")
+    add_vc_common_args(vc_release_tag, "chp-vc-release-tag")
+    vc_release_tag.add_argument("--version", required=True, help="Version string (e.g. 0.3.0)")
+    vc_release_tag.add_argument("--release-bundle-correlation-id", help="Correlation ID of prior release bundle evidence")
+    vc_release_tag.add_argument("--allow-mutation", action="store_true")
+    vc_release_tag.set_defaults(func=cmd_work_vc_release_tag)
+
+    radicle = work_subcommands.add_parser("radicle", help="Govern Radicle SCM operations through CHP evidence.")
+    radicle_subcommands = radicle.add_subparsers(dest="radicle_command", required=True)
+
+    rad_identity = radicle_subcommands.add_parser("identity", help="Inspect Radicle identity via rad self.")
+    add_radicle_common_args(rad_identity, "chp-radicle-identity")
+    rad_identity.set_defaults(func=cmd_work_radicle_identity)
+
+    rad_repo_status = radicle_subcommands.add_parser("repo-status", help="Inspect Radicle repository status.")
+    add_radicle_common_args(rad_repo_status, "chp-radicle-repo-status")
+    rad_repo_status.set_defaults(func=cmd_work_radicle_repo_status)
+
+    rad_patches_list = radicle_subcommands.add_parser("patches-list", help="List Radicle patches.")
+    add_radicle_common_args(rad_patches_list, "chp-radicle-patches-list")
+    rad_patches_list.add_argument("--state", default="open",
+                                  choices=["open", "draft", "merged", "archived", "all"])
+    rad_patches_list.set_defaults(func=cmd_work_radicle_patches_list)
+
+    rad_patch_inspect = radicle_subcommands.add_parser("patch-inspect", help="Inspect a Radicle patch.")
+    add_radicle_common_args(rad_patch_inspect, "chp-radicle-patch-inspect")
+    rad_patch_inspect.add_argument("--patch-id", required=True)
+    rad_patch_inspect.set_defaults(func=cmd_work_radicle_patch_inspect)
+
+    rad_patch_comment = radicle_subcommands.add_parser("patch-comment", help="Comment on a Radicle patch.")
+    add_radicle_common_args(rad_patch_comment, "chp-radicle-patch-comment")
+    rad_patch_comment.add_argument("--patch-id", required=True)
+    rad_patch_comment.add_argument("--body", required=True)
+    rad_patch_comment.add_argument("--allow-mutation", action="store_true")
+    rad_patch_comment.set_defaults(func=cmd_work_radicle_patch_comment)
+
+    rad_patch_dry = radicle_subcommands.add_parser("patch-merge-dry-run", help="Dry-run a Radicle patch merge.")
+    add_radicle_common_args(rad_patch_dry, "chp-radicle-patch-merge-dry-run")
+    rad_patch_dry.add_argument("--patch-id", required=True)
+    rad_patch_dry.add_argument("--revision")
+    rad_patch_dry.set_defaults(func=cmd_work_radicle_patch_merge_dry_run)
+
+    rad_patch_merge = radicle_subcommands.add_parser("patch-merge", help="Merge a Radicle patch.")
+    add_radicle_common_args(rad_patch_merge, "chp-radicle-patch-merge")
+    rad_patch_merge.add_argument("--patch-id", required=True)
+    rad_patch_merge.add_argument("--revision")
+    rad_patch_merge.add_argument("--allow-mutation", action="store_true")
+    rad_patch_merge.set_defaults(func=cmd_work_radicle_patch_merge)
+
+    rad_issues_list = radicle_subcommands.add_parser("issues-list", help="List Radicle issues.")
+    add_radicle_common_args(rad_issues_list, "chp-radicle-issues-list")
+    rad_issues_list.add_argument("--state", default="open", choices=["open", "closed", "all"])
+    rad_issues_list.set_defaults(func=cmd_work_radicle_issues_list)
+
+    rad_issue_inspect = radicle_subcommands.add_parser("issue-inspect", help="Inspect a Radicle issue.")
+    add_radicle_common_args(rad_issue_inspect, "chp-radicle-issue-inspect")
+    rad_issue_inspect.add_argument("--issue-id", required=True)
+    rad_issue_inspect.set_defaults(func=cmd_work_radicle_issue_inspect)
+
+    rad_issue_open = radicle_subcommands.add_parser("issue-open", help="Open a new Radicle issue.")
+    add_radicle_common_args(rad_issue_open, "chp-radicle-issue-open")
+    rad_issue_open.add_argument("--title", required=True)
+    rad_issue_open.add_argument("--description")
+    rad_issue_open.add_argument("--label", action="append", dest="labels", default=[])
+    rad_issue_open.add_argument("--allow-mutation", action="store_true")
+    rad_issue_open.set_defaults(func=cmd_work_radicle_issue_open)
+
+    rad_issue_comment = radicle_subcommands.add_parser("issue-comment", help="Comment on a Radicle issue.")
+    add_radicle_common_args(rad_issue_comment, "chp-radicle-issue-comment")
+    rad_issue_comment.add_argument("--issue-id", required=True)
+    rad_issue_comment.add_argument("--message", required=True)
+    rad_issue_comment.add_argument("--allow-mutation", action="store_true")
+    rad_issue_comment.set_defaults(func=cmd_work_radicle_issue_comment)
+
+    rad_issue_state = radicle_subcommands.add_parser("issue-state", help="Change a Radicle issue state.")
+    add_radicle_common_args(rad_issue_state, "chp-radicle-issue-state")
+    rad_issue_state.add_argument("--issue-id", required=True)
+    rad_issue_state.add_argument("--state", required=True, choices=["open", "closed"])
+    rad_issue_state.add_argument("--allow-mutation", action="store_true")
+    rad_issue_state.set_defaults(func=cmd_work_radicle_issue_state)
+
     # --- hook group (called from Claude Code hooks, must exit 0) ---
     hook_p = subcommands.add_parser("hook", help="Process a Claude Code hook event from stdin.")
     hook_sub = hook_p.add_subparsers(dest="hook_command", required=True)
@@ -277,6 +378,8 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="Install to .claude/settings.json in cwd.")
     hooks_install_p.add_argument("--with-governance", dest="with_governance", action="store_true",
                                  help="Also install the PreToolUse governance hook.")
+    hooks_install_p.add_argument("--with-precommit", dest="with_precommit", action="store_true",
+                                 help="Also write a .git/hooks/pre-commit that runs chp work vc precommit.")
     hooks_install_p.set_defaults(func=cmd_hooks_install)
 
     hooks_uninstall_p = hooks_sub.add_parser("uninstall", help="Remove CHP hooks from Claude Code settings.")
