@@ -1,0 +1,24 @@
+{
+  "max_risk_tier": "high",
+  "block_patterns": [
+    {
+      "capability_id": "claude_code.bash",
+      "field": "command",
+      "pattern": "rm\\s+-rf\\s+/",
+      "reason": "Unscoped recursive deletion from filesystem root is prohibited"
+    },
+    {
+      "capability_id": "claude_code.bash",
+      "field": "command",
+      "pattern": "curl.+\\|\\s*(ba)?sh",
+      "reason": "Piping curl output to shell is prohibited"
+    },
+    {
+      "capability_id": "claude_code.bash",
+      "field": "command",
+      "pattern": "git\\s+push\\s+.*--force",
+      "reason": "Force-push is not permitted in governed sessions"
+    }
+  ],
+  "audit_only": false
+}

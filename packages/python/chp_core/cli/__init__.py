@@ -43,6 +43,10 @@ from ._session import (
     cmd_session_show,
     cmd_session_tree,
 )
+from ._ci import (
+    cmd_ci_check,
+    cmd_policy_lint,
+)
 from ._work import (
     add_vc_common_args,
     add_work_record_args,
@@ -352,6 +356,32 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("session_id")
     verify_p.add_argument("--store", default=None)
     verify_p.set_defaults(func=cmd_verify_evidence)
+
+    # --- policy group ---
+    policy_p = subcommands.add_parser("policy", help="Validate and lint CHP policy files.")
+    policy_sub = policy_p.add_subparsers(dest="policy_command", required=True)
+
+    policy_lint_p = policy_sub.add_parser("lint", help="Validate a policy JSON file for correctness.")
+    policy_lint_p.add_argument("policy_file", nargs="?", default=None,
+                               help="Path to policy JSON (default: auto-locate .chp/policy.json).")
+    policy_lint_p.set_defaults(func=cmd_policy_lint)
+
+    # --- ci group ---
+    ci_p = subcommands.add_parser("ci", help="CI gate commands for governed agent sessions.")
+    ci_sub = ci_p.add_subparsers(dest="ci_command", required=True)
+
+    ci_check_p = ci_sub.add_parser("check", help="Evaluate stored sessions against a policy; exit 1 on violations.")
+    ci_check_p.add_argument("--session", default=None, metavar="SESSION_ID",
+                            help="Check a single session (default: all recorded sessions).")
+    ci_check_p.add_argument("--policy", default=None, metavar="FILE",
+                            help="Policy file path (default: auto-locate .chp/policy.json).")
+    ci_check_p.add_argument("--store", default=None, metavar="PATH",
+                            help="Evidence store path (default: ~/.chp/claude-code-sessions.sqlite).")
+    ci_check_p.add_argument("--since", default=None, metavar="ISO_TS",
+                            help="Only check sessions recorded after this timestamp.")
+    ci_check_p.add_argument("--fail-on-denied", action="store_true",
+                            help="Also fail on events that were already denied at recording time.")
+    ci_check_p.set_defaults(func=cmd_ci_check)
 
     return parser
 

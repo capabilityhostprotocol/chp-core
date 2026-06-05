@@ -56,6 +56,11 @@ def _build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("verify", help="Verify hash chain for a session.")
     s.add_argument("session_id")
 
+    # diff
+    s = sub.add_parser("diff", help="Compare two sessions side by side.")
+    s.add_argument("session_a")
+    s.add_argument("session_b")
+
     return p
 
 
@@ -103,5 +108,9 @@ def main() -> int:
     elif args.command == "policy":
         from .policy_check import policy_check_session
         return policy_check_session(args.session_id, store_path, args.policy_file)
+
+    elif args.command == "diff":
+        from .diff_view import diff_sessions
+        diff_sessions(args.session_a, args.session_b, store_path)
 
     return 0
