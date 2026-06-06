@@ -28,14 +28,18 @@ from .codex import (
     register_codex_observation_capabilities,
 )
 from .otel import evidence_to_otel_span, replay_to_otel_spans
+from .memory import MemoryCapability, register_memory_capability
 from .session import AgentSession, wrap_tool_call
 from .redaction import DEFAULT_SENSITIVE_KEYS, redact_payload
 from .types import (
+    AgentSessionDescriptor,
     AssuranceMetadata,
+    AutonomyTier,
     CapabilityCategory,
     CapabilityDescriptor,
     CapabilityIdempotency,
     CapabilityStatus,
+    COGNITION_EVIDENCE_TYPES,
     CorrelationContext,
     DenialReason,
     ExecutionEvidence,
@@ -45,13 +49,17 @@ from .types import (
     InvariantDescriptor,
     InvocationEnvelope,
     InvocationResult,
+    MemoryScope,
     PolicyDescriptor,
     ReplayQuery,
     ReplayResult,
+    SESSION_EVIDENCE_TYPES,
 )
 
 __all__ = [
+    "AgentSessionDescriptor",
     "AssuranceMetadata",
+    "AutonomyTier",
     "BaseAdapter",
     "CHP_ADAPTER_GROUP",
     "CODEX_CAPABILITY_IDS",
@@ -97,5 +105,10 @@ __all__ = [
     "replay_to_otel_spans",
     "serve_http",
     "AgentSession",
+    "COGNITION_EVIDENCE_TYPES",
+    "MemoryCapability",
+    "MemoryScope",
+    "SESSION_EVIDENCE_TYPES",
+    "register_memory_capability",
     "wrap_tool_call",
 ]

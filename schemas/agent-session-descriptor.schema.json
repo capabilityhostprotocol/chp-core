@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.3/agent-session-descriptor.schema.json",
+  "title": "AgentSessionDescriptor",
+  "description": "Describes the identity and context of a CHP agent session: intent, model, memory scope, autonomy tier, and tool manifest.",
+  "type": "object",
+  "required": ["session_id", "intent"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "The unique identifier for this agent session (also serves as the evidence correlation ID)."
+    },
+    "intent": {
+      "type": "string",
+      "description": "Natural-language description of what this session is trying to accomplish."
+    },
+    "model": {
+      "type": ["string", "null"],
+      "description": "The inference model used (e.g. claude-sonnet-4-6). Null if not applicable or unknown."
+    },
+    "memory_scope": {
+      "type": "string",
+      "enum": ["session", "project", "user"],
+      "default": "session",
+      "description": "The memory scope this session operates in by default."
+    },
+    "autonomy_tier": {
+      "type": "string",
+      "enum": ["automated", "supervised", "approval_required", "human_driven"],
+      "default": "supervised",
+      "description": "How much human oversight this session requires. automated = fully autonomous; human_driven = human controls every action."
+    },
+    "tool_manifest": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Capability IDs the session is permitted to invoke.",
+      "default": []
+    },
+    "parent_session_id": {
+      "type": ["string", "null"],
+      "description": "Session ID of the parent if this is a delegated sub-session. Null for top-level sessions."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Arbitrary additional context for the session.",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

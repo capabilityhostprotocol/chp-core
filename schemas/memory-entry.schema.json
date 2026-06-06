@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.3/memory-entry.schema.json",
+  "title": "MemoryEntry",
+  "description": "A single key-value record in scoped CHP agent memory.",
+  "type": "object",
+  "required": ["id", "key", "scope", "scope_id", "value", "created_at", "updated_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique entry identifier (mem_<uuid>)."
+    },
+    "key": {
+      "type": "string",
+      "description": "The memory key within the scope."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["session", "project", "user"],
+      "description": "Memory scope: session (ephemeral to one session), project (shared within a project), user (cross-project, future)."
+    },
+    "scope_id": {
+      "type": "string",
+      "description": "Identifier qualifying the scope (e.g. session_id or project path). Empty string means unscoped within the scope type."
+    },
+    "value": {
+      "description": "The stored value. Any JSON-serialisable type."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 UTC timestamp when the entry was first written."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 UTC timestamp when the entry was last updated."
+    }
+  },
+  "additionalProperties": false
+}

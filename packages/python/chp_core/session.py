@@ -18,19 +18,63 @@ from typing import Any, Callable
 
 from .hooks import default_store_path, process_post_tool_use, process_pre_tool_use, process_stop
 from .policy import PolicyConfig
-from .types import new_id
+from .store import SQLiteEvidenceStore
+from .types import (
+    AgentSessionDescriptor,
+    CorrelationContext,
+    ExecutionEvidence,
+    new_id,
+    utc_now,
+)
+
+
+def _emit_session_event(
+    event_type: str,
+    session_id: str,
+    store_path: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    store = SQLiteEvidenceStore(store_path)
+    store.append(
+        ExecutionEvidence(
+            event_id=new_id("ev"),
+            event_type=event_type,
+            invocation_id=new_id("inv"),
+            capability_id="chp.session",
+            capability_version=None,
+            host_id="local",
+            correlation=CorrelationContext(correlation_id=session_id),
+            timestamp=utc_now(),
+            outcome=None,
+            payload=payload or {},
+            redacted=False,
+        )
+    )
+    store.close()
 
 
 class AgentSession:
     """Context manager that records tool calls as CHP evidence.
 
-    Emits session_completed on exit regardless of whether an exception occurred.
+    Emits ``agent_session_started`` on entry (when a descriptor is provided)
+    and ``session_completed`` on exit regardless of whether an exception occurred.
 
     Usage::
 
         with AgentSession(store_path=".chp/evidence.sqlite") as session:
             session.record_tool("Bash", {"command": "ls"}, {"output": "...", "exit_code": 0})
             result = session.wrap("Read", {"file_path": "README.md"}, read_fn)
+
+    With a descriptor::
+
+        descriptor = AgentSessionDescriptor(
+            session_id="sess-001",
+            intent="Write tests for the memory module",
+            model="claude-sonnet-4-6",
+            autonomy_tier="supervised",
+        )
+        with AgentSession(descriptor=descriptor) as session:
+            ...
     """
 
     def __init__(
@@ -39,9 +83,14 @@ class AgentSession:
         session_id: str | None = None,
         agent_prefix: str = "claude_code",
         tool_map: dict[str, str] | None = None,
+        descriptor: AgentSessionDescriptor | None = None,
     ) -> None:
+        self._descriptor = descriptor
+        # descriptor.session_id takes precedence over the explicit session_id arg
+        self._session_id = (
+            descriptor.session_id if descriptor is not None else (session_id or new_id("session"))
+        )
         self._store_path = store_path or default_store_path()
-        self._session_id = session_id or new_id("session")
         self._agent_prefix = agent_prefix
         self._tool_map = tool_map
 
@@ -54,6 +103,13 @@ class AgentSession:
         return self._store_path
 
     def __enter__(self) -> "AgentSession":
+        if self._descriptor is not None:
+            _emit_session_event(
+                "agent_session_started",
+                self._session_id,
+                self._store_path,
+                self._descriptor.to_dict(),
+            )
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:

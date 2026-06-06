@@ -17,6 +17,21 @@ CORE_EVIDENCE_TYPES = {
     "execution_skipped",
 }
 
+SESSION_EVIDENCE_TYPES = {
+    "agent_session_started",
+    "agent_session_resumed",
+    "agent_session_completed",
+}
+
+COGNITION_EVIDENCE_TYPES = {
+    "memory_read",
+    "memory_written",
+    "memory_deleted",
+}
+
+MemoryScope = Literal["session", "project", "user"]
+AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
+
 ExecutionOutcome = Literal["success", "failure", "denied", "skipped"]
 
 CapabilityStatus = Literal["draft", "experimental", "certified", "deprecated"]
@@ -334,6 +349,41 @@ class ReplayQuery:
 
     def to_dict(self) -> JSON:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class AgentSessionDescriptor:
+    """Describes the identity and context of an agent session.
+
+    Enriches an ``AgentSession`` with structured intent, memory scope,
+    autonomy tier, and tool manifest — the prerequisite for planning events
+    and delegation in later protocol versions.
+    """
+
+    session_id: str
+    intent: str
+    model: str | None = None
+    memory_scope: MemoryScope = "session"
+    autonomy_tier: AutonomyTier = "supervised"
+    tool_manifest: list[str] = field(default_factory=list)
+    parent_session_id: str | None = None
+    metadata: JSON = field(default_factory=dict)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+    @classmethod
+    def from_mapping(cls, value: JSON) -> "AgentSessionDescriptor":
+        return cls(
+            session_id=str(value["session_id"]),
+            intent=str(value["intent"]),
+            model=value.get("model"),
+            memory_scope=value.get("memory_scope", "session"),  # type: ignore[arg-type]
+            autonomy_tier=value.get("autonomy_tier", "supervised"),  # type: ignore[arg-type]
+            tool_manifest=list(value.get("tool_manifest") or []),
+            parent_session_id=value.get("parent_session_id"),
+            metadata=dict(value.get("metadata") or {}),
+        )
 
 
 @dataclass(slots=True)
