@@ -264,6 +264,41 @@ def cmd_session_retrieval_report(args: argparse.Namespace) -> int:
     return 0 if retrieval_events else 1
 
 
+def cmd_session_ingestion_report(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..types import INGESTION_EVIDENCE_TYPES
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    ingestion_events = [e for e in events if e.get("event_type") in INGESTION_EVIDENCE_TYPES]
+    completed = [e for e in ingestion_events if e.get("event_type") == "ingestion_completed"]
+
+    total_records = sum((e.get("payload") or {}).get("record_count", 0) for e in completed)
+    total_bytes = sum((e.get("payload") or {}).get("total_bytes", 0) for e in completed)
+    latencies = [
+        (e.get("payload") or {}).get("latency_ms")
+        for e in completed
+        if (e.get("payload") or {}).get("latency_ms") is not None
+    ]
+    avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
+
+    print_json({
+        "session_id": args.session_id,
+        "ingestion_event_count": len(ingestion_events),
+        "ingestion_calls": len(completed),
+        "total_records_ingested": total_records,
+        "total_bytes_ingested": total_bytes,
+        "avg_latency_ms": avg_latency,
+        "events": ingestion_events,
+    })
+    return 0 if ingestion_events else 1
+
+
 def cmd_session_export(args: argparse.Namespace) -> int:
     import sys
     from ..store import SQLiteEvidenceStore

@@ -275,6 +275,47 @@ async def check_retrieval_capability(_host: Any) -> None:
         os.unlink(store_path)
 
 
+async def check_ingestion_capability(_host: Any) -> None:
+    """ingestion.ingest emits ingestion_started + ingestion_completed with content_hash."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        InMemoryTextIngestionCapability,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+        register_ingestion_capability,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-ingestion", store=store)
+        cap = InMemoryTextIngestionCapability()
+        register_ingestion_capability(host, cap)
+
+        result = await host.ainvoke(
+            "ingestion.ingest",
+            {"content": "the quick brown fox", "title": "Test Doc"},
+            correlation={"correlation_id": "conf-ingestion-001"},
+        )
+        assert result.success, f"invoke failed: {result}"
+
+        events = host.replay("conf-ingestion-001")
+        types = [e["event_type"] for e in events]
+        assert "ingestion_started" in types, f"missing ingestion_started: {types}"
+        assert "ingestion_completed" in types, f"missing ingestion_completed: {types}"
+
+        completed = next(e for e in events if e["event_type"] == "ingestion_completed")
+        payload = completed.get("payload") or {}
+        assert "records" in payload, "missing records in payload"
+        assert payload["records"][0]["content_hash"].startswith("sha256:"), "bad content_hash"
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -286,6 +327,7 @@ CHECKS: list[tuple[str, Check]] = [
     ("replay by correlation id", check_replay_by_correlation),
     ("pre-tool governance", check_pretool_governance),
     ("retrieval capability", check_retrieval_capability),
+    ("ingestion capability", check_ingestion_capability),
 ]
 
 

@@ -34,6 +34,11 @@ from .retrieval import (
     RetrievalCapability,
     register_retrieval_capability,
 )
+from .ingestion import (
+    IngestionCapability,
+    InMemoryTextIngestionCapability,
+    register_ingestion_capability,
+)
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -69,6 +74,9 @@ from .types import (
     PolicyDescriptor,
     ReplayQuery,
     ReplayResult,
+    INGESTION_EVIDENCE_TYPES,
+    IngestionRecord,
+    IngestionResult,
     RETRIEVAL_EVIDENCE_TYPES,
     RetrievalResult,
     SESSION_EVIDENCE_TYPES,
@@ -148,5 +156,11 @@ __all__ = [
     "RetrievalResult",
     "RETRIEVAL_EVIDENCE_TYPES",
     "SourceRef",
+    "IngestionCapability",
+    "InMemoryTextIngestionCapability",
+    "IngestionRecord",
+    "IngestionResult",
+    "INGESTION_EVIDENCE_TYPES",
+    "register_ingestion_capability",
     "wrap_tool_call",
 ]

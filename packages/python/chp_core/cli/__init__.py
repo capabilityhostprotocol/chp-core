@@ -39,6 +39,7 @@ from ._registry import (
 from ._session import (
     cmd_session_autonomy_report,
     cmd_session_export,
+    cmd_session_ingestion_report,
     cmd_session_list,
     cmd_session_otel,
     cmd_session_replay,
@@ -452,6 +453,13 @@ def build_parser() -> argparse.ArgumentParser:
     session_retrieval_p.add_argument("session_id")
     session_retrieval_p.add_argument("--store", default=None)
     session_retrieval_p.set_defaults(func=cmd_session_retrieval_report)
+
+    session_ingestion_p = session_sub.add_parser(
+        "ingestion-report", help="Show ingestion events and provenance metrics for a session."
+    )
+    session_ingestion_p.add_argument("session_id")
+    session_ingestion_p.add_argument("--store", default=None)
+    session_ingestion_p.set_defaults(func=cmd_session_ingestion_report)
 
     registry_p = subcommands.add_parser("registry", help="Manage the local CHP adapter registry.")
     registry_sub = registry_p.add_subparsers(dest="registry_command", required=True)

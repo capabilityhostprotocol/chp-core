@@ -60,6 +60,12 @@ RETRIEVAL_EVIDENCE_TYPES = {
     "retrieval_failed",
 }
 
+INGESTION_EVIDENCE_TYPES = {
+    "ingestion_started",
+    "ingestion_completed",
+    "ingestion_failed",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
@@ -574,6 +580,35 @@ class RetrievalResult:
     result_count: int
     latency_ms: float | None = None
     retrieval_type: Literal["keyword", "vector", "hybrid"] = "keyword"
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class IngestionRecord:
+    """Provenance record for a single ingested document."""
+
+    source_id: str
+    content_hash: str
+    byte_count: int
+    content_type: str = "text/plain"
+    title: str | None = None
+    uri: str | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class IngestionResult:
+    """Result returned by IngestionCapability.ingest()."""
+
+    source_uri: str | None
+    records: list[IngestionRecord]
+    record_count: int
+    total_bytes: int
+    latency_ms: float | None = None
 
     def to_dict(self) -> JSON:
         return asdict(self)

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.4/ingestion-record.schema.json",
+  "title": "IngestionResult",
+  "description": "Payload of ingestion_completed evidence events (v0.4.1). Records provenance without storing raw content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["record_count", "total_bytes", "records"],
+  "properties": {
+    "source_uri":   { "type": ["string", "null"], "default": null },
+    "record_count": { "type": "integer", "minimum": 0 },
+    "total_bytes":  { "type": "integer", "minimum": 0 },
+    "latency_ms":   { "type": ["number", "null"], "default": null },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "content_hash", "byte_count"],
+        "properties": {
+          "source_id":    { "type": "string" },
+          "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "byte_count":   { "type": "integer", "minimum": 0 },
+          "content_type": { "type": "string", "default": "text/plain" },
+          "title":        { "type": ["string", "null"], "default": null },
+          "uri":          { "type": ["string", "null"], "default": null }
+        }
+      }
+    }
+  }
+}
