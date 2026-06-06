@@ -185,6 +185,85 @@ def cmd_ci_check(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── chp ci status ────────────────────────────────────────────────────────────
+
+def cmd_ci_status(args: argparse.Namespace) -> int:
+    """Check recent GitHub Actions run status via the gh CLI."""
+    import re
+    import subprocess
+
+    repo: str | None = getattr(args, "repo", None)
+    limit: int = getattr(args, "limit", 5)
+    branch: str | None = getattr(args, "branch", None)
+
+    if not repo:
+        try:
+            r = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True, text=True, check=True,
+            )
+            m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", r.stdout.strip())
+            if m:
+                repo = m.group(1)
+        except subprocess.CalledProcessError:
+            pass
+
+    cmd = [
+        "gh", "run", "list",
+        "--limit", str(limit),
+        "--json", "status,conclusion,name,headBranch,url,event,createdAt,databaseId",
+    ]
+    if repo:
+        cmd += ["--repo", repo]
+    if branch:
+        cmd += ["--branch", branch]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        print("gh CLI not found. Install it: https://cli.github.com", file=sys.stderr)
+        return 1
+
+    if result.returncode != 0:
+        print(f"gh run list failed: {result.stderr.strip()}", file=sys.stderr)
+        return 1
+
+    runs = json.loads(result.stdout)
+    if not runs:
+        print("No recent CI runs found.")
+        return 0
+
+    failures = 0
+    print(f"\n{'RUN ID':<12}  {'STATUS':<12}  {'CONCLUSION':<12}  {'BRANCH':<24}  NAME")
+    print("-" * 88)
+    for run in runs:
+        status = run.get("status", "unknown")
+        conclusion = run.get("conclusion") or "-"
+        branch_name = (run.get("headBranch") or "")[:24]
+        name = run.get("name", "")
+        run_id = str(run.get("databaseId", ""))[:12]
+        tag = "  [FAIL]" if conclusion == "failure" else ("  [OK]" if conclusion == "success" else "")
+        if conclusion == "failure":
+            failures += 1
+        print(f"{run_id:<12}  {status:<12}  {conclusion:<12}  {branch_name:<24}  {name}{tag}")
+        if conclusion == "failure":
+            url = run.get("url", "")
+            if url:
+                print(f"             {url}")
+
+    print()
+    if failures:
+        print(f"{failures} run(s) FAILED. To inspect: gh run view <ID> --log-failed")
+        return 1
+
+    in_progress = sum(1 for r in runs if r.get("status") in ("in_progress", "queued"))
+    if in_progress:
+        print(f"{in_progress} run(s) in progress — check again shortly.")
+    else:
+        print("All recent runs passed.")
+    return 0
+
+
 def _input_preview(tool_input: dict) -> str:
     for key in ("command", "file_path", "url", "query", "pattern", "path"):
         val = tool_input.get(key)

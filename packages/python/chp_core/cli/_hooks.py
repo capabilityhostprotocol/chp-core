@@ -247,30 +247,32 @@ PYTHONPATH=packages/python python -m chp_core.cli work vc precommit \\
 """
 
 
-def _install_precommit_hook() -> str:
+def _install_precommit_hook(root: "str | None" = None) -> str:
     from pathlib import Path
     import stat
 
-    git_hooks = Path(".git") / "hooks"
+    base = Path(root) if root is not None else Path(".")
+    git_hooks = base / ".git" / "hooks"
     if not git_hooks.is_dir():
         raise FileNotFoundError(".git/hooks not found — run from the repo root")
     hook_path = git_hooks / "pre-commit"
     hook_path.write_text(_PRECOMMIT_HOOK)
     hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return str(hook_path)
+    return str(hook_path.resolve())
 
 
-def _install_prepush_hook() -> str:
+def _install_prepush_hook(root: "str | None" = None) -> str:
     from pathlib import Path
     import stat
 
-    git_hooks = Path(".git") / "hooks"
+    base = Path(root) if root is not None else Path(".")
+    git_hooks = base / ".git" / "hooks"
     if not git_hooks.is_dir():
         raise FileNotFoundError(".git/hooks not found — run from the repo root")
     hook_path = git_hooks / "pre-push"
     hook_path.write_text(_PRE_PUSH_HOOK)
     hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return str(hook_path)
+    return str(hook_path.resolve())
 
 
 def cmd_hooks_install(args: argparse.Namespace) -> int:

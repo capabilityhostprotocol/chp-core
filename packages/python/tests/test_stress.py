@@ -163,6 +163,7 @@ def test_large_session_does_not_oom(tmp_path) -> None:
 # Hook performance (p99 contract)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 @pytest.mark.perf
 def test_post_tool_hook_p99_under_5ms(tmp_path) -> None:
     """p99 of 100 post-tool hook calls must be < 5ms (warm path)."""
@@ -184,6 +185,7 @@ def test_post_tool_hook_p99_under_5ms(tmp_path) -> None:
     assert p99 < 5.0, f"p99 = {p99:.2f}ms — exceeds 5ms contract"
 
 
+@pytest.mark.slow
 @pytest.mark.perf
 def test_pre_tool_hook_p99_under_5ms(tmp_path) -> None:
     """p99 of 100 pre-tool hook calls must be < 5ms (warm path, no policy)."""

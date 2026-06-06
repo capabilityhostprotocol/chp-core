@@ -408,51 +408,32 @@ class RegistryCommandTests(unittest.TestCase):
 
 class HooksInstallTests(unittest.TestCase):
     def test_install_precommit_hook_creates_file(self):
-        import tempfile, os, stat
+        import tempfile, stat
         from chp_core.cli._hooks import _install_precommit_hook
 
         with tempfile.TemporaryDirectory() as d:
-            git_hooks = Path(d) / ".git" / "hooks"
-            git_hooks.mkdir(parents=True)
-            old_cwd = os.getcwd()
-            os.chdir(d)
-            try:
-                path = _install_precommit_hook()
-            finally:
-                os.chdir(old_cwd)
+            (Path(d) / ".git" / "hooks").mkdir(parents=True)
+            path = _install_precommit_hook(root=d)
             self.assertTrue(Path(path).exists())
-            mode = Path(path).stat().st_mode
-            self.assertTrue(mode & stat.S_IXUSR)
+            self.assertTrue(Path(path).stat().st_mode & stat.S_IXUSR)
 
     def test_install_prepush_hook_creates_file(self):
-        import tempfile, os, stat
+        import tempfile, stat
         from chp_core.cli._hooks import _install_prepush_hook
 
         with tempfile.TemporaryDirectory() as d:
-            git_hooks = Path(d) / ".git" / "hooks"
-            git_hooks.mkdir(parents=True)
-            old_cwd = os.getcwd()
-            os.chdir(d)
-            try:
-                path = _install_prepush_hook()
-            finally:
-                os.chdir(old_cwd)
+            (Path(d) / ".git" / "hooks").mkdir(parents=True)
+            path = _install_prepush_hook(root=d)
             self.assertTrue(Path(path).exists())
-            mode = Path(path).stat().st_mode
-            self.assertTrue(mode & stat.S_IXUSR)
+            self.assertTrue(Path(path).stat().st_mode & stat.S_IXUSR)
 
     def test_install_precommit_raises_without_git_dir(self):
-        import tempfile, os
+        import tempfile
         from chp_core.cli._hooks import _install_precommit_hook
 
         with tempfile.TemporaryDirectory() as d:
-            old_cwd = os.getcwd()
-            os.chdir(d)
-            try:
-                with self.assertRaises(FileNotFoundError):
-                    _install_precommit_hook()
-            finally:
-                os.chdir(old_cwd)
+            with self.assertRaises(FileNotFoundError):
+                _install_precommit_hook(root=d)
 
     def test_hooks_status_exits_0_no_settings(self):
         import tempfile, os

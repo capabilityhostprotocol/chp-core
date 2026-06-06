@@ -47,6 +47,7 @@ from ._session import (
 )
 from ._ci import (
     cmd_ci_check,
+    cmd_ci_status,
     cmd_policy_lint,
 )
 from ._delegation import (
@@ -507,6 +508,15 @@ def build_parser() -> argparse.ArgumentParser:
     ci_check_p.add_argument("--fail-on-denied", action="store_true",
                             help="Also fail on events that were already denied at recording time.")
     ci_check_p.set_defaults(func=cmd_ci_check)
+
+    ci_status_p = ci_sub.add_parser("status", help="Show recent GitHub Actions run status via the gh CLI.")
+    ci_status_p.add_argument("--repo", default=None, metavar="OWNER/REPO",
+                             help="GitHub repo (default: auto-detect from git remote origin).")
+    ci_status_p.add_argument("--limit", type=int, default=5, metavar="N",
+                             help="Number of recent runs to show (default: 5).")
+    ci_status_p.add_argument("--branch", default=None, metavar="BRANCH",
+                             help="Filter to a specific branch.")
+    ci_status_p.set_defaults(func=cmd_ci_status)
 
     return parser
 
