@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.3/approval-decision.schema.json",
+  "title": "ApprovalDecision",
+  "description": "Payload for approval_granted and approval_denied evidence events (v0.3.5). Records the capability URI and the identity of the actor who made the decision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["capability_uri"],
+  "properties": {
+    "capability_uri": {
+      "type": "string",
+      "description": "The capability URI that was approved or denied (e.g. 'my.capability:1.0.0')."
+    },
+    "decided_by": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Identity of the actor granting or denying the approval. Free-form string (user ID, service account, etc.)."
+    },
+    "note": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Optional human-readable note attached to an approval_granted event."
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Optional human-readable reason attached to an approval_denied event."
+    }
+  }
+}

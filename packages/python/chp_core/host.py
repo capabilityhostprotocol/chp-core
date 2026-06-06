@@ -220,6 +220,54 @@ class LocalCapabilityHost:
     def evidence_count(self, correlation_id: str) -> int:
         return self.store.count_by_correlation(correlation_id)
 
+    def grant_approval(
+        self,
+        correlation_id: str,
+        capability_uri: str,
+        *,
+        granted_by: str | None = None,
+        note: str | None = None,
+    ) -> "ExecutionEvidence":
+        """Record that an external approver granted a pending approval_requested event."""
+        corr = CorrelationContext.from_mapping({"correlation_id": correlation_id})
+        envelope = InvocationEnvelope(
+            capability_id=capability_uri,
+            version=None,
+            payload={},
+            mode="sync",
+            correlation=corr,
+        )
+        payload: JSON = {"capability_uri": capability_uri}
+        if granted_by is not None:
+            payload["decided_by"] = granted_by
+        if note is not None:
+            payload["note"] = note
+        return self.emit_evidence("approval_granted", envelope, payload=payload, redacted=False)
+
+    def deny_approval(
+        self,
+        correlation_id: str,
+        capability_uri: str,
+        *,
+        denied_by: str | None = None,
+        reason: str | None = None,
+    ) -> "ExecutionEvidence":
+        """Record that an external approver denied a pending approval_requested event."""
+        corr = CorrelationContext.from_mapping({"correlation_id": correlation_id})
+        envelope = InvocationEnvelope(
+            capability_id=capability_uri,
+            version=None,
+            payload={},
+            mode="sync",
+            correlation=corr,
+        )
+        payload: JSON = {"capability_uri": capability_uri}
+        if denied_by is not None:
+            payload["decided_by"] = denied_by
+        if reason is not None:
+            payload["reason"] = reason
+        return self.emit_evidence("approval_denied", envelope, payload=payload, redacted=False)
+
     def invoke(
         self,
         capability_id: str,

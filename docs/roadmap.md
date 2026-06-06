@@ -37,16 +37,37 @@ OpenTelemetry export via `chp session otel`. `export_otlp_http` ships spans to a
 **v0.2.9 — Local Registry**  
 `~/.chp/registry.json` tracks enabled adapters. `chp registry list/add/remove/status` provides discovery and maturity assessment without extra dependencies.
 
+**v0.3.1 — Agent Session Descriptor + Memory Capability**  
+`AgentSessionDescriptor` captures intent, model, autonomy tier, and tool manifest at session start. `MemoryCapability` provides governed key-value memory (get/set/delete/list) with scoped evidence events (`memory_read`, `memory_written`, `memory_deleted`).
+
+**v0.3.2 — Planning + Reflection Event Family**  
+`PlanningContext` and `ReflectionContext` make agent reasoning observable. New event family: `plan_created`, `plan_step_started/completed`, `plan_revised`, `reflection_started/completed`, `outcome_scored`. `EvaluationResult` type for structured scoring.
+
+**v0.3.3 — Delegation + Cross-Agent Handoff**  
+`DelegationContext` and `DelegationEnvelope` give every agent-to-agent handoff explicit lifecycle evidence. Event family: `delegation_created`, `delegation_accepted`, `delegation_completed`, `delegation_rejected`, `delegation_reassigned`. `chp delegation show` renders the full handoff chain.
+
+**v0.3.4 — Autonomy Profile + Budget Gates**  
+`AutonomyProfile` field on `CapabilityDescriptor`: `tier` (`automated` | `supervised` | `approval_required` | `human_driven`), `spend_limit`, `action_limit`, `rollback_policy`. Budget gates block invocations when limits are exceeded and emit `budget_exceeded` / `approval_requested` evidence. `chp session autonomy-report` shows all autonomy decisions for a session.
+
 ## Guiding Rule
 
 Local visibility should be free. Production trust should be paid.
 
-## Up Next — v0.3
+## Up Next — v0.3.5
 
-The v0.3 milestone shifts from local visibility to shared trust. Candidate work items:
+Closes the open loop from v0.3.4. `tier="approval_required"` blocks invocations but has no
+resolution path. v0.3.5 adds:
 
-- **Signed bundles** — cryptographic signing of session exports (ed25519); `chp verify-bundle`
-- **Remote store** — optional push/pull to a shared evidence endpoint; enables team-wide replay
-- **Policy-as-code** — version-controlled `.chp/policy.toml` with structured rules and a linter
-- **CI integration** — `chp ci check` as a gate in GitHub Actions; fails the build on policy violations
-- **SDK ergonomics** — typed decorator `@chp.capability` for Python; auto-generates the descriptor
+- `host.grant_approval(correlation_id, capability_uri, ...)` — records `approval_granted` event
+- `host.deny_approval(correlation_id, capability_uri, ...)` — records `approval_denied` event
+- `chp session autonomy-report` updated with `pending_approvals` count and resolved/unresolved classification
+
+## Up Next — v0.4
+
+The v0.4 milestone shifts focus to governed data access. Candidate work items:
+
+- **Retrieval Capability** — `RetrievalCapability` base class for keyword, vector, and hybrid
+  search. Source citation (document ID, title, score) recorded in evidence for every retrieval
+  call. Every RAG query becomes auditable, replayable, and policy-addressable.
+- **Ingestion Capability** — governed data loading with provenance tracking
+- **Knowledge Graph Capability** — entity/relationship stores as first-class capabilities

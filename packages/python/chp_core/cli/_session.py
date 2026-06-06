@@ -208,9 +208,24 @@ def cmd_session_autonomy_report(args: argparse.Namespace) -> int:
         store.close()
 
     autonomy_events = [e for e in events if e.get("event_type") in AUTONOMY_EVIDENCE_TYPES]
+
+    # Classify approval_requested events as pending or resolved
+    resolved_caps: set[str] = set()
+    for ev in autonomy_events:
+        if ev.get("event_type") in ("approval_granted", "approval_denied"):
+            cap = (ev.get("payload") or {}).get("capability_uri", ev.get("capability_id", ""))
+            resolved_caps.add(cap)
+
+    pending_approvals = [
+        ev for ev in autonomy_events
+        if ev.get("event_type") == "approval_requested"
+        and (ev.get("payload") or {}).get("capability_uri", ev.get("capability_id", "")) not in resolved_caps
+    ]
+
     print_json({
         "session_id": args.session_id,
         "autonomy_event_count": len(autonomy_events),
+        "pending_approvals": len(pending_approvals),
         "events": autonomy_events,
     })
     return 0 if autonomy_events else 1
