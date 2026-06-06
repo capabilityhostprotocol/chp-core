@@ -54,6 +54,12 @@ AUTONOMY_EVIDENCE_TYPES = {
     "approval_denied",
 }
 
+RETRIEVAL_EVIDENCE_TYPES = {
+    "retrieval_started",
+    "retrieval_completed",
+    "retrieval_failed",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
@@ -540,6 +546,34 @@ class ReplayResult:
     events: list[JSON]
     event_count: int
     replayed_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class SourceRef:
+    """Pointer to a retrieved document or chunk."""
+
+    source_id: str
+    title: str | None = None
+    score: float | None = None
+    excerpt: str | None = None
+    uri: str | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class RetrievalResult:
+    """Result returned by a RetrievalCapability.retrieve() call."""
+
+    query: str
+    source_refs: list[SourceRef]
+    result_count: int
+    latency_ms: float | None = None
+    retrieval_type: Literal["keyword", "vector", "hybrid"] = "keyword"
 
     def to_dict(self) -> JSON:
         return asdict(self)

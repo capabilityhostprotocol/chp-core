@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.4/retrieval-result.schema.json",
+  "title": "RetrievalResult",
+  "description": "Payload of retrieval_completed evidence events (v0.4.0). Records the query, ranked source references, and retrieval metadata.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query", "retrieval_type", "result_count", "source_refs"],
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "The retrieval query string."
+    },
+    "retrieval_type": {
+      "type": "string",
+      "enum": ["keyword", "vector", "hybrid"],
+      "description": "Strategy used to retrieve results."
+    },
+    "result_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of source references returned."
+    },
+    "latency_ms": {
+      "type": ["number", "null"],
+      "default": null,
+      "description": "Wall-clock retrieval latency in milliseconds."
+    },
+    "top_k": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "default": null,
+      "description": "Maximum results requested."
+    },
+    "source_refs": {
+      "type": "array",
+      "description": "Ranked list of retrieved document references.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id"],
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "description": "Unique identifier of the retrieved document or chunk."
+          },
+          "title": {
+            "type": ["string", "null"],
+            "default": null,
+            "description": "Human-readable document title."
+          },
+          "score": {
+            "type": ["number", "null"],
+            "default": null,
+            "description": "Relevance score (higher is more relevant)."
+          },
+          "excerpt": {
+            "type": ["string", "null"],
+            "default": null,
+            "description": "Short excerpt from the document (redacted in evidence by default)."
+          },
+          "uri": {
+            "type": ["string", "null"],
+            "default": null,
+            "description": "URI pointing to the source document."
+          }
+        }
+      }
+    }
+  }
+}

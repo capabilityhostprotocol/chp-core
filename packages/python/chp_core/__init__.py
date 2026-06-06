@@ -29,6 +29,11 @@ from .codex import (
 )
 from .otel import evidence_to_otel_span, replay_to_otel_spans
 from .memory import MemoryCapability, register_memory_capability
+from .retrieval import (
+    InMemoryKeywordRetrievalCapability,
+    RetrievalCapability,
+    register_retrieval_capability,
+)
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -64,7 +69,10 @@ from .types import (
     PolicyDescriptor,
     ReplayQuery,
     ReplayResult,
+    RETRIEVAL_EVIDENCE_TYPES,
+    RetrievalResult,
     SESSION_EVIDENCE_TYPES,
+    SourceRef,
 )
 
 __all__ = [
@@ -134,5 +142,11 @@ __all__ = [
     "SESSION_EVIDENCE_TYPES",
     "register_memory_capability",
     "register_planning_capability",
+    "register_retrieval_capability",
+    "InMemoryKeywordRetrievalCapability",
+    "RetrievalCapability",
+    "RetrievalResult",
+    "RETRIEVAL_EVIDENCE_TYPES",
+    "SourceRef",
     "wrap_tool_call",
 ]

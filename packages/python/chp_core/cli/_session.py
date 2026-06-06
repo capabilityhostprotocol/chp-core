@@ -231,6 +231,39 @@ def cmd_session_autonomy_report(args: argparse.Namespace) -> int:
     return 0 if autonomy_events else 1
 
 
+def cmd_session_retrieval_report(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..types import RETRIEVAL_EVIDENCE_TYPES
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    retrieval_events = [e for e in events if e.get("event_type") in RETRIEVAL_EVIDENCE_TYPES]
+    completed = [e for e in retrieval_events if e.get("event_type") == "retrieval_completed"]
+
+    total_results = sum((e.get("payload") or {}).get("result_count", 0) for e in completed)
+    latencies = [
+        (e.get("payload") or {}).get("latency_ms")
+        for e in completed
+        if (e.get("payload") or {}).get("latency_ms") is not None
+    ]
+    avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
+
+    print_json({
+        "session_id": args.session_id,
+        "retrieval_event_count": len(retrieval_events),
+        "retrieval_calls": len(completed),
+        "total_results_returned": total_results,
+        "avg_latency_ms": avg_latency,
+        "events": retrieval_events,
+    })
+    return 0 if retrieval_events else 1
+
+
 def cmd_session_export(args: argparse.Namespace) -> int:
     import sys
     from ..store import SQLiteEvidenceStore

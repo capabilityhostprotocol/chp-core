@@ -232,6 +232,49 @@ async def check_pretool_governance(_host: Any) -> None:
         os.unlink(store_path)
 
 
+async def check_retrieval_capability(_host: Any) -> None:
+    """retrieval.query emits retrieval_started + retrieval_completed with source_refs."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        InMemoryKeywordRetrievalCapability,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+        register_retrieval_capability,
+    )
+
+    docs = [
+        {"source_id": "doc-1", "content": "the quick brown fox", "title": "Doc 1"},
+        {"source_id": "doc-2", "content": "lazy dog sleeps deeply", "title": "Doc 2"},
+    ]
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-retrieval", store=store)
+        cap = InMemoryKeywordRetrievalCapability(docs)
+        register_retrieval_capability(host, cap)
+
+        result = await host.ainvoke(
+            "retrieval.query",
+            {"query": "quick fox", "top_k": 2},
+            correlation={"correlation_id": "conf-retrieval-001"},
+        )
+        assert result.success, f"invoke failed: {result}"
+
+        events = host.replay("conf-retrieval-001")
+        types = [e["event_type"] for e in events]
+        assert "retrieval_started" in types, f"missing retrieval_started: {types}"
+        assert "retrieval_completed" in types, f"missing retrieval_completed: {types}"
+
+        completed = next(e for e in events if e["event_type"] == "retrieval_completed")
+        assert "source_refs" in (completed.get("payload") or {}), "missing source_refs in payload"
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -242,6 +285,7 @@ CHECKS: list[tuple[str, Check]] = [
     ("evidence emission on denial", check_denial_evidence),
     ("replay by correlation id", check_replay_by_correlation),
     ("pre-tool governance", check_pretool_governance),
+    ("retrieval capability", check_retrieval_capability),
 ]
 
 
