@@ -12,6 +12,7 @@ cd packages/python && python -m pytest tests/ -q --no-cov                 # full
 # Install CHP hooks into Claude Code (PostToolUse + Stop)
 PYTHONPATH=packages/python chp hooks install
 PYTHONPATH=packages/python chp hooks install --with-precommit   # also installs git pre-commit hook
+PYTHONPATH=packages/python chp hooks install --with-prepush     # also installs git pre-push RC guard
 PYTHONPATH=packages/python chp hooks status
 
 # Session evidence (MCP tools available in-loop — prefer these over CLI)
@@ -22,6 +23,10 @@ PYTHONPATH=packages/python python -m tools.chp_inspector --store .chp/claude-cod
 # Policy
 PYTHONPATH=packages/python chp policy lint .chp/policy.json
 PYTHONPATH=packages/python chp ci check --store .chp/claude-code-sessions.sqlite --policy .chp/policy.json
+
+# CI visibility
+PYTHONPATH=packages/python chp ci status            # show latest GitHub Actions runs (uses gh CLI)
+PYTHONPATH=packages/python chp ci status --limit 10 # show last 10 runs
 
 # Development governance (emit events to .chp/codex-self-observation.sqlite)
 PYTHONPATH=packages/python chp work check-alignment --repo-root .    # 41 spec/schema/type checks

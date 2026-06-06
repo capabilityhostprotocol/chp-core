@@ -233,7 +233,6 @@ def cmd_ci_status(args: argparse.Namespace) -> int:
         print("No recent CI runs found.")
         return 0
 
-    failures = 0
     print(f"\n{'RUN ID':<12}  {'STATUS':<12}  {'CONCLUSION':<12}  {'BRANCH':<24}  NAME")
     print("-" * 88)
     for run in runs:
@@ -243,8 +242,6 @@ def cmd_ci_status(args: argparse.Namespace) -> int:
         name = run.get("name", "")
         run_id = str(run.get("databaseId", ""))[:12]
         tag = "  [FAIL]" if conclusion == "failure" else ("  [OK]" if conclusion == "success" else "")
-        if conclusion == "failure":
-            failures += 1
         print(f"{run_id:<12}  {status:<12}  {conclusion:<12}  {branch_name:<24}  {name}{tag}")
         if conclusion == "failure":
             url = run.get("url", "")
@@ -252,15 +249,17 @@ def cmd_ci_status(args: argparse.Namespace) -> int:
                 print(f"             {url}")
 
     print()
-    if failures:
-        print(f"{failures} run(s) FAILED. To inspect: gh run view <ID> --log-failed")
+    # Exit code based on the most recent run only — older failures are historical
+    latest = runs[0]
+    latest_conclusion = latest.get("conclusion") or ""
+    latest_status = latest.get("status", "")
+    if latest_status in ("in_progress", "queued"):
+        print("Latest run still in progress — check again shortly.")
+        return 0
+    if latest_conclusion == "failure":
+        print("Latest run FAILED. To inspect: gh run view " + str(latest.get("databaseId", "")) + " --log-failed")
         return 1
-
-    in_progress = sum(1 for r in runs if r.get("status") in ("in_progress", "queued"))
-    if in_progress:
-        print(f"{in_progress} run(s) in progress — check again shortly.")
-    else:
-        print("All recent runs passed.")
+    print("Latest run passed.")
     return 0
 
 
