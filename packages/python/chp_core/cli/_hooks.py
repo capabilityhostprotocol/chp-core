@@ -235,12 +235,14 @@ done
 
 [ "$FAIL" -ne 0 ] && exit 1
 
-# Fast checks — conformance + schema validation (mirrors CI; skipped on pure branch pushes
-# because pre-commit already ran these; still runs on tag-only pushes).
+# Fast checks that mirror CI — conformance, schema validation, and a
+# collect-only dry run inside a clean venv (catches missing-dep import errors
+# before they reach GitHub Actions).
 cd "$(git rev-parse --show-toplevel)"
 PYTHONPATH=packages/python python -m chp_core.cli work vc precommit \\
     --check conformance \\
     --check schemas \\
+    --check collect-check \\
     --repo-root . 2>&1
 """
 

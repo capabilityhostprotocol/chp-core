@@ -1378,6 +1378,22 @@ _CHECK_ALIASES: dict[str, list[str]] = {
         "--ignore-missing-imports", "--no-strict-optional",
         "--exclude", "/(tests|demo|__pycache__)/",
     ],
+    # Verify pytest can collect all tests using only the declared [dev] extras,
+    # catching missing-dep import errors before they reach CI.
+    # Creates a throw-away venv, installs packages/python[dev], dry-runs collection.
+    "collect-check": [
+        "python", "-c",
+        "import subprocess,sys,tempfile,os;"
+        " v=tempfile.mkdtemp(prefix='chp-collect-');"
+        " subprocess.run([sys.executable,'-m','venv',v],check=True);"
+        " pip=os.path.join(v,'bin','pip');"
+        " subprocess.run([pip,'install','-q','-e','packages/python[dev]'],check=True);"
+        " py=os.path.join(v,'bin','python');"
+        " r=subprocess.run([py,'-m','pytest','packages/python/tests/','--collect-only','-q','--no-cov','-m','not slow'],capture_output=True,text=True);"
+        " print(r.stdout[-2000:]);"
+        " print(r.stderr[-1000:],file=sys.stderr);"
+        " sys.exit(r.returncode)",
+    ],
 }
 
 
