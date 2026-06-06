@@ -36,6 +36,7 @@ from ._registry import (
     cmd_registry_status,
 )
 from ._session import (
+    cmd_session_autonomy_report,
     cmd_session_export,
     cmd_session_list,
     cmd_session_otel,
@@ -432,6 +433,13 @@ def build_parser() -> argparse.ArgumentParser:
     session_export_p.add_argument("--store", default=None)
     session_export_p.add_argument("--output", default=None, help="Output file path (default: stdout).")
     session_export_p.set_defaults(func=cmd_session_export)
+
+    session_autonomy_p = session_sub.add_parser(
+        "autonomy-report", help="Show autonomy budget and approval events for a session."
+    )
+    session_autonomy_p.add_argument("session_id")
+    session_autonomy_p.add_argument("--store", default=None)
+    session_autonomy_p.set_defaults(func=cmd_session_autonomy_report)
 
     registry_p = subcommands.add_parser("registry", help="Manage the local CHP adapter registry.")
     registry_sub = registry_p.add_subparsers(dest="registry_command", required=True)

@@ -357,6 +357,15 @@ class SQLiteEvidenceStore:
             ).fetchone()
         return int(row["count"])
 
+    def count_by_correlation_event_type(self, correlation_id: str, event_type: str) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS count FROM evidence_events "
+                "WHERE correlation_id = ? AND event_type = ?",
+                (correlation_id, event_type),
+            ).fetchone()
+        return int(row["count"])
+
     @staticmethod
     def _row_to_event(row: sqlite3.Row) -> JSON:
         data = json.loads(row["event_json"])

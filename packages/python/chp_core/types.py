@@ -47,8 +47,16 @@ COGNITION_EVIDENCE_TYPES = {
     "delegation_reassigned",
 }
 
+AUTONOMY_EVIDENCE_TYPES = {
+    "budget_exceeded",
+    "approval_requested",
+    "approval_granted",
+    "approval_denied",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
+RollbackPolicy = Literal["none", "checkpoint", "full"]
 PlanStepStatus = Literal["pending", "running", "completed", "failed", "skipped"]
 DelegationStatus = Literal["pending", "accepted", "completed", "rejected", "reassigned"]
 
@@ -177,6 +185,31 @@ class PolicyDescriptor:
 
 
 @dataclass(slots=True)
+class AutonomyProfile:
+    """Autonomy control surface for a CapabilityDescriptor (v0.3.4).
+
+    tier:            Invocation mode constraint.  ``approval_required`` gates every
+                     invocation until an external ``approval_granted`` event is recorded.
+    spend_limit:     Maximum cumulative spend per correlation_id (spend_units × invocations).
+                     None = unlimited.
+    spend_units:     Cost per invocation (default 1.0). Multiply by execution_started count
+                     to compute cumulative spend for spend_limit comparison.
+    action_limit:    Maximum execution_started events per correlation_id. None = unlimited.
+    rollback_policy: Governance intent — declared in evidence but not mechanically enforced
+                     in v0.3.4.
+    """
+
+    tier: AutonomyTier = "supervised"
+    spend_limit: float | None = None
+    spend_units: float = 1.0
+    action_limit: int | None = None
+    rollback_policy: RollbackPolicy = "none"
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class CapabilityDescriptor:
     # ── Core identity (required) ──────────────────────────────────────────
     id: str
@@ -219,6 +252,7 @@ class CapabilityDescriptor:
     # ── Structured optional sub-objects ───────────────────────────────────
     host_requirements: HostRequirements | None = None
     policy: PolicyDescriptor | None = None
+    autonomy: AutonomyProfile | None = None
 
     @property
     def capability_uri(self) -> str:
@@ -232,6 +266,8 @@ class CapabilityDescriptor:
             del data["host_requirements"]
         if data.get("policy") is None:
             del data["policy"]
+        if data.get("autonomy") is None:
+            del data["autonomy"]
         return data
 
 
