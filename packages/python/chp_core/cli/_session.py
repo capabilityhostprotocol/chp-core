@@ -196,6 +196,26 @@ def cmd_session_otel(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_session_autonomy_report(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..types import AUTONOMY_EVIDENCE_TYPES
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    autonomy_events = [e for e in events if e.get("event_type") in AUTONOMY_EVIDENCE_TYPES]
+    print_json({
+        "session_id": args.session_id,
+        "autonomy_event_count": len(autonomy_events),
+        "events": autonomy_events,
+    })
+    return 0 if autonomy_events else 1
+
+
 def cmd_session_export(args: argparse.Namespace) -> int:
     import sys
     from ..store import SQLiteEvidenceStore

@@ -13,6 +13,8 @@ from .decorators import adapt_callable, get_capability_descriptor
 from .redaction import redact_payload
 from .types import (
     AssuranceMetadata,
+    AutonomyProfile,
+    AUTONOMY_EVIDENCE_TYPES,
     CapabilityDescriptor,
     CorrelationContext,
     DenialReason,
@@ -325,6 +327,10 @@ class LocalCapabilityHost:
         if invariant_denial is not None:
             return self._deny(envelope, invariant_denial)
 
+        autonomy_denial = self._check_autonomy_budget(descriptor, envelope)
+        if autonomy_denial is not None:
+            return self._deny(envelope, autonomy_denial)
+
         started = self.emit_evidence(
             "execution_started",
             envelope,
@@ -458,6 +464,118 @@ class LocalCapabilityHost:
             evidence_ids=[skipped.event_id],
             started_at=skipped.timestamp,
         )
+
+    def _emit_autonomy_event(
+        self,
+        event_type: str,
+        envelope: InvocationEnvelope,
+        descriptor: CapabilityDescriptor,
+        *,
+        detail: JSON | None = None,
+    ) -> ExecutionEvidence:
+        autonomy = descriptor.autonomy
+        payload: JSON = {
+            "capability_uri": descriptor.capability_uri,
+            "autonomy": autonomy.to_dict() if autonomy is not None else None,
+        }
+        if detail:
+            payload.update(detail)
+        outcome: str | None = (
+            "denied" if event_type in ("budget_exceeded", "approval_requested") else None
+        )
+        return self.emit_evidence(event_type, envelope, payload=payload, outcome=outcome)
+
+    def _check_autonomy_budget(
+        self,
+        descriptor: CapabilityDescriptor,
+        envelope: InvocationEnvelope,
+    ) -> DenialReason | None:
+        """Check AutonomyProfile budget and tier gates. Returns DenialReason or None.
+
+        Called after _check_host_invariants(), before execution_started is emitted.
+        Emits budget_exceeded or approval_requested as a side-effect before returning.
+        """
+        autonomy = descriptor.autonomy
+        if autonomy is None:
+            return None
+
+        corr = envelope.correlation.correlation_id
+
+        # 1. action_limit — count only execution_started events, not denials or autonomy events
+        if autonomy.action_limit is not None:
+            taken = self.store.count_by_correlation_event_type(corr, "execution_started")
+            if taken >= autonomy.action_limit:
+                self._emit_autonomy_event(
+                    "budget_exceeded", envelope, descriptor,
+                    detail={
+                        "limit_type": "action_limit",
+                        "action_limit": autonomy.action_limit,
+                        "actions_taken": taken,
+                        "rollback_policy": autonomy.rollback_policy,
+                    },
+                )
+                return DenialReason(
+                    code="budget_exceeded",
+                    message=(
+                        f"action_limit {autonomy.action_limit} reached "
+                        f"for correlation {corr} (actions_taken={taken})"
+                    ),
+                    retryable=False,
+                    details={
+                        "limit_type": "action_limit",
+                        "action_limit": autonomy.action_limit,
+                        "actions_taken": taken,
+                        "rollback_policy": autonomy.rollback_policy,
+                    },
+                )
+
+        # 2. spend_limit — spend = execution_started_count × spend_units
+        if autonomy.spend_limit is not None:
+            taken = self.store.count_by_correlation_event_type(corr, "execution_started")
+            spend_so_far = taken * autonomy.spend_units
+            if spend_so_far >= autonomy.spend_limit:
+                self._emit_autonomy_event(
+                    "budget_exceeded", envelope, descriptor,
+                    detail={
+                        "limit_type": "spend_limit",
+                        "spend_limit": autonomy.spend_limit,
+                        "spend_units": autonomy.spend_units,
+                        "spend_so_far": spend_so_far,
+                        "rollback_policy": autonomy.rollback_policy,
+                    },
+                )
+                return DenialReason(
+                    code="budget_exceeded",
+                    message=(
+                        f"spend_limit {autonomy.spend_limit} reached "
+                        f"for correlation {corr} (spend_so_far={spend_so_far})"
+                    ),
+                    retryable=False,
+                    details={
+                        "limit_type": "spend_limit",
+                        "spend_limit": autonomy.spend_limit,
+                        "spend_units": autonomy.spend_units,
+                        "spend_so_far": spend_so_far,
+                    },
+                )
+
+        # 3. tier == "approval_required" — gate every invocation
+        if autonomy.tier == "approval_required":
+            self._emit_autonomy_event(
+                "approval_requested", envelope, descriptor,
+                detail={
+                    "tier": autonomy.tier,
+                    "rollback_policy": autonomy.rollback_policy,
+                },
+            )
+            return DenialReason(
+                code="approval_required",
+                message=f"Capability {descriptor.capability_uri} requires explicit approval",
+                retryable=True,
+                details={"tier": autonomy.tier},
+            )
+
+        return None
 
     def _check_host_invariants(
         self,

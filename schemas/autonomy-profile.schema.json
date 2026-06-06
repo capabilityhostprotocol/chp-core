@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.3/autonomy-profile.schema.json",
+  "title": "AutonomyProfile",
+  "description": "Autonomy control surface for a CapabilityDescriptor (v0.3.4). Declares tier, budget gates, and rollback intent.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "tier": {
+      "type": "string",
+      "enum": ["automated", "supervised", "approval_required", "human_driven"],
+      "default": "supervised",
+      "description": "Invocation mode constraint. 'approval_required' gates every invocation until an external approval_granted event is recorded."
+    },
+    "spend_limit": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "default": null,
+      "description": "Maximum cumulative spend (spend_units × invocations) per correlation_id. null = unlimited."
+    },
+    "spend_units": {
+      "type": "number",
+      "minimum": 0,
+      "default": 1.0,
+      "description": "Cost per invocation. Multiplied by execution_started count to compute total spend."
+    },
+    "action_limit": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "default": null,
+      "description": "Maximum execution_started events per correlation_id. null = unlimited."
+    },
+    "rollback_policy": {
+      "type": "string",
+      "enum": ["none", "checkpoint", "full"],
+      "default": "none",
+      "description": "Governance intent for rollback strategy. Declared in evidence but not mechanically enforced in v0.3.4."
+    }
+  }
+}
