@@ -47,6 +47,9 @@ from ._ci import (
     cmd_ci_check,
     cmd_policy_lint,
 )
+from ._delegation import (
+    cmd_delegation_show,
+)
 from ._work import (
     add_radicle_common_args,
     add_vc_common_args,
@@ -454,6 +457,14 @@ def build_parser() -> argparse.ArgumentParser:
     registry_status_p = registry_sub.add_parser("status", help="Show maturity status of registered adapters.")
     registry_status_p.add_argument("--registry", default=None)
     registry_status_p.set_defaults(func=cmd_registry_status)
+
+    delegation_p = subcommands.add_parser("delegation", help="Query delegation handoff chains.")
+    delegation_sub = delegation_p.add_subparsers(dest="delegation_command", required=True)
+
+    delegation_show_p = delegation_sub.add_parser("show", help="Show the handoff chain for a delegation.")
+    delegation_show_p.add_argument("correlation_id")
+    delegation_show_p.add_argument("--store", default=None)
+    delegation_show_p.set_defaults(func=cmd_delegation_show)
 
     verify_p = subcommands.add_parser("verify-evidence", help="Verify the SHA256 hash chain for a session.")
     verify_p.add_argument("session_id")

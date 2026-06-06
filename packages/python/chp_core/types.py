@@ -39,11 +39,18 @@ COGNITION_EVIDENCE_TYPES = {
     "reflection_started",
     "reflection_completed",
     "outcome_scored",
+    # delegation (v0.3.3)
+    "delegation_created",
+    "delegation_accepted",
+    "delegation_completed",
+    "delegation_rejected",
+    "delegation_reassigned",
 }
 
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 PlanStepStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+DelegationStatus = Literal["pending", "accepted", "completed", "rejected", "reassigned"]
 
 ExecutionOutcome = Literal["success", "failure", "denied", "skipped"]
 
@@ -461,6 +468,34 @@ class EvaluationResult:
 
     def to_dict(self) -> JSON:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class DelegationEnvelope:
+    """Describes a governed work handoff between agents, services, or humans."""
+
+    delegation_id: str
+    from_session: str               # session_id of the delegating agent
+    to_agent: str                   # agent name / capability_id receiving the work
+    work_parcel: str                # natural-language description of what is delegated
+    acceptance_criteria: list[str] = field(default_factory=list)
+    context_ref: str | None = None  # correlation_id of prior context to carry forward
+    metadata: JSON = field(default_factory=dict)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+    @classmethod
+    def from_mapping(cls, value: JSON) -> "DelegationEnvelope":
+        return cls(
+            delegation_id=str(value["delegation_id"]),
+            from_session=str(value["from_session"]),
+            to_agent=str(value["to_agent"]),
+            work_parcel=str(value["work_parcel"]),
+            acceptance_criteria=list(value.get("acceptance_criteria") or []),
+            context_ref=value.get("context_ref"),
+            metadata=dict(value.get("metadata") or {}),
+        )
 
 
 @dataclass(slots=True)
