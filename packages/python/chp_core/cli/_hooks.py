@@ -187,7 +187,61 @@ cd "$(git rev-parse --show-toplevel)"
 PYTHONPATH=packages/python python -m chp_core.cli work vc precommit \\
   --check tests \\
   --check alignment \\
+  --check conformance \\
+  --check schemas \\
   --repo-root . 2>&1
+"""
+
+# Pre-push hook: blocks bare version tags (v1.2.3) that lack a matching RC tag
+# (v1.2.3-rc.*), mirroring the verify-staged guard in release.yml. Also runs
+# conformance + schema validation before any push to the tracked remote.
+_PRE_PUSH_HOOK = """\
+#!/bin/sh
+# CHP pre-push: enforce RC-before-production-tag rule and run fast CI checks.
+#
+# production tag push (v1.2.3)  →  requires v1.2.3-rc.* to exist locally
+# RC tag push (v1.2.3-rc.1)     →  allowed freely
+# branch push                   →  allowed freely (CI covers it)
+
+REMOTE="$1"
+FAIL=0
+
+while read local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in refs/tags/v*) ;; *) continue ;; esac
+
+    TAG="${remote_ref#refs/tags/}"
+
+    # RC tags are fine
+    case "$TAG" in *-rc.*) continue ;; esac
+
+    # Bare version tag — require a matching RC tag locally
+    VERSION="${TAG#v}"
+    RC_PATTERN="v${VERSION}-rc.*"
+    MATCHES=$(git tag --list "$RC_PATTERN")
+
+    if [ -z "$MATCHES" ]; then
+        printf '\\n'
+        printf 'ERROR: Blocked push of production tag %s to %s\\n' "$TAG" "$REMOTE"
+        printf '\\n'
+        printf '  No RC tag found matching: %s\\n' "$RC_PATTERN"
+        printf '\\n'
+        printf '  Run the staging flow first:\\n'
+        printf '    git tag %s-rc.1 && git push github %s-rc.1\\n' "$TAG" "$TAG"
+        printf '  Wait for staging.yml to pass, then re-push the production tag.\\n'
+        printf '\\n'
+        FAIL=1
+    fi
+done
+
+[ "$FAIL" -ne 0 ] && exit 1
+
+# Fast checks — conformance + schema validation (mirrors CI; skipped on pure branch pushes
+# because pre-commit already ran these; still runs on tag-only pushes).
+cd "$(git rev-parse --show-toplevel)"
+PYTHONPATH=packages/python python -m chp_core.cli work vc precommit \\
+    --check conformance \\
+    --check schemas \\
+    --repo-root . 2>&1
 """
 
 
@@ -204,6 +258,19 @@ def _install_precommit_hook() -> str:
     return str(hook_path)
 
 
+def _install_prepush_hook() -> str:
+    from pathlib import Path
+    import stat
+
+    git_hooks = Path(".git") / "hooks"
+    if not git_hooks.is_dir():
+        raise FileNotFoundError(".git/hooks not found — run from the repo root")
+    hook_path = git_hooks / "pre-push"
+    hook_path.write_text(_PRE_PUSH_HOOK)
+    hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return str(hook_path)
+
+
 def cmd_hooks_install(args: argparse.Namespace) -> int:
     path = _settings_path(getattr(args, "global_scope", False), getattr(args, "project", False))
     _install_hooks(path, with_governance=getattr(args, "with_governance", False))
@@ -211,6 +278,9 @@ def cmd_hooks_install(args: argparse.Namespace) -> int:
     if getattr(args, "with_precommit", False):
         hook_path = _install_precommit_hook()
         print(f"Pre-commit hook installed in {hook_path}")
+    if getattr(args, "with_prepush", False):
+        hook_path = _install_prepush_hook()
+        print(f"Pre-push hook installed in {hook_path}")
     return 0
 
 

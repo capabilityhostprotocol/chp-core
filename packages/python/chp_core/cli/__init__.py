@@ -16,6 +16,7 @@ from ._core import (
 )
 from ._hooks import (
     _install_hooks,
+    _install_prepush_hook,
     _settings_path,
     _uninstall_hooks,
     cmd_hook_codex_post_tool,
@@ -384,6 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="Also install the PreToolUse governance hook.")
     hooks_install_p.add_argument("--with-precommit", dest="with_precommit", action="store_true",
                                  help="Also write a .git/hooks/pre-commit that runs chp work vc precommit.")
+    hooks_install_p.add_argument("--with-prepush", dest="with_prepush", action="store_true",
+                                 help="Also write a .git/hooks/pre-push that enforces the RC-before-production-tag rule.")
     hooks_install_p.set_defaults(func=cmd_hooks_install)
 
     hooks_uninstall_p = hooks_sub.add_parser("uninstall", help="Remove CHP hooks from Claude Code settings.")

@@ -1366,6 +1366,18 @@ _CHECK_ALIASES: dict[str, list[str]] = {
         "-m", "not slow", "-q", "--no-cov",
     ],
     "alignment": ["python", "-m", "chp_core.cli", "work", "check-alignment", "--repo-root", "."],
+    "conformance": ["python", "conformance/runner.py"],
+    "schemas": [
+        "python", "-c",
+        "import json,glob,sys; files=sorted(glob.glob('schemas/*.json'));"
+        " [json.load(open(f)) for f in files];"
+        " print(f'schemas OK ({len(files)} files)')",
+    ],
+    "mypy": [
+        "python", "-m", "mypy", "packages/python/chp_core",
+        "--ignore-missing-imports", "--no-strict-optional",
+        "--exclude", "/(tests|demo|__pycache__)/",
+    ],
 }
 
 
