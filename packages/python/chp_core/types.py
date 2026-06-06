@@ -24,13 +24,26 @@ SESSION_EVIDENCE_TYPES = {
 }
 
 COGNITION_EVIDENCE_TYPES = {
+    # memory (v0.3.1)
     "memory_read",
     "memory_written",
     "memory_deleted",
+    # planning (v0.3.2)
+    "plan_created",
+    "plan_step_started",
+    "plan_step_completed",
+    "plan_revised",
+    "plan_completed",
+    "plan_failed",
+    # reflection (v0.3.2)
+    "reflection_started",
+    "reflection_completed",
+    "outcome_scored",
 }
 
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
+PlanStepStatus = Literal["pending", "running", "completed", "failed", "skipped"]
 
 ExecutionOutcome = Literal["success", "failure", "denied", "skipped"]
 
@@ -384,6 +397,70 @@ class AgentSessionDescriptor:
             parent_session_id=value.get("parent_session_id"),
             metadata=dict(value.get("metadata") or {}),
         )
+
+
+@dataclass(slots=True)
+class PlanStep:
+    """One step within a plan."""
+
+    step_id: str
+    description: str
+    capability_id: str | None = None
+    status: PlanStepStatus = "pending"
+    metadata: JSON = field(default_factory=dict)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class PlanDescriptor:
+    """Describes an agent plan: intent, ordered steps, and optional parent session link."""
+
+    plan_id: str
+    intent: str
+    steps: list[PlanStep] = field(default_factory=list)
+    parent_correlation_id: str | None = None
+    metadata: JSON = field(default_factory=dict)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+    @classmethod
+    def from_mapping(cls, value: JSON) -> "PlanDescriptor":
+        raw_steps = value.get("steps") or []
+        steps = [
+            PlanStep(
+                step_id=str(s["step_id"]),
+                description=str(s["description"]),
+                capability_id=s.get("capability_id"),
+                status=s.get("status", "pending"),  # type: ignore[arg-type]
+                metadata=dict(s.get("metadata") or {}),
+            )
+            for s in raw_steps
+        ]
+        return cls(
+            plan_id=str(value["plan_id"]),
+            intent=str(value["intent"]),
+            steps=steps,
+            parent_correlation_id=value.get("parent_correlation_id"),
+            metadata=dict(value.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class EvaluationResult:
+    """Structured outcome of an agent reflection or evaluation pass."""
+
+    score: float              # normalised 0.0–1.0
+    rubric: str               # what was measured / the scoring criteria
+    evaluator: str            # "model" | "human" | "automated"
+    evidence_refs: list[str] = field(default_factory=list)  # event IDs cited
+    notes: str = ""
+    passed: bool | None = None  # optional binary gate for policy enforcement
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
 
 
 @dataclass(slots=True)

@@ -29,6 +29,7 @@ from .codex import (
 )
 from .otel import evidence_to_otel_span, replay_to_otel_spans
 from .memory import MemoryCapability, register_memory_capability
+from .planning import PlanningContext, ReflectionContext
 from .session import AgentSession, wrap_tool_call
 from .redaction import DEFAULT_SENSITIVE_KEYS, redact_payload
 from .types import (
@@ -42,6 +43,7 @@ from .types import (
     COGNITION_EVIDENCE_TYPES,
     CorrelationContext,
     DenialReason,
+    EvaluationResult,
     ExecutionEvidence,
     ExecutionOutcome,
     HostDescriptor,
@@ -50,6 +52,9 @@ from .types import (
     InvocationEnvelope,
     InvocationResult,
     MemoryScope,
+    PlanDescriptor,
+    PlanStep,
+    PlanStepStatus,
     PolicyDescriptor,
     ReplayQuery,
     ReplayResult,
@@ -106,8 +111,14 @@ __all__ = [
     "serve_http",
     "AgentSession",
     "COGNITION_EVIDENCE_TYPES",
+    "EvaluationResult",
     "MemoryCapability",
     "MemoryScope",
+    "PlanDescriptor",
+    "PlanStep",
+    "PlanStepStatus",
+    "PlanningContext",
+    "ReflectionContext",
     "SESSION_EVIDENCE_TYPES",
     "register_memory_capability",
     "wrap_tool_call",

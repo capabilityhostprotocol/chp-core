@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.3/plan-descriptor.schema.json",
+  "title": "PlanDescriptor",
+  "description": "Describes an agent plan: intent, ordered steps, and optional parent session link.",
+  "type": "object",
+  "required": ["plan_id", "intent"],
+  "properties": {
+    "plan_id": {
+      "type": "string",
+      "description": "Unique identifier for this plan (plan_<uuid>)."
+    },
+    "intent": {
+      "type": "string",
+      "description": "Natural-language description of what this plan is trying to accomplish."
+    },
+    "steps": {
+      "type": "array",
+      "description": "Ordered list of steps that make up the plan.",
+      "items": {
+        "$ref": "#/$defs/PlanStep"
+      },
+      "default": []
+    },
+    "parent_correlation_id": {
+      "type": ["string", "null"],
+      "description": "Correlation ID of the parent agent session or plan. Null for top-level plans."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Arbitrary additional context.",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "PlanStep": {
+      "type": "object",
+      "required": ["step_id", "description"],
+      "properties": {
+        "step_id": {
+          "type": "string",
+          "description": "Unique step identifier within the plan."
+        },
+        "description": {
+          "type": "string",
+          "description": "What this step does."
+        },
+        "capability_id": {
+          "type": ["string", "null"],
+          "description": "CHP capability ID this step invokes, if known."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "running", "completed", "failed", "skipped"],
+          "default": "pending",
+          "description": "Execution status of this step."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

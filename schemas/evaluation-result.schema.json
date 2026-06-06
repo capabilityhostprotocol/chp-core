@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.3/evaluation-result.schema.json",
+  "title": "EvaluationResult",
+  "description": "Structured outcome of an agent reflection or evaluation pass.",
+  "type": "object",
+  "required": ["score", "rubric", "evaluator"],
+  "properties": {
+    "score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Normalised quality score (0.0 = worst, 1.0 = best)."
+    },
+    "rubric": {
+      "type": "string",
+      "description": "Description of what was measured / the scoring criteria."
+    },
+    "evaluator": {
+      "type": "string",
+      "description": "Who or what produced this evaluation. Conventions: 'model', 'human', 'automated'."
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Event IDs that support this evaluation.",
+      "default": []
+    },
+    "notes": {
+      "type": "string",
+      "description": "Free-text notes explaining the score.",
+      "default": ""
+    },
+    "passed": {
+      "type": ["boolean", "null"],
+      "description": "Optional binary gate. Null means not applicable.",
+      "default": null
+    }
+  },
+  "additionalProperties": false
+}
