@@ -299,6 +299,43 @@ def cmd_session_ingestion_report(args: argparse.Namespace) -> int:
     return 0 if ingestion_events else 1
 
 
+def cmd_session_transformation_report(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..types import TRANSFORMATION_EVIDENCE_TYPES
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    transformation_events = [e for e in events if e.get("event_type") in TRANSFORMATION_EVIDENCE_TYPES]
+    completed = [e for e in transformation_events if e.get("event_type") == "transformation_completed"]
+
+    transforms_by_type: dict[str, int] = {}
+    for e in completed:
+        t = (e.get("payload") or {}).get("transform_type", "unknown")
+        transforms_by_type[t] = transforms_by_type.get(t, 0) + 1
+
+    latencies = [
+        (e.get("payload") or {}).get("latency_ms")
+        for e in completed
+        if (e.get("payload") or {}).get("latency_ms") is not None
+    ]
+    avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
+
+    print_json({
+        "session_id": args.session_id,
+        "transformation_event_count": len(transformation_events),
+        "transformation_calls": len(completed),
+        "transforms_by_type": transforms_by_type,
+        "avg_latency_ms": avg_latency,
+        "events": transformation_events,
+    })
+    return 0 if transformation_events else 1
+
+
 def cmd_session_export(args: argparse.Namespace) -> int:
     import sys
     from ..store import SQLiteEvidenceStore

@@ -39,6 +39,11 @@ from .ingestion import (
     InMemoryTextIngestionCapability,
     register_ingestion_capability,
 )
+from .transformation import (
+    TransformationCapability,
+    InMemoryTextTransformationCapability,
+    register_transformation_capability,
+)
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -77,6 +82,9 @@ from .types import (
     INGESTION_EVIDENCE_TYPES,
     IngestionRecord,
     IngestionResult,
+    TRANSFORMATION_EVIDENCE_TYPES,
+    TransformationRecord,
+    TransformationResult,
     RETRIEVAL_EVIDENCE_TYPES,
     RetrievalResult,
     SESSION_EVIDENCE_TYPES,
@@ -162,5 +170,11 @@ __all__ = [
     "IngestionResult",
     "INGESTION_EVIDENCE_TYPES",
     "register_ingestion_capability",
+    "TransformationCapability",
+    "InMemoryTextTransformationCapability",
+    "TransformationRecord",
+    "TransformationResult",
+    "TRANSFORMATION_EVIDENCE_TYPES",
+    "register_transformation_capability",
     "wrap_tool_call",
 ]

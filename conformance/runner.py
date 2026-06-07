@@ -316,6 +316,47 @@ async def check_ingestion_capability(_host: Any) -> None:
         os.unlink(store_path)
 
 
+async def check_transformation_capability(_host: Any) -> None:
+    """transformation.transform emits transformation_started + transformation_completed with hashes."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        InMemoryTextTransformationCapability,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+        register_transformation_capability,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-transformation", store=store)
+        cap = InMemoryTextTransformationCapability()
+        register_transformation_capability(host, cap)
+
+        result = await host.ainvoke(
+            "transformation.transform",
+            {"content": "  Hello WORLD  ", "transform_type": "normalize"},
+            correlation={"correlation_id": "conf-transformation-001"},
+        )
+        assert result.success, f"invoke failed: {result}"
+
+        events = host.replay("conf-transformation-001")
+        types = [e["event_type"] for e in events]
+        assert "transformation_started" in types, f"missing transformation_started: {types}"
+        assert "transformation_completed" in types, f"missing transformation_completed: {types}"
+
+        completed = next(e for e in events if e["event_type"] == "transformation_completed")
+        payload = completed.get("payload") or {}
+        assert payload.get("input_hash", "").startswith("sha256:"), "bad input_hash"
+        assert payload.get("output_hash", "").startswith("sha256:"), "bad output_hash"
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -328,6 +369,7 @@ CHECKS: list[tuple[str, Check]] = [
     ("pre-tool governance", check_pretool_governance),
     ("retrieval capability", check_retrieval_capability),
     ("ingestion capability", check_ingestion_capability),
+    ("transformation capability", check_transformation_capability),
 ]
 
 

@@ -45,6 +45,7 @@ from ._session import (
     cmd_session_replay,
     cmd_session_retrieval_report,
     cmd_session_show,
+    cmd_session_transformation_report,
     cmd_session_tree,
 )
 from ._ci import (
@@ -460,6 +461,13 @@ def build_parser() -> argparse.ArgumentParser:
     session_ingestion_p.add_argument("session_id")
     session_ingestion_p.add_argument("--store", default=None)
     session_ingestion_p.set_defaults(func=cmd_session_ingestion_report)
+
+    session_transformation_p = session_sub.add_parser(
+        "transformation-report", help="Show transformation events and metrics for a session."
+    )
+    session_transformation_p.add_argument("session_id")
+    session_transformation_p.add_argument("--store", default=None)
+    session_transformation_p.set_defaults(func=cmd_session_transformation_report)
 
     registry_p = subcommands.add_parser("registry", help="Manage the local CHP adapter registry.")
     registry_sub = registry_p.add_subparsers(dest="registry_command", required=True)

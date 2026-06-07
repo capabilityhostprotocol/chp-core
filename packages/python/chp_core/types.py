@@ -66,6 +66,12 @@ INGESTION_EVIDENCE_TYPES = {
     "ingestion_failed",
 }
 
+TRANSFORMATION_EVIDENCE_TYPES = {
+    "transformation_started",
+    "transformation_completed",
+    "transformation_failed",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
@@ -608,6 +614,34 @@ class IngestionResult:
     records: list[IngestionRecord]
     record_count: int
     total_bytes: int
+    latency_ms: float | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class TransformationRecord:
+    """Provenance record for a single transformation pass."""
+
+    transform_type: str
+    input_hash: str
+    output_hash: str
+    input_byte_count: int
+    output_byte_count: int
+    params: JSON = field(default_factory=dict)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class TransformationResult:
+    """Result returned by TransformationCapability.transform()."""
+
+    content: str
+    transform_type: str
+    record: TransformationRecord
     latency_ms: float | None = None
 
     def to_dict(self) -> JSON:

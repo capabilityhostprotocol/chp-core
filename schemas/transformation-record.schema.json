@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.4/transformation-record.schema.json",
+  "title": "TransformationResult",
+  "description": "Payload of transformation_completed evidence events (v0.4.2). Records provenance without storing raw content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["transform_type", "input_hash", "output_hash", "input_byte_count", "output_byte_count"],
+  "properties": {
+    "transform_type":    { "type": "string" },
+    "input_hash":        { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "output_hash":       { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "input_byte_count":  { "type": "integer", "minimum": 0 },
+    "output_byte_count": { "type": "integer", "minimum": 0 },
+    "latency_ms":        { "type": ["number", "null"], "default": null }
+  }
+}
