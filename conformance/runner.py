@@ -630,6 +630,132 @@ async def check_certification(_host: Any) -> None:
     assert "certified_at" in d
 
 
+async def check_version_control_capability(_host: Any) -> None:
+    """chp.version_control.inspect_repo emits version_control_repo_inspected with repo metadata."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+        register_git_capabilities,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-vc", store=store)
+        register_git_capabilities(host)
+
+        repo_root = str(REPO_ROOT)
+        result = await host.ainvoke(
+            "chp.version_control.inspect_repo",
+            {"repo_root": repo_root},
+            correlation={"correlation_id": "conf-vc-001"},
+        )
+        assert result.success, f"inspect_repo failed: {result}"
+
+        events = host.replay("conf-vc-001")
+        types = {e["event_type"] for e in events}
+        assert "version_control_repo_inspected" in types, f"missing version_control_repo_inspected: {types}"
+
+        inspected = next(e for e in events if e["event_type"] == "version_control_repo_inspected")
+        payload = inspected.get("payload") or {}
+        assert "branch" in payload or "repo_root" in payload, f"missing repo metadata in payload: {payload}"
+
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
+async def check_identity_propagation(_host: Any) -> None:
+    """subject from ainvoke() propagates onto all ExecutionEvidence events."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        CapabilityDescriptor,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-identity", store=store)
+
+        async def _echo(ctx, payload):
+            return {"ok": True}
+
+        host.register(
+            CapabilityDescriptor(id="identity.echo", version="1.0.0", description="Echo"),
+            _echo,
+        )
+
+        subject = {"id": "conf-agent", "type": "agent"}
+        await host.ainvoke(
+            "identity.echo", {},
+            correlation={"correlation_id": "conf-identity-001"},
+            subject=subject,
+        )
+
+        events = host.replay("conf-identity-001")
+        exec_events = [e for e in events if "execution" in e["event_type"]]
+        assert exec_events, "no execution events emitted"
+        for ev in exec_events:
+            assert ev.get("subject") == subject, (
+                f"subject mismatch on {ev['event_type']}: expected {subject}, got {ev.get('subject')}"
+            )
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
+async def check_composability_declaration(_host: Any) -> None:
+    """depends_on on CapabilityDescriptor appears in discover() and is omitted when None."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        CapabilityDescriptor,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-compose", store=store)
+
+        async def _noop(ctx, payload):
+            return {}
+
+        host.register(
+            CapabilityDescriptor(id="comp.a", version="1.0.0", description="A"),
+            _noop,
+        )
+        host.register(
+            CapabilityDescriptor(
+                id="comp.b", version="1.0.0", description="B",
+                depends_on=["comp.a"],
+            ),
+            _noop,
+        )
+        store.close()
+
+        descriptor = host.discover()
+        caps = {c["id"]: c for c in descriptor["capabilities"]}
+
+        assert "depends_on" not in caps["comp.a"], "comp.a must not have depends_on"
+        assert "depends_on" in caps["comp.b"], "comp.b must have depends_on"
+        assert caps["comp.b"]["depends_on"] == ["comp.a"]
+    finally:
+        os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -648,6 +774,9 @@ CHECKS: list[tuple[str, Check]] = [
     ("event bus capability", check_event_bus_capability),
     ("metrics report", check_metrics_report),
     ("certification", check_certification),
+    ("version control capability", check_version_control_capability),
+    ("identity propagation", check_identity_propagation),
+    ("composability declaration", check_composability_declaration),
 ]
 
 

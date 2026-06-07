@@ -11,7 +11,7 @@ from typing import Any
 
 from .adapters import CapabilityAdapter, HostedCapability, register_adapter, register_hosted_capabilities
 from .host import CapabilityExecutionContext, LocalCapabilityHost
-from .types import CapabilityDescriptor, InvariantDescriptor, JSON, utc_now
+from .types import CapabilityCategory, CapabilityDescriptor, InvariantDescriptor, JSON, utc_now
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 120
 RADICLE_SENSITIVE_VALUE_FLAGS = {"--message", "-m", "--description", "-d"}
@@ -71,6 +71,7 @@ def git_capabilities() -> list[HostedCapability]:
                     },
                 },
                 output_schema={"type": "object"},
+                category=CapabilityCategory.ENGINEERING,
                 tags=["chp", "development", "version-control", "git"],
                 emits=[
                     "execution_started",
@@ -94,6 +95,7 @@ def git_capabilities() -> list[HostedCapability]:
                     },
                 },
                 output_schema={"type": "object"},
+                category=CapabilityCategory.ENGINEERING,
                 tags=["chp", "development", "version-control", "git"],
                 emits=[
                     "execution_started",
@@ -129,6 +131,7 @@ def git_capabilities() -> list[HostedCapability]:
                     },
                 },
                 output_schema={"type": "object"},
+                category=CapabilityCategory.ENGINEERING,
                 tags=["chp", "development", "version-control", "git", "checks"],
                 emits=[
                     "execution_started",
@@ -156,6 +159,7 @@ def git_capabilities() -> list[HostedCapability]:
                     },
                 },
                 output_schema={"type": "object"},
+                category=CapabilityCategory.ENGINEERING,
                 tags=["chp", "development", "version-control", "release"],
                 emits=[
                     "execution_started",
@@ -194,6 +198,8 @@ def git_capabilities() -> list[HostedCapability]:
                     },
                 },
                 output_schema={"type": "object"},
+                category=CapabilityCategory.ENGINEERING,
+                depends_on=["chp.version_control.precommit_check"],
                 tags=["chp", "development", "version-control", "release", "governance"],
                 emits=[
                     "execution_started",
@@ -221,6 +227,7 @@ def git_capabilities() -> list[HostedCapability]:
                     },
                 },
                 output_schema={"type": "object"},
+                category=CapabilityCategory.ENGINEERING,
                 tags=["chp", "development", "version-control", "release"],
                 risk="medium",
                 emits=[
@@ -250,6 +257,7 @@ def git_capabilities() -> list[HostedCapability]:
                     },
                 },
                 output_schema={"type": "object"},
+                category=CapabilityCategory.ENGINEERING,
                 invariants=[required_field_invariant("allow_mutation")],
                 tags=["chp", "development", "version-control", "release"],
                 risk="high",
@@ -283,6 +291,8 @@ def git_capabilities() -> list[HostedCapability]:
                     },
                 },
                 output_schema={"type": "object"},
+                category=CapabilityCategory.ENGINEERING,
+                depends_on=["chp.version_control.release_evidence_bundle"],
                 invariants=[required_field_invariant("allow_mutation")],
                 tags=["chp", "development", "version-control", "release"],
                 risk="critical",

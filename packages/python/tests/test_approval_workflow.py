@@ -291,5 +291,104 @@ class ApprovalEventSequenceTests(unittest.TestCase):
             self.assertNotIn("approval_denied", types_a)
 
 
+class ApprovalCLITests(unittest.TestCase):
+    """CLI grant-approval and deny-approval commands emit evidence and return rc=0."""
+
+    def _setup_store_with_request(self) -> tuple[str, str, str]:
+        """Return (store_path, cap_uri, session_id) with an approval_requested in store."""
+        d = tempfile.mkdtemp()
+        store_path = str(Path(d) / "ev.sqlite")
+        host, cap_uri = _host_with_approval_cap(store_path)
+        session_id = new_id("sess")
+        host.invoke("test.gated", correlation_id=session_id)
+        host.store.close()
+        return store_path, cap_uri, session_id
+
+    def test_grant_approval_cli_returns_0(self):
+        import argparse
+        from chp_core.cli._session import cmd_session_grant_approval
+
+        store_path, cap_uri, session_id = self._setup_store_with_request()
+        args = argparse.Namespace(
+            session_id=session_id,
+            capability_uri=cap_uri,
+            by="alice",
+            note="looks good",
+            store=store_path,
+        )
+        rc = cmd_session_grant_approval(args)
+        self.assertEqual(rc, 0)
+
+    def test_deny_approval_cli_returns_0(self):
+        import argparse
+        from chp_core.cli._session import cmd_session_deny_approval
+
+        store_path, cap_uri, session_id = self._setup_store_with_request()
+        args = argparse.Namespace(
+            session_id=session_id,
+            capability_uri=cap_uri,
+            by="bob",
+            reason="too risky",
+            store=store_path,
+        )
+        rc = cmd_session_deny_approval(args)
+        self.assertEqual(rc, 0)
+
+    def test_grant_approval_cli_writes_event(self):
+        import argparse
+        from chp_core.cli._session import cmd_session_grant_approval
+
+        store_path, cap_uri, session_id = self._setup_store_with_request()
+        args = argparse.Namespace(
+            session_id=session_id, capability_uri=cap_uri,
+            by="carol", note=None, store=store_path,
+        )
+        cmd_session_grant_approval(args)
+
+        store = SQLiteEvidenceStore(store_path)
+        events = store.by_correlation(session_id)
+        store.close()
+        types = {e["event_type"] for e in events}
+        self.assertIn("approval_granted", types)
+
+    def test_deny_approval_cli_writes_event(self):
+        import argparse
+        from chp_core.cli._session import cmd_session_deny_approval
+
+        store_path, cap_uri, session_id = self._setup_store_with_request()
+        args = argparse.Namespace(
+            session_id=session_id, capability_uri=cap_uri,
+            by=None, reason="blocked by policy", store=store_path,
+        )
+        cmd_session_deny_approval(args)
+
+        store = SQLiteEvidenceStore(store_path)
+        events = store.by_correlation(session_id)
+        store.close()
+        types = {e["event_type"] for e in events}
+        self.assertIn("approval_denied", types)
+
+    def test_grant_approval_cli_outputs_evidence_json(self):
+        import argparse
+        import json
+        from chp_core.cli._session import cmd_session_grant_approval
+
+        store_path, cap_uri, session_id = self._setup_store_with_request()
+        args = argparse.Namespace(
+            session_id=session_id, capability_uri=cap_uri,
+            by="dave", note="approved", store=store_path,
+        )
+        import io, sys
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            cmd_session_grant_approval(args)
+        finally:
+            sys.stdout = sys.__stdout__
+        out = json.loads(captured.getvalue())
+        self.assertEqual(out["event_type"], "approval_granted")
+        self.assertEqual((out.get("payload") or {}).get("decided_by"), "dave")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,7 +40,9 @@ from ._registry import (
 )
 from ._session import (
     cmd_session_autonomy_report,
+    cmd_session_deny_approval,
     cmd_session_export,
+    cmd_session_grant_approval,
     cmd_session_ingestion_report,
     cmd_session_list,
     cmd_session_metrics_report,
@@ -495,6 +497,26 @@ def build_parser() -> argparse.ArgumentParser:
     session_events_p.add_argument("session_id")
     session_events_p.add_argument("--store", default=None)
     session_events_p.set_defaults(func=cmd_session_events_report)
+
+    session_grant_p = session_sub.add_parser(
+        "grant-approval", help="Record an approval_granted event for a pending approval."
+    )
+    session_grant_p.add_argument("session_id")
+    session_grant_p.add_argument("capability_uri", help="Capability URI the approval was requested for.")
+    session_grant_p.add_argument("--by", default=None, metavar="IDENTITY", help="Identity of the approver.")
+    session_grant_p.add_argument("--note", default=None, help="Optional note.")
+    session_grant_p.add_argument("--store", default=None)
+    session_grant_p.set_defaults(func=cmd_session_grant_approval)
+
+    session_deny_p = session_sub.add_parser(
+        "deny-approval", help="Record an approval_denied event for a pending approval."
+    )
+    session_deny_p.add_argument("session_id")
+    session_deny_p.add_argument("capability_uri", help="Capability URI the approval was requested for.")
+    session_deny_p.add_argument("--by", default=None, metavar="IDENTITY", help="Identity of the denier.")
+    session_deny_p.add_argument("--reason", default=None, help="Optional reason for denial.")
+    session_deny_p.add_argument("--store", default=None)
+    session_deny_p.set_defaults(func=cmd_session_deny_approval)
 
     session_metrics_p = session_sub.add_parser(
         "metrics-report", help="Aggregate chp.invocations.* metrics for a session."

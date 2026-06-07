@@ -61,6 +61,7 @@ from .events import (
     InMemoryEventBus,
     register_event_bus_capability,
 )
+from .version_control import register_git_capabilities, register_version_control_capabilities
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -113,6 +114,7 @@ from .types import (
     DomainEventRecord,
     DomainEventQueryResult,
     METRICS_EVIDENCE_TYPES,
+    VERSION_CONTROL_EVIDENCE_TYPES,
     CapabilityMetrics,
     SessionMetricsReport,
     MaturityCriterion,
@@ -237,5 +239,8 @@ __all__ = [
     "MaturityAssessment",
     "CertificationRecord",
     "assess_maturity",
+    "register_git_capabilities",
+    "register_version_control_capabilities",
+    "VERSION_CONTROL_EVIDENCE_TYPES",
     "wrap_tool_call",
 ]

@@ -102,6 +102,17 @@ METRICS_EVIDENCE_TYPES = {
     "execution_denied",
 }
 
+VERSION_CONTROL_EVIDENCE_TYPES = {
+    "version_control_repo_inspected",
+    "version_control_diff_summarized",
+    "version_control_precommit_checked",
+    "version_control_release_bundle_generated",
+    "version_control_merge_readiness_verified",
+    "version_bumped",
+    "rc_tag_pushed",
+    "release_tag_pushed",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
@@ -133,6 +144,7 @@ class CapabilityCategory:
     ECONOMICS = "economics"
     DEVELOPER = "developer"
     CROSS_DOMAIN = "cross_domain"
+    ENGINEERING = "domain.engineering"
 
 
 def utc_now() -> str:
@@ -297,6 +309,9 @@ class CapabilityDescriptor:
     tags: list[str] = field(default_factory=list)
     metadata: JSON = field(default_factory=dict)
 
+    # ── Composability ─────────────────────────────────────────────────────
+    depends_on: list[str] | None = None
+
     # ── Structured optional sub-objects ───────────────────────────────────
     host_requirements: HostRequirements | None = None
     policy: PolicyDescriptor | None = None
@@ -310,6 +325,8 @@ class CapabilityDescriptor:
         data = asdict(self)
         data["capability_uri"] = self.capability_uri
         # omit null optional sub-objects to keep serialised output lean
+        if data.get("depends_on") is None:
+            del data["depends_on"]
         if data.get("host_requirements") is None:
             del data["host_requirements"]
         if data.get("policy") is None:
@@ -401,6 +418,7 @@ class ExecutionEvidence:
     redacted: bool = True
     error: JSON | None = None
     denial: DenialReason | None = None
+    subject: JSON | None = None
     assurance: AssuranceMetadata = field(default_factory=AssuranceMetadata)
 
     def to_dict(self) -> JSON:
@@ -409,6 +427,8 @@ class ExecutionEvidence:
         data["assurance"] = self.assurance.to_dict()
         if self.denial is not None:
             data["denial"] = self.denial.to_dict()
+        if self.subject is None:
+            data.pop("subject", None)
         return data
 
 

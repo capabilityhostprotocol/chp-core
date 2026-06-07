@@ -456,6 +456,7 @@ class LocalCapabilityHost:
             redacted=redacted,
             error=error,
             denial=denial,
+            subject=envelope.subject,
             assurance=AssuranceMetadata(),
         )
         return self.store.append(event)

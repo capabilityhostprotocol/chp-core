@@ -461,6 +461,48 @@ def cmd_session_metrics_report(args: argparse.Namespace) -> int:
     return 0 if report.total_invocations > 0 else 1
 
 
+def cmd_session_grant_approval(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..host import LocalCapabilityHost
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    host = LocalCapabilityHost(args.session_id, store=store)
+    try:
+        evidence = host.grant_approval(
+            args.session_id,
+            args.capability_uri,
+            granted_by=getattr(args, "by", None),
+            note=getattr(args, "note", None),
+        )
+    finally:
+        store.close()
+
+    print_json(evidence.to_dict())
+    return 0
+
+
+def cmd_session_deny_approval(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..host import LocalCapabilityHost
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    host = LocalCapabilityHost(args.session_id, store=store)
+    try:
+        evidence = host.deny_approval(
+            args.session_id,
+            args.capability_uri,
+            denied_by=getattr(args, "by", None),
+            reason=getattr(args, "reason", None),
+        )
+    finally:
+        store.close()
+
+    print_json(evidence.to_dict())
+    return 0
+
+
 def cmd_session_export(args: argparse.Namespace) -> int:
     import sys
     from ..store import SQLiteEvidenceStore

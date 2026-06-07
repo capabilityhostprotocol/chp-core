@@ -57,6 +57,11 @@
         { "type": "null" }
       ]
     },
+    "subject": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "description": "Identity that triggered this invocation (§13.1)."
+    },
     "assurance": { "$ref": "https://chp.dev/schemas/v0.1/evidence-event.schema.json#/$defs/AssuranceMetadata" }
   },
   "$defs": {
