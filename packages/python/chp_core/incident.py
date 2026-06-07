@@ -375,7 +375,7 @@ class SQLiteIncidentManager:
 
 def register_incident_capability(
     host: Any,
-    manager: InMemoryIncidentManager | None = None,
+    manager: "InMemoryIncidentManager | SQLiteIncidentManager | None" = None,
 ) -> None:
     manager = manager or InMemoryIncidentManager()
 
