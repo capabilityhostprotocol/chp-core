@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capabilityhostprotocol.dev/schemas/invocation-metrics.schema.json",
+  "title": "InvocationMetrics",
+  "description": "Aggregated chp.invocations.* statistics for a single capability (§9.3).",
+  "type": "object",
+  "required": ["capability_id", "invocations", "successes", "failures"],
+  "properties": {
+    "capability_id": {
+      "type": "string",
+      "description": "The capability ID these metrics apply to."
+    },
+    "invocations": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total execution_started events counted."
+    },
+    "successes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "execution_completed (outcome=success) events counted."
+    },
+    "failures": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "execution_failed events counted."
+    },
+    "denied": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "execution_denied events counted."
+    },
+    "avg_duration_ms": {
+      "type": ["number", "null"],
+      "description": "Mean invocation duration in milliseconds derived from evidence timestamps."
+    },
+    "p50_duration_ms": {
+      "type": ["number", "null"],
+      "description": "Median (p50) invocation duration in milliseconds."
+    },
+    "p95_duration_ms": {
+      "type": ["number", "null"],
+      "description": "95th-percentile invocation duration in milliseconds."
+    }
+  },
+  "additionalProperties": false
+}

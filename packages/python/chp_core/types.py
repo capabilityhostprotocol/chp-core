@@ -95,6 +95,13 @@ DOMAIN_EVENT_EVIDENCE_TYPES = {
     "domain_event_operation_failed",
 }
 
+METRICS_EVIDENCE_TYPES = {
+    "execution_started",
+    "execution_completed",
+    "execution_failed",
+    "execution_denied",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
@@ -763,6 +770,91 @@ class DomainEventQueryResult:
     events: list[DomainEventRecord]
     event_count: int
     event_type_filter: str | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class CapabilityMetrics:
+    """Aggregated invocation statistics for a single capability (§9.3)."""
+
+    capability_id: str
+    invocations: int
+    successes: int
+    failures: int
+    denied: int
+    avg_duration_ms: float | None = None
+    p50_duration_ms: float | None = None
+    p95_duration_ms: float | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class SessionMetricsReport:
+    """Full metrics report for a session (correlation_id) (§9.3)."""
+
+    session_id: str
+    total_invocations: int
+    total_successes: int
+    total_failures: int
+    capabilities: dict[str, "CapabilityMetrics"]
+
+    def to_dict(self) -> JSON:
+        return {
+            "session_id": self.session_id,
+            "total_invocations": self.total_invocations,
+            "total_successes": self.total_successes,
+            "total_failures": self.total_failures,
+            "capabilities": {k: v.to_dict() for k, v in self.capabilities.items()},
+        }
+
+
+@dataclass(slots=True)
+class MaturityCriterion:
+    """One criterion in a capability maturity assessment (§11.4)."""
+
+    level: int
+    id: str
+    name: str
+    passed: bool
+    detail: str | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class MaturityAssessment:
+    """Result of assess_maturity() — level 1–7 score with per-criterion detail (§11.4)."""
+
+    capability_id: str
+    level: int
+    criteria: list[MaturityCriterion]
+    evidence_count: int
+    assessed_at: str
+
+    def to_dict(self) -> JSON:
+        return {
+            "capability_id": self.capability_id,
+            "level": self.level,
+            "criteria": [c.to_dict() for c in self.criteria],
+            "evidence_count": self.evidence_count,
+            "assessed_at": self.assessed_at,
+        }
+
+
+@dataclass(slots=True)
+class CertificationRecord:
+    """Formal attestation that a capability meets a declared maturity level (§11.4)."""
+
+    capability_id: str
+    level: int
+    granted_by: str
+    certified_at: str
+    notes: str | None = None
 
     def to_dict(self) -> JSON:
         return asdict(self)

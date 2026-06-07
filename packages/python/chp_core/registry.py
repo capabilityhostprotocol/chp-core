@@ -34,9 +34,17 @@ class RegistryEntry:
     version: str | None = None
     enabled: bool = True
     tags: list[str] = field(default_factory=list)
+    # §11.4 certification fields (optional)
+    maturity_level: int | None = None
+    certification_level: int | None = None
+    certified_by: str | None = None
+    certified_at: str | None = None
+    certification_notes: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # omit None-valued certification fields to keep JSON lean
+        return {k: v for k, v in d.items() if v is not None or k in ("id", "enabled")}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RegistryEntry":
@@ -46,6 +54,11 @@ class RegistryEntry:
             version=data.get("version"),
             enabled=bool(data.get("enabled", True)),
             tags=list(data.get("tags", [])),
+            maturity_level=data.get("maturity_level"),
+            certification_level=data.get("certification_level"),
+            certified_by=data.get("certified_by"),
+            certified_at=data.get("certified_at"),
+            certification_notes=data.get("certification_notes"),
         )
 
 

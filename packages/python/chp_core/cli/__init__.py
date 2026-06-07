@@ -32,6 +32,8 @@ from ._hooks import (
 )
 from ._registry import (
     cmd_registry_add,
+    cmd_registry_assess_maturity,
+    cmd_registry_certify,
     cmd_registry_list,
     cmd_registry_remove,
     cmd_registry_status,
@@ -41,6 +43,7 @@ from ._session import (
     cmd_session_export,
     cmd_session_ingestion_report,
     cmd_session_list,
+    cmd_session_metrics_report,
     cmd_session_otel,
     cmd_session_replay,
     cmd_session_retrieval_report,
@@ -493,6 +496,17 @@ def build_parser() -> argparse.ArgumentParser:
     session_events_p.add_argument("--store", default=None)
     session_events_p.set_defaults(func=cmd_session_events_report)
 
+    session_metrics_p = session_sub.add_parser(
+        "metrics-report", help="Aggregate chp.invocations.* metrics for a session."
+    )
+    session_metrics_p.add_argument("session_id")
+    session_metrics_p.add_argument("--store", default=None)
+    session_metrics_p.add_argument(
+        "--format", choices=["json", "prometheus"], default="json",
+        help="Output format (default: json)."
+    )
+    session_metrics_p.set_defaults(func=cmd_session_metrics_report)
+
     registry_p = subcommands.add_parser("registry", help="Manage the local CHP adapter registry.")
     registry_sub = registry_p.add_subparsers(dest="registry_command", required=True)
 
@@ -517,6 +531,24 @@ def build_parser() -> argparse.ArgumentParser:
     registry_status_p = registry_sub.add_parser("status", help="Show maturity status of registered adapters.")
     registry_status_p.add_argument("--registry", default=None)
     registry_status_p.set_defaults(func=cmd_registry_status)
+
+    registry_assess_p = registry_sub.add_parser(
+        "assess-maturity", help="Assess capability maturity Level 1–7 from evidence."
+    )
+    registry_assess_p.add_argument("capability_id")
+    registry_assess_p.add_argument("--store", default=None, help="Path to evidence store SQLite.")
+    registry_assess_p.add_argument("--registry", default=None)
+    registry_assess_p.set_defaults(func=cmd_registry_assess_maturity)
+
+    registry_certify_p = registry_sub.add_parser(
+        "certify", help="Record a formal capability certification in the registry."
+    )
+    registry_certify_p.add_argument("capability_id")
+    registry_certify_p.add_argument("--level", type=int, required=True, help="Maturity level 1–7.")
+    registry_certify_p.add_argument("--by", default=None, help="Name of certifier.")
+    registry_certify_p.add_argument("--notes", default=None, help="Optional certification notes.")
+    registry_certify_p.add_argument("--registry", default=None)
+    registry_certify_p.set_defaults(func=cmd_registry_certify)
 
     delegation_p = subcommands.add_parser("delegation", help="Query delegation handoff chains.")
     delegation_sub = delegation_p.add_subparsers(dest="delegation_command", required=True)

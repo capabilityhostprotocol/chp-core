@@ -552,6 +552,84 @@ async def check_event_bus_capability(_host: Any) -> None:
         os.unlink(store_path)
 
 
+async def check_metrics_report(_host: Any) -> None:
+    """aggregate_session_metrics counts host-level invocations; format_prometheus emits chp_invocations_*."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        InMemoryKeywordRetrievalCapability,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+        aggregate_session_metrics,
+        format_prometheus,
+        register_retrieval_capability,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-metrics", store=store)
+        cap = InMemoryKeywordRetrievalCapability([])
+        register_retrieval_capability(host, cap)
+
+        corr = "conf-metrics-001"
+        for _ in range(3):
+            await host.ainvoke("retrieval.query", {"query": "test"}, correlation={"correlation_id": corr})
+
+        events = store.by_correlation(corr)
+        store.close()
+
+        report = aggregate_session_metrics(corr, events)
+        assert report.total_invocations == 3, f"expected 3 invocations, got {report.total_invocations}"
+        assert "retrieval.query" in report.capabilities, f"missing retrieval.query in {list(report.capabilities)}"
+        assert report.capabilities["retrieval.query"].invocations == 3
+
+        prom = format_prometheus(report)
+        assert "chp_invocations_total" in prom, "missing chp_invocations_total in Prometheus output"
+        assert 'capability_id="retrieval.query"' in prom
+    finally:
+        os.unlink(store_path)
+
+
+async def check_certification(_host: Any) -> None:
+    """assess_maturity returns MaturityAssessment; CertificationRecord serialises correctly."""
+    from chp_core import CertificationRecord, assess_maturity
+    from chp_core.types import CapabilityCategory, CapabilityDescriptor
+
+    descriptor = CapabilityDescriptor(
+        id="conf.cap",
+        version="1.0.0",
+        description="Conformance test capability",
+        category=CapabilityCategory.DATA_KNOWLEDGE,
+        tags=["conformance"],
+        emits=["execution_started", "execution_completed", "execution_failed", "execution_denied"],
+    )
+    events = [
+        {"event_type": "execution_started", "payload": {}},
+        {"event_type": "execution_completed", "payload": {}},
+    ]
+
+    assessment = assess_maturity("conf.cap", descriptor=descriptor, events=events)
+    assert assessment.level >= 2, f"expected level >= 2, got {assessment.level}"
+    assert len(assessment.criteria) == 7, f"expected 7 criteria, got {len(assessment.criteria)}"
+    for c in assessment.criteria:
+        assert isinstance(c.passed, bool), f"criterion passed must be bool, got {type(c.passed)}"
+
+    record = CertificationRecord(
+        capability_id="conf.cap",
+        level=2,
+        granted_by="conformance-runner",
+        certified_at="2026-01-01T00:00:00Z",
+    )
+    d = record.to_dict()
+    assert d["capability_id"] == "conf.cap"
+    assert d["level"] == 2
+    assert d["granted_by"] == "conformance-runner"
+    assert "certified_at" in d
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -568,6 +646,8 @@ CHECKS: list[tuple[str, Check]] = [
     ("knowledge graph capability", check_knowledge_graph_capability),
     ("workflow capability", check_workflow_capability),
     ("event bus capability", check_event_bus_capability),
+    ("metrics report", check_metrics_report),
+    ("certification", check_certification),
 ]
 
 

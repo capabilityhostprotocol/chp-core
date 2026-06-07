@@ -28,6 +28,8 @@ from .codex import (
     register_codex_observation_capabilities,
 )
 from .otel import evidence_to_otel_span, replay_to_otel_spans
+from .metrics import aggregate_session_metrics, format_prometheus
+from .certification import assess_maturity
 from .memory import MemoryCapability, register_memory_capability
 from .retrieval import (
     InMemoryKeywordRetrievalCapability,
@@ -110,6 +112,12 @@ from .types import (
     DOMAIN_EVENT_EVIDENCE_TYPES,
     DomainEventRecord,
     DomainEventQueryResult,
+    METRICS_EVIDENCE_TYPES,
+    CapabilityMetrics,
+    SessionMetricsReport,
+    MaturityCriterion,
+    MaturityAssessment,
+    CertificationRecord,
     RETRIEVAL_EVIDENCE_TYPES,
     RetrievalResult,
     SESSION_EVIDENCE_TYPES,
@@ -220,5 +228,14 @@ __all__ = [
     "DOMAIN_EVENT_EVIDENCE_TYPES",
     "DomainEventRecord",
     "DomainEventQueryResult",
+    "METRICS_EVIDENCE_TYPES",
+    "CapabilityMetrics",
+    "SessionMetricsReport",
+    "aggregate_session_metrics",
+    "format_prometheus",
+    "MaturityCriterion",
+    "MaturityAssessment",
+    "CertificationRecord",
+    "assess_maturity",
     "wrap_tool_call",
 ]

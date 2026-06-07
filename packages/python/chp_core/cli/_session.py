@@ -440,6 +440,27 @@ def cmd_session_graph_report(args: argparse.Namespace) -> int:
     return 0 if graph_events else 1
 
 
+def cmd_session_metrics_report(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..metrics import aggregate_session_metrics, format_prometheus
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    report = aggregate_session_metrics(args.session_id, events)
+
+    if getattr(args, "format", "json") == "prometheus":
+        print(format_prometheus(report), end="")
+    else:
+        print_json(report.to_dict())
+
+    return 0 if report.total_invocations > 0 else 1
+
+
 def cmd_session_export(args: argparse.Namespace) -> int:
     import sys
     from ..store import SQLiteEvidenceStore
