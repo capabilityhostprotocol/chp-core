@@ -134,8 +134,8 @@ jobs:
           POLICY=$(mktemp /tmp/chp-policy-XXXXXX.json)
           echo '{"version":"1","block_capability_ids":["claude_code.bash"],"block_patterns":[]}' > "$POLICY"
           echo '{"hook_event_name":"PreToolUse","session_id":"smoke-block","tool_name":"Bash","tool_input":{"command":"echo hi"},"cwd":"/tmp"}' \
-            | chp hook pre-tool --store "$STORE" --policy "$POLICY"; EXIT=$?
-          [ "$EXIT" -eq 2 ] || (echo "Expected exit 2 for blocked hook, got $EXIT" && exit 1)
+            | chp hook pre-tool --store "$STORE" --policy "$POLICY" || EXIT=$?
+          [ "${EXIT:-0}" -eq 2 ] || (echo "Expected exit 2 for blocked hook, got ${EXIT:-0}" && exit 1)
 
       - name: Smoke test session commands
         run: |
