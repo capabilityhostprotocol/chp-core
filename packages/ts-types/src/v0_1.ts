@@ -43,6 +43,67 @@ export const CHP_AGENTIC_EVIDENCE_TYPES = [
   "session_spawn",
 ] as const;
 
+export const CHP_SAFETY_EVIDENCE_TYPES = [
+  "safety_assessment_started",
+  "safety_assessment_completed",
+  "safety_guardrail_triggered",
+  "safety_action_blocked",
+  "safety_action_approved",
+] as const;
+
+export const CHP_COMPLIANCE_EVIDENCE_TYPES = [
+  "retention_policy_applied",
+  "evidence_purged",
+  "evidence_redacted",
+  "compliance_report_generated",
+] as const;
+
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+export type SafetyRecommendation = "allow" | "warn" | "require_approval" | "block";
+
+export interface RiskAssessment {
+  level: RiskLevel;
+  score: number;
+  factors: string[];
+  recommendation: SafetyRecommendation;
+  assessed_at: string;
+}
+
+export interface GuardrailDefinition {
+  id: string;
+  capability_id_pattern: string;
+  max_risk_level: RiskLevel;
+  requires_human_for: string[];
+}
+
+export interface SafetyReport {
+  report_id: string;
+  capability_id: string;
+  payload_hash: string;
+  assessment: RiskAssessment;
+  guardrails_evaluated: string[];
+  approved: boolean;
+  block_reason?: string | null;
+  generated_at: string;
+}
+
+export interface RetentionPolicy {
+  policy_id: string;
+  retain_days: number;
+  applies_to: string[];
+  redact_payload_after_days?: number | null;
+}
+
+export interface ComplianceReport {
+  report_id: string;
+  policy_ids: string[];
+  store_path: string;
+  events_inspected: number;
+  events_purged: number;
+  events_redacted: number;
+  generated_at: string;
+}
+
 export interface AssuranceMetadata {
   level: AssuranceLevel;
   evidence_policy?: string;

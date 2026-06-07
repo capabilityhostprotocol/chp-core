@@ -123,12 +123,28 @@ STATE_MACHINE_EVIDENCE_TYPES = {
     "state_machine_cancelled",
 }
 
+SAFETY_EVIDENCE_TYPES = {
+    "safety_assessment_started",
+    "safety_assessment_completed",
+    "safety_guardrail_triggered",
+    "safety_action_blocked",
+    "safety_action_approved",
+}
+
+COMPLIANCE_EVIDENCE_TYPES = {
+    "retention_policy_applied",
+    "evidence_purged",
+    "evidence_redacted",
+    "compliance_report_generated",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
 PlanStepStatus = Literal["pending", "running", "completed", "failed", "skipped"]
 DelegationStatus = Literal["pending", "accepted", "completed", "rejected", "reassigned"]
 StateMachineStatus = Literal["queued", "running", "blocked", "done", "failed", "cancelled"]
+RiskLevel = Literal["low", "medium", "high", "critical"]
 
 ExecutionOutcome = Literal["success", "failure", "denied", "skipped"]
 
@@ -323,6 +339,79 @@ class StateMachineTransitionResult:
     allowed: bool
     reason: str | None
     updated_at: str
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class RiskAssessment:
+    """Structured risk evaluation result for a capability invocation (§8.6)."""
+
+    level: RiskLevel
+    score: float
+    factors: list[str]
+    recommendation: Literal["allow", "warn", "require_approval", "block"]
+    assessed_at: str
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class GuardrailDefinition:
+    """Rule that caps the allowed risk level for a capability ID pattern (§8.6)."""
+
+    id: str
+    capability_id_pattern: str
+    max_risk_level: RiskLevel
+    requires_human_for: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class SafetyReport:
+    """Full safety evaluation including guardrail outcomes for an invocation (§8.6)."""
+
+    report_id: str
+    capability_id: str
+    payload_hash: str
+    assessment: RiskAssessment
+    guardrails_evaluated: list[str]
+    approved: bool
+    block_reason: str | None
+    generated_at: str
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class RetentionPolicy:
+    """Evidence retention and payload-redaction rule for a capability pattern (§8.5)."""
+
+    policy_id: str
+    retain_days: int
+    applies_to: list[str]
+    redact_payload_after_days: int | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class ComplianceReport:
+    """Result of applying retention policies to the evidence store (§8.5)."""
+
+    report_id: str
+    policy_ids: list[str]
+    store_path: str
+    events_inspected: int
+    events_purged: int
+    events_redacted: int
+    generated_at: str
 
     def to_dict(self) -> JSON:
         return asdict(self)

@@ -72,6 +72,8 @@ from .agent_interface import (
     capability_to_openai_tool,
     capabilities_to_tool_list,
 )
+from .safety import RuleBasedSafetyEvaluator, register_safety_capability
+from .compliance import SQLiteComplianceManager, register_compliance_capability
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -132,6 +134,14 @@ from .types import (
     StateMachineTransitionResult,
     CostHint,
     SafetyHint,
+    SAFETY_EVIDENCE_TYPES,
+    RiskLevel,
+    RiskAssessment,
+    GuardrailDefinition,
+    SafetyReport,
+    COMPLIANCE_EVIDENCE_TYPES,
+    RetentionPolicy,
+    ComplianceReport,
     CapabilityMetrics,
     SessionMetricsReport,
     MaturityCriterion,
@@ -273,4 +283,16 @@ __all__ = [
     "capability_to_openai_tool",
     "capabilities_to_tool_list",
     "wrap_tool_call",
+    "RuleBasedSafetyEvaluator",
+    "register_safety_capability",
+    "SAFETY_EVIDENCE_TYPES",
+    "RiskLevel",
+    "RiskAssessment",
+    "GuardrailDefinition",
+    "SafetyReport",
+    "SQLiteComplianceManager",
+    "register_compliance_capability",
+    "COMPLIANCE_EVIDENCE_TYPES",
+    "RetentionPolicy",
+    "ComplianceReport",
 ]

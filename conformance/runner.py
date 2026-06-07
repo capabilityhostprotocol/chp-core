@@ -853,6 +853,116 @@ async def check_agent_interface(_host: Any) -> None:
     assert "parameters" in openai_tools[0]["function"]
 
 
+async def check_safety_capability(_host: Any) -> None:
+    """safety.assess returns structured risk assessment with evidence; high-risk caps score higher."""
+    import os
+    import tempfile
+
+    from chp_core import LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core.safety import RuleBasedSafetyEvaluator, register_safety_capability
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-safety", store=store)
+        register_safety_capability(host, RuleBasedSafetyEvaluator())
+
+        corr = "conf-safety-001"
+        r_low = await host.ainvoke(
+            "safety.assess",
+            {"capability_id": "retrieval.query", "payload": {"query": "hello"}},
+            correlation={"correlation_id": corr},
+        )
+        assert r_low.success, f"safety.assess failed: {r_low}"
+        assert "level" in r_low.data, f"missing level in {r_low.data}"
+        assert r_low.data["recommendation"] in ("allow", "warn", "require_approval", "block")
+        assert 0.0 <= r_low.data["score"] <= 1.0
+        assert r_low.data["level"] == "low", f"expected low for retrieval: {r_low.data}"
+
+        r_high = await host.ainvoke(
+            "safety.assess",
+            {"capability_id": "claude_code.bash", "payload": {"command": "echo hello"}},
+            correlation={"correlation_id": corr},
+        )
+        assert r_high.success, f"safety.assess high failed: {r_high}"
+        assert r_high.data["level"] in ("medium", "high", "critical"), (
+            f"expected elevated risk for bash: {r_high.data}"
+        )
+        assert r_high.data["score"] > r_low.data["score"], "bash should score higher than retrieval"
+
+        events = host.replay(corr)
+        types = {e["event_type"] for e in events}
+        assert "safety_assessment_started" in types, f"missing safety_assessment_started: {types}"
+        assert "safety_assessment_completed" in types, f"missing safety_assessment_completed: {types}"
+
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
+async def check_compliance_capability(_host: Any) -> None:
+    """compliance.apply_retention purges old evidence; compliance.report emits compliance events."""
+    import os
+    import tempfile
+
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core.compliance import SQLiteComplianceManager, register_compliance_capability
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-compliance", store=store)
+
+        async def _noop(ctx, payload):
+            return {"ok": True}
+
+        host.register(
+            CapabilityDescriptor(id="test.noop", version="1.0.0", description="noop"),
+            _noop,
+        )
+        for i in range(3):
+            await host.ainvoke("test.noop", {}, correlation={"correlation_id": f"seed-{i}"})
+
+        manager = SQLiteComplianceManager(store)
+        register_compliance_capability(host, manager)
+
+        corr = "conf-compliance-001"
+        r_report = await host.ainvoke(
+            "compliance.report",
+            {},
+            correlation={"correlation_id": corr},
+        )
+        assert r_report.success, f"compliance.report failed: {r_report}"
+        assert r_report.data["events_inspected"] > 0, "expected events from seeding"
+
+        r_apply = await host.ainvoke(
+            "compliance.apply_retention",
+            {
+                "policies": [
+                    {
+                        "policy_id": "purge-all",
+                        "retain_days": 0,
+                        "applies_to": ["test.noop"],
+                    }
+                ]
+            },
+            correlation={"correlation_id": corr},
+        )
+        assert r_apply.success, f"compliance.apply_retention failed: {r_apply}"
+        assert r_apply.data["events_purged"] > 0, f"expected purged events: {r_apply.data}"
+
+        events = host.replay(corr)
+        types = {e["event_type"] for e in events}
+        assert "compliance_report_generated" in types, f"missing compliance_report_generated: {types}"
+        assert "retention_policy_applied" in types, f"missing retention_policy_applied: {types}"
+
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -876,6 +986,8 @@ CHECKS: list[tuple[str, Check]] = [
     ("composability declaration", check_composability_declaration),
     ("state machine capability", check_state_machine_capability),
     ("agent interface", check_agent_interface),
+    ("safety capability", check_safety_capability),
+    ("compliance capability", check_compliance_capability),
 ]
 
 
