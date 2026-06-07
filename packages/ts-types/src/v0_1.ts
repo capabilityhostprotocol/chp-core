@@ -43,6 +43,46 @@ export const CHP_AGENTIC_EVIDENCE_TYPES = [
   "session_spawn",
 ] as const;
 
+export const CHP_INCIDENT_EVIDENCE_TYPES = [
+  "incident_opened",
+  "incident_escalated",
+  "incident_remediation_applied",
+  "incident_resolved",
+  "incident_closed",
+  "incident_trigger_fired",
+] as const;
+
+export type IncidentSeverity = "P1" | "P2" | "P3" | "P4";
+export type IncidentStatus = "open" | "investigating" | "escalated" | "resolved" | "closed";
+export type RemediationActionType = "auto" | "manual" | "escalate";
+
+export interface IncidentTrigger {
+  pattern: string;
+  threshold: number;
+  window_seconds: number;
+}
+
+export interface Incident {
+  incident_id: string;
+  title: string;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  trigger?: IncidentTrigger | null;
+  correlation_ids: string[];
+  detected_at: string;
+  resolved_at?: string | null;
+  timeline: JsonObject[];
+}
+
+export interface RemediationAction {
+  action_id: string;
+  incident_id: string;
+  action_type: RemediationActionType;
+  description: string;
+  executed_at: string;
+  outcome?: string | null;
+}
+
 export const CHP_SAFETY_EVIDENCE_TYPES = [
   "safety_assessment_started",
   "safety_assessment_completed",

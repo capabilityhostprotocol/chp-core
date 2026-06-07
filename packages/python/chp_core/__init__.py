@@ -74,6 +74,7 @@ from .agent_interface import (
 )
 from .safety import RuleBasedSafetyEvaluator, register_safety_capability
 from .compliance import SQLiteComplianceManager, register_compliance_capability
+from .incident import InMemoryIncidentManager, register_incident_capability
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -142,6 +143,12 @@ from .types import (
     COMPLIANCE_EVIDENCE_TYPES,
     RetentionPolicy,
     ComplianceReport,
+    INCIDENT_EVIDENCE_TYPES,
+    IncidentSeverity,
+    IncidentStatus,
+    IncidentTrigger,
+    Incident,
+    RemediationAction,
     CapabilityMetrics,
     SessionMetricsReport,
     MaturityCriterion,
@@ -295,4 +302,12 @@ __all__ = [
     "COMPLIANCE_EVIDENCE_TYPES",
     "RetentionPolicy",
     "ComplianceReport",
+    "InMemoryIncidentManager",
+    "register_incident_capability",
+    "INCIDENT_EVIDENCE_TYPES",
+    "IncidentSeverity",
+    "IncidentStatus",
+    "IncidentTrigger",
+    "Incident",
+    "RemediationAction",
 ]

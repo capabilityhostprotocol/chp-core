@@ -853,6 +853,77 @@ async def check_agent_interface(_host: Any) -> None:
     assert "parameters" in openai_tools[0]["function"]
 
 
+async def check_incident_capability(_host: Any) -> None:
+    """incident.* capabilities open, escalate, resolve, and close incidents with evidence."""
+    import os
+    import tempfile
+
+    from chp_core import LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core.incident import InMemoryIncidentManager, register_incident_capability
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-incident", store=store)
+        register_incident_capability(host, InMemoryIncidentManager())
+
+        corr = "conf-incident-001"
+        r_open = await host.ainvoke(
+            "incident.open",
+            {"title": "DB latency spike", "severity": "P2", "correlation_ids": ["corr-001"]},
+            correlation={"correlation_id": corr},
+        )
+        assert r_open.success, f"incident.open failed: {r_open}"
+        incident_id = r_open.data["incident_id"]
+        assert r_open.data["status"] == "open"
+        assert r_open.data["severity"] == "P2"
+
+        r_escalate = await host.ainvoke(
+            "incident.escalate",
+            {"incident_id": incident_id, "note": "paging on-call"},
+            correlation={"correlation_id": corr},
+        )
+        assert r_escalate.success, f"incident.escalate failed: {r_escalate}"
+        assert r_escalate.data["status"] == "escalated"
+
+        r_resolve = await host.ainvoke(
+            "incident.resolve",
+            {"incident_id": incident_id, "note": "rolled back bad deploy"},
+            correlation={"correlation_id": corr},
+        )
+        assert r_resolve.success, f"incident.resolve failed: {r_resolve}"
+        assert r_resolve.data["status"] == "resolved"
+        assert r_resolve.data["resolved_at"] is not None
+
+        r_close = await host.ainvoke(
+            "incident.close",
+            {"incident_id": incident_id},
+            correlation={"correlation_id": corr},
+        )
+        assert r_close.success, f"incident.close failed: {r_close}"
+        assert r_close.data["status"] == "closed"
+
+        r_list = await host.ainvoke(
+            "incident.list",
+            {"status": "closed"},
+            correlation={"correlation_id": corr},
+        )
+        assert r_list.success, f"incident.list failed: {r_list}"
+        assert r_list.data["count"] == 1
+
+        events = host.replay(corr)
+        types = {e["event_type"] for e in events}
+        assert "incident_opened" in types, f"missing incident_opened: {types}"
+        assert "incident_escalated" in types, f"missing incident_escalated: {types}"
+        assert "incident_resolved" in types, f"missing incident_resolved: {types}"
+        assert "incident_closed" in types, f"missing incident_closed: {types}"
+
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
 async def check_safety_capability(_host: Any) -> None:
     """safety.assess returns structured risk assessment with evidence; high-risk caps score higher."""
     import os
@@ -988,6 +1059,7 @@ CHECKS: list[tuple[str, Check]] = [
     ("agent interface", check_agent_interface),
     ("safety capability", check_safety_capability),
     ("compliance capability", check_compliance_capability),
+    ("incident capability", check_incident_capability),
 ]
 
 

@@ -123,6 +123,15 @@ STATE_MACHINE_EVIDENCE_TYPES = {
     "state_machine_cancelled",
 }
 
+INCIDENT_EVIDENCE_TYPES = {
+    "incident_opened",
+    "incident_escalated",
+    "incident_remediation_applied",
+    "incident_resolved",
+    "incident_closed",
+    "incident_trigger_fired",
+}
+
 SAFETY_EVIDENCE_TYPES = {
     "safety_assessment_started",
     "safety_assessment_completed",
@@ -145,6 +154,8 @@ PlanStepStatus = Literal["pending", "running", "completed", "failed", "skipped"]
 DelegationStatus = Literal["pending", "accepted", "completed", "rejected", "reassigned"]
 StateMachineStatus = Literal["queued", "running", "blocked", "done", "failed", "cancelled"]
 RiskLevel = Literal["low", "medium", "high", "critical"]
+IncidentSeverity = Literal["P1", "P2", "P3", "P4"]
+IncidentStatus = Literal["open", "investigating", "escalated", "resolved", "closed"]
 
 ExecutionOutcome = Literal["success", "failure", "denied", "skipped"]
 
@@ -412,6 +423,52 @@ class ComplianceReport:
     events_purged: int
     events_redacted: int
     generated_at: str
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class IncidentTrigger:
+    """Pattern that auto-opens an incident when threshold events appear in a window (§9.5)."""
+
+    pattern: str
+    threshold: int
+    window_seconds: int
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class Incident:
+    """Named event with an explicit lifecycle: open → investigating → resolved → closed (§9.5)."""
+
+    incident_id: str
+    title: str
+    severity: IncidentSeverity
+    status: IncidentStatus
+    trigger: IncidentTrigger | None
+    correlation_ids: list[str]
+    detected_at: str
+    resolved_at: str | None
+    timeline: list[JSON]
+
+    def to_dict(self) -> JSON:
+        data = asdict(self)
+        return data
+
+
+@dataclass(slots=True)
+class RemediationAction:
+    """A single remediation step linked to an incident (§9.5)."""
+
+    action_id: str
+    incident_id: str
+    action_type: Literal["auto", "manual", "escalate"]
+    description: str
+    executed_at: str
+    outcome: str | None = None
 
     def to_dict(self) -> JSON:
         return asdict(self)
