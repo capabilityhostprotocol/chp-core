@@ -155,7 +155,7 @@ export interface ToolUseEvidence extends ExecutionEvidence {
   payload: {
     tool_name: string;
     cwd?: string;
-    tool_input?: Record<string, unknown>;
+    tool_input?: JsonObject;
     tool_output_preview?: string;
     exit_code?: number | null;
   };
@@ -166,7 +166,7 @@ export interface PreToolEvidence extends ExecutionEvidence {
   payload: {
     tool_name: string;
     cwd?: string;
-    tool_input?: Record<string, unknown>;
+    tool_input?: JsonObject;
     blocked: boolean;
     block_reason?: string | null;
   };
