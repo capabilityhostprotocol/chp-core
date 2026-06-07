@@ -189,6 +189,7 @@ PYTHONPATH=packages/python python -m chp_core.cli work vc precommit \\
   --check alignment \\
   --check conformance \\
   --check schemas \\
+  --check mypy \\
   --repo-root . 2>&1
 """
 
@@ -242,6 +243,7 @@ cd "$(git rev-parse --show-toplevel)"
 PYTHONPATH=packages/python python -m chp_core.cli work vc precommit \\
     --check conformance \\
     --check schemas \\
+    --check mypy \\
     --check collect-check \\
     --repo-root . 2>&1
 """
