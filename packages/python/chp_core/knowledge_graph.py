@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .types import (
     CapabilityCategory,
     CapabilityDescriptor,
@@ -179,7 +181,7 @@ class InMemoryKnowledgeGraph(KnowledgeGraphCapability):
         )
 
 
-def register_knowledge_graph_capability(host: object, kg: KnowledgeGraphCapability) -> None:
+def register_knowledge_graph_capability(host: Any, kg: KnowledgeGraphCapability) -> None:
     prefix = kg.capability_id_prefix
     version = kg.capability_version
 

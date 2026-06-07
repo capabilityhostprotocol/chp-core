@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .types import (
     CapabilityCategory,
@@ -142,7 +142,7 @@ class InMemoryTextTransformationCapability(TransformationCapability):
         return result
 
 
-def register_transformation_capability(host: object, cap: TransformationCapability) -> None:
+def register_transformation_capability(host: Any, cap: TransformationCapability) -> None:
     import time
 
     async def _transform(ctx, payload) -> dict:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .types import (
     CapabilityCategory,
@@ -105,7 +105,7 @@ class InMemoryTextIngestionCapability(IngestionCapability):
         return list(self._store)
 
 
-def register_ingestion_capability(host: object, cap: IngestionCapability) -> None:
+def register_ingestion_capability(host: Any, cap: IngestionCapability) -> None:
     import time
 
     async def _ingest(ctx, payload) -> dict:

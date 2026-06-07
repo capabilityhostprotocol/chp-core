@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .types import (
     CapabilityCategory,
     CapabilityDescriptor,
@@ -45,7 +47,7 @@ class InMemoryWorkflow(WorkflowCapability):
 
 
 def register_workflow_capability(
-    host: object,
+    host: Any,
     wf: WorkflowCapability | None = None,
 ) -> None:
     wf = wf or WorkflowCapability()

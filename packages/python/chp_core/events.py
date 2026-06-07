@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Any
 
 from .types import (
     CapabilityCategory,
@@ -45,7 +46,7 @@ class EventBusCapability:
         self,
         event_type: str,
         source: str,
-        data: object,
+        data: dict[str, Any],
         *,
         correlation_id: str | None = None,
     ) -> DomainEventRecord:
@@ -78,7 +79,7 @@ class InMemoryEventBus(EventBusCapability):
         self,
         event_type: str,
         source: str,
-        data: object,
+        data: dict[str, Any],
         *,
         correlation_id: str | None = None,
     ) -> DomainEventRecord:
@@ -115,7 +116,7 @@ class InMemoryEventBus(EventBusCapability):
         )
 
 
-def register_event_bus_capability(host: object, bus: EventBusCapability) -> None:
+def register_event_bus_capability(host: Any, bus: EventBusCapability) -> None:
     prefix = bus.capability_id_prefix
     version = bus.capability_version
 
@@ -133,7 +134,7 @@ def register_event_bus_capability(host: object, bus: EventBusCapability) -> None
     async def _emit_event(ctx, payload) -> dict:
         event_type: str = payload.get("event_type", "unknown")
         source: str = payload.get("source", "")
-        data: object = payload.get("data") or {}
+        data: dict[str, Any] = payload.get("data") or {}
         correlation_id: str | None = payload.get("correlation_id")
 
         ctx.emit(
