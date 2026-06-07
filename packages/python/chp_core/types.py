@@ -72,6 +72,14 @@ TRANSFORMATION_EVIDENCE_TYPES = {
     "transformation_failed",
 }
 
+GRAPH_EVIDENCE_TYPES = {
+    "graph_entity_added",
+    "graph_relation_added",
+    "graph_queried",
+    "graph_traversed",
+    "graph_operation_failed",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
@@ -642,6 +650,45 @@ class TransformationResult:
     content: str
     transform_type: str
     record: TransformationRecord
+    latency_ms: float | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class EntityRecord:
+    """A node in the knowledge graph."""
+
+    entity_id: str
+    entity_type: str
+    label: str | None = None
+    properties: JSON = field(default_factory=dict)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class RelationRecord:
+    """A directed edge in the knowledge graph."""
+
+    from_entity_id: str
+    to_entity_id: str
+    relation_type: str
+    properties: JSON = field(default_factory=dict)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class GraphQueryResult:
+    """Result returned by a knowledge graph query or traversal."""
+
+    entities: list[EntityRecord]
+    entity_count: int
+    query_type: str
     latency_ms: float | None = None
 
     def to_dict(self) -> JSON:

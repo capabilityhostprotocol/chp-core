@@ -357,6 +357,83 @@ async def check_transformation_capability(_host: Any) -> None:
         os.unlink(store_path)
 
 
+async def check_knowledge_graph_capability(_host: Any) -> None:
+    """graph.* operations emit graph_entity_added, graph_relation_added, graph_queried, graph_traversed."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        InMemoryKnowledgeGraph,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+        register_knowledge_graph_capability,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-graph", store=store)
+        kg = InMemoryKnowledgeGraph()
+        register_knowledge_graph_capability(host, kg)
+
+        r1 = await host.ainvoke(
+            "graph.add_entity",
+            {"entity_id": "p1", "entity_type": "person", "label": "Alice"},
+            correlation={"correlation_id": "conf-graph-001"},
+        )
+        assert r1.success, f"add_entity failed: {r1}"
+
+        r2 = await host.ainvoke(
+            "graph.add_entity",
+            {"entity_id": "p2", "entity_type": "person", "label": "Bob"},
+            correlation={"correlation_id": "conf-graph-001"},
+        )
+        assert r2.success, f"add_entity 2 failed: {r2}"
+
+        r3 = await host.ainvoke(
+            "graph.add_relation",
+            {"from_entity_id": "p1", "to_entity_id": "p2", "relation_type": "knows"},
+            correlation={"correlation_id": "conf-graph-001"},
+        )
+        assert r3.success, f"add_relation failed: {r3}"
+
+        r4 = await host.ainvoke(
+            "graph.query_entities",
+            {"entity_type": "person"},
+            correlation={"correlation_id": "conf-graph-001"},
+        )
+        assert r4.success, f"query_entities failed: {r4}"
+
+        r5 = await host.ainvoke(
+            "graph.traverse",
+            {"start_id": "p1", "depth": 1},
+            correlation={"correlation_id": "conf-graph-001"},
+        )
+        assert r5.success, f"traverse failed: {r5}"
+
+        events = host.replay("conf-graph-001")
+        types = {e["event_type"] for e in events}
+        assert "graph_entity_added" in types, f"missing graph_entity_added: {types}"
+        assert "graph_relation_added" in types, f"missing graph_relation_added: {types}"
+        assert "graph_queried" in types, f"missing graph_queried: {types}"
+        assert "graph_traversed" in types, f"missing graph_traversed: {types}"
+
+        entity_added = next(e for e in events if e["event_type"] == "graph_entity_added")
+        payload = entity_added.get("payload") or {}
+        assert "entity_id" in payload, f"graph_entity_added missing entity_id: {payload}"
+        assert "entity_type" in payload, f"graph_entity_added missing entity_type: {payload}"
+
+        queried = next(e for e in events if e["event_type"] == "graph_queried")
+        q_payload = queried.get("payload") or {}
+        assert "entity_count" in q_payload, f"graph_queried missing entity_count: {q_payload}"
+        assert "entities" not in q_payload, f"graph_queried must not include entities: {q_payload}"
+
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -370,6 +447,7 @@ CHECKS: list[tuple[str, Check]] = [
     ("retrieval capability", check_retrieval_capability),
     ("ingestion capability", check_ingestion_capability),
     ("transformation capability", check_transformation_capability),
+    ("knowledge graph capability", check_knowledge_graph_capability),
 ]
 
 

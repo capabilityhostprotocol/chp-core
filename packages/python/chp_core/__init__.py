@@ -44,6 +44,11 @@ from .transformation import (
     InMemoryTextTransformationCapability,
     register_transformation_capability,
 )
+from .knowledge_graph import (
+    KnowledgeGraphCapability,
+    InMemoryKnowledgeGraph,
+    register_knowledge_graph_capability,
+)
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -85,6 +90,10 @@ from .types import (
     TRANSFORMATION_EVIDENCE_TYPES,
     TransformationRecord,
     TransformationResult,
+    GRAPH_EVIDENCE_TYPES,
+    EntityRecord,
+    RelationRecord,
+    GraphQueryResult,
     RETRIEVAL_EVIDENCE_TYPES,
     RetrievalResult,
     SESSION_EVIDENCE_TYPES,
@@ -176,5 +185,12 @@ __all__ = [
     "TransformationResult",
     "TRANSFORMATION_EVIDENCE_TYPES",
     "register_transformation_capability",
+    "KnowledgeGraphCapability",
+    "InMemoryKnowledgeGraph",
+    "register_knowledge_graph_capability",
+    "GRAPH_EVIDENCE_TYPES",
+    "EntityRecord",
+    "RelationRecord",
+    "GraphQueryResult",
     "wrap_tool_call",
 ]

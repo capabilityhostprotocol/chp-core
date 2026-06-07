@@ -336,6 +336,44 @@ def cmd_session_transformation_report(args: argparse.Namespace) -> int:
     return 0 if transformation_events else 1
 
 
+def cmd_session_graph_report(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..types import GRAPH_EVIDENCE_TYPES
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    graph_events = [e for e in events if e.get("event_type") in GRAPH_EVIDENCE_TYPES]
+    entities_added = len([e for e in graph_events if e.get("event_type") == "graph_entity_added"])
+    relations_added = len([e for e in graph_events if e.get("event_type") == "graph_relation_added"])
+    queries = len([e for e in graph_events if e.get("event_type") == "graph_queried"])
+    traversals = len([e for e in graph_events if e.get("event_type") == "graph_traversed"])
+
+    query_events = [e for e in graph_events if e.get("event_type") in {"graph_queried", "graph_traversed"}]
+    latencies = [
+        (e.get("payload") or {}).get("latency_ms")
+        for e in query_events
+        if (e.get("payload") or {}).get("latency_ms") is not None
+    ]
+    avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
+
+    print_json({
+        "session_id": args.session_id,
+        "graph_event_count": len(graph_events),
+        "entities_added": entities_added,
+        "relations_added": relations_added,
+        "queries": queries,
+        "traversals": traversals,
+        "avg_query_latency_ms": avg_latency,
+        "events": graph_events,
+    })
+    return 0 if graph_events else 1
+
+
 def cmd_session_export(args: argparse.Namespace) -> int:
     import sys
     from ..store import SQLiteEvidenceStore
