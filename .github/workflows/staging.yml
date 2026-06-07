@@ -87,14 +87,11 @@ jobs:
             --override-ini="addopts=" \
             -m slow -k "concurrent" -v
 
-  # ── Job 3: Publish to TestPyPI ────────────────────────────────────────────
-  publish-testpypi:
-    name: Publish to TestPyPI
+  # ── Job 3: Build wheel + smoke test from local dist ──────────────────────
+  smoke-build:
+    name: Build + smoke test (local wheel)
     runs-on: ubuntu-latest
     needs: [extended-tests, stress-concurrent]
-    environment: staging
-    permissions:
-      id-token: write  # OIDC trusted publishing
 
     steps:
       - name: Check out repository
@@ -108,47 +105,11 @@ jobs:
       - name: Install build tools
         run: pip install build
 
-      - name: Build package
+      - name: Build wheel + sdist
         run: python -m build packages/python
 
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          packages-dir: packages/python/dist/
-          skip-existing: true
-
-  # ── Job 4: Smoke test against TestPyPI install ────────────────────────────
-  smoke-testpypi:
-    name: Smoke test (TestPyPI install)
-    runs-on: ubuntu-latest
-    needs: [publish-testpypi]
-
-    steps:
-      - name: Extract version from tag
-        id: version
-        run: |
-          TAG="${GITHUB_REF_NAME}"          # e.g. v0.2.3-rc.1
-          VERSION="${TAG#v}"                # e.g. 0.2.3-rc.1
-          BASE="${VERSION%-rc.*}"           # e.g. 0.2.3
-          echo "version=$BASE" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install from TestPyPI (retry for propagation delay)
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          for i in 1 2 3 4 5; do
-            pip install \
-              --index-url https://test.pypi.org/simple/ \
-              --extra-index-url https://pypi.org/simple/ \
-              "chp-core==$VERSION" && break
-            echo "Attempt $i failed — waiting 30s..."
-            sleep 30
-          done
+      - name: Install from local wheel (clean env)
+        run: pip install packages/python/dist/*.whl
 
       - name: Verify CLI is reachable
         run: chp --help | grep -q "CHP"

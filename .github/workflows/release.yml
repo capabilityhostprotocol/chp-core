@@ -15,6 +15,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+      - '!v*.*.*-rc.*'  # RC tags → staging.yml only
     branches-ignore:
       - '**'  # tags only — branch pushes do not trigger release
 
