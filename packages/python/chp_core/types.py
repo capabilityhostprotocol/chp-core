@@ -113,11 +113,22 @@ VERSION_CONTROL_EVIDENCE_TYPES = {
     "release_tag_pushed",
 }
 
+STATE_MACHINE_EVIDENCE_TYPES = {
+    "state_machine_created",
+    "state_machine_transition_started",
+    "state_machine_transition_completed",
+    "state_machine_blocked",
+    "state_machine_completed",
+    "state_machine_failed",
+    "state_machine_cancelled",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
 PlanStepStatus = Literal["pending", "running", "completed", "failed", "skipped"]
 DelegationStatus = Literal["pending", "accepted", "completed", "rejected", "reassigned"]
+StateMachineStatus = Literal["queued", "running", "blocked", "done", "failed", "cancelled"]
 
 ExecutionOutcome = Literal["success", "failure", "denied", "skipped"]
 
@@ -245,6 +256,79 @@ class PolicyDescriptor:
 
 
 @dataclass(slots=True)
+class CostHint:
+    """Declared cost and performance expectations for a capability (§7.2)."""
+
+    token_estimate: int | None = None
+    latency_ms_p50: int | None = None
+    idempotent: bool = True
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class SafetyHint:
+    """Declared safety characteristics for a capability (§7.2)."""
+
+    reversible: bool = True
+    destructive: bool = False
+    requires_human_review: bool = False
+    blast_radius: Literal["local", "session", "user", "system"] = "local"
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class StateMachineDefinition:
+    """Blueprint for a state machine instance (§6.3)."""
+
+    states: list[str]
+    transitions: dict[str, list[str]]  # from_state -> list[to_state]
+    initial_state: str
+    terminal_states: list[str]
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class StateMachineRecord:
+    """Persistent state machine instance (§6.3)."""
+
+    machine_id: str
+    name: str
+    definition: StateMachineDefinition
+    current_state: str
+    status: StateMachineStatus
+    context: JSON
+    created_at: str
+    updated_at: str
+    history: list[JSON]  # [{from, to, event, at}]
+
+    def to_dict(self) -> JSON:
+        data = asdict(self)
+        return data
+
+
+@dataclass(slots=True)
+class StateMachineTransitionResult:
+    """Result of a state machine transition attempt (§6.3)."""
+
+    machine_id: str
+    from_state: str
+    to_state: str
+    event: str
+    allowed: bool
+    reason: str | None
+    updated_at: str
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class AutonomyProfile:
     """Autonomy control surface for a CapabilityDescriptor (v0.3.4).
 
@@ -316,6 +400,8 @@ class CapabilityDescriptor:
     host_requirements: HostRequirements | None = None
     policy: PolicyDescriptor | None = None
     autonomy: AutonomyProfile | None = None
+    cost_hint: CostHint | None = None       # §7.2 agent interface
+    safety_hint: SafetyHint | None = None   # §7.2 agent interface
 
     @property
     def capability_uri(self) -> str:
@@ -325,14 +411,9 @@ class CapabilityDescriptor:
         data = asdict(self)
         data["capability_uri"] = self.capability_uri
         # omit null optional sub-objects to keep serialised output lean
-        if data.get("depends_on") is None:
-            del data["depends_on"]
-        if data.get("host_requirements") is None:
-            del data["host_requirements"]
-        if data.get("policy") is None:
-            del data["policy"]
-        if data.get("autonomy") is None:
-            del data["autonomy"]
+        for key in ("depends_on", "host_requirements", "policy", "autonomy", "cost_hint", "safety_hint"):
+            if data.get(key) is None:
+                data.pop(key, None)
         return data
 
 

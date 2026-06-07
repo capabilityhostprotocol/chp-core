@@ -58,6 +58,52 @@ export interface InvariantDescriptor {
   parameters?: JsonObject;
 }
 
+export interface CostHint {
+  token_estimate?: number | null;
+  latency_ms_p50?: number | null;
+  idempotent?: boolean;
+}
+
+export type BlastRadius = "local" | "session" | "user" | "system";
+
+export interface SafetyHint {
+  reversible?: boolean;
+  destructive?: boolean;
+  requires_human_review?: boolean;
+  blast_radius?: BlastRadius;
+}
+
+export type StateMachineStatus = "queued" | "running" | "blocked" | "done" | "failed" | "cancelled";
+
+export interface StateMachineDefinition {
+  states: string[];
+  transitions: Record<string, string[]>;
+  initial_state: string;
+  terminal_states: string[];
+}
+
+export interface StateMachineRecord {
+  machine_id: string;
+  name: string;
+  definition: StateMachineDefinition;
+  current_state: string;
+  status: StateMachineStatus;
+  context: JsonObject;
+  created_at: string;
+  updated_at: string;
+  history: JsonObject[];
+}
+
+export interface StateMachineTransitionResult {
+  machine_id: string;
+  from_state: string;
+  to_state: string;
+  event: string;
+  allowed: boolean;
+  reason?: string | null;
+  updated_at: string;
+}
+
 export interface CapabilityDescriptor {
   id: string;
   version: string;
@@ -73,6 +119,9 @@ export interface CapabilityDescriptor {
   risk?: CapabilityRisk;
   assurance?: AssuranceMetadata;
   metadata?: JsonObject;
+  depends_on?: string[] | null;
+  cost_hint?: CostHint | null;
+  safety_hint?: SafetyHint | null;
 }
 
 export interface HostDescriptor {

@@ -756,6 +756,103 @@ async def check_composability_declaration(_host: Any) -> None:
         os.unlink(store_path)
 
 
+async def check_state_machine_capability(_host: Any) -> None:
+    """state_machine.* capabilities create, transition, and query machine instances with evidence."""
+    import os
+    import tempfile
+
+    from chp_core import LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core.state_machine import InMemoryStateMachine, register_state_machine_capability
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-sm", store=store)
+        register_state_machine_capability(host, InMemoryStateMachine())
+
+        corr = "conf-sm-001"
+        r_create = await host.ainvoke(
+            "state_machine.create",
+            {
+                "name": "release-gate",
+                "definition": {
+                    "states": ["pending", "approved", "rejected"],
+                    "transitions": {"pending": ["approved", "rejected"]},
+                    "initial_state": "pending",
+                    "terminal_states": ["approved", "rejected"],
+                },
+                "context": {"version": "0.5.0"},
+            },
+            correlation={"correlation_id": corr},
+        )
+        assert r_create.success, f"state_machine.create failed: {r_create}"
+        machine_id = r_create.data["machine_id"]
+        assert r_create.data["current_state"] == "pending"
+
+        r_transition = await host.ainvoke(
+            "state_machine.transition",
+            {"machine_id": machine_id, "event": "approved"},
+            correlation={"correlation_id": corr},
+        )
+        assert r_transition.success, f"state_machine.transition failed: {r_transition}"
+        assert r_transition.data["allowed"] is True
+        assert r_transition.data["to_state"] == "approved"
+
+        r_get = await host.ainvoke(
+            "state_machine.get",
+            {"machine_id": machine_id},
+            correlation={"correlation_id": corr},
+        )
+        assert r_get.success, f"state_machine.get failed: {r_get}"
+        assert r_get.data["current_state"] == "approved"
+        assert r_get.data["status"] == "done"
+
+        events = host.replay(corr)
+        types = {e["event_type"] for e in events}
+        assert "state_machine_created" in types, f"missing state_machine_created: {types}"
+        assert "state_machine_completed" in types, f"missing state_machine_completed: {types}"
+
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
+async def check_agent_interface(_host: Any) -> None:
+    """CostHint and SafetyHint serialize correctly; capabilities_to_tool_list emits valid tool dicts."""
+    from chp_core.agent_interface import capabilities_to_tool_list, capability_to_anthropic_tool
+    from chp_core.types import CapabilityDescriptor, CostHint, SafetyHint
+
+    desc = CapabilityDescriptor(
+        id="conf.action",
+        version="1.0.0",
+        description="Conformance action.",
+        input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+        cost_hint=CostHint(token_estimate=200, latency_ms_p50=50),
+        safety_hint=SafetyHint(reversible=False, destructive=True),
+    )
+
+    tool = capability_to_anthropic_tool(desc)
+    assert tool["name"] == "conf_action", f"unexpected name: {tool['name']}"
+    assert "irreversible" in tool["description"], "safety hint not in description"
+    assert "destructive" in tool["description"], "destructive not in description"
+    assert tool["input_schema"]["type"] == "object"
+
+    d = desc.to_dict()
+    assert "cost_hint" in d, "cost_hint missing from to_dict()"
+    assert d["cost_hint"]["token_estimate"] == 200
+    assert "safety_hint" in d, "safety_hint missing from to_dict()"
+
+    plain = CapabilityDescriptor(id="conf.plain", version="1.0.0", description="Plain.")
+    tools = capabilities_to_tool_list([plain], format="anthropic")
+    assert len(tools) == 1
+    assert "[" not in tools[0]["description"], "unexpected safety suffix on plain descriptor"
+
+    openai_tools = capabilities_to_tool_list([desc], format="openai")
+    assert openai_tools[0]["type"] == "function"
+    assert "parameters" in openai_tools[0]["function"]
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -777,6 +874,8 @@ CHECKS: list[tuple[str, Check]] = [
     ("version control capability", check_version_control_capability),
     ("identity propagation", check_identity_propagation),
     ("composability declaration", check_composability_declaration),
+    ("state machine capability", check_state_machine_capability),
+    ("agent interface", check_agent_interface),
 ]
 
 

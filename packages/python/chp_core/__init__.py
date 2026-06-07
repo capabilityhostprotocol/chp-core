@@ -62,6 +62,16 @@ from .events import (
     register_event_bus_capability,
 )
 from .version_control import register_git_capabilities, register_version_control_capabilities
+from .state_machine import (
+    StateMachineCapability,
+    InMemoryStateMachine,
+    register_state_machine_capability,
+)
+from .agent_interface import (
+    capability_to_anthropic_tool,
+    capability_to_openai_tool,
+    capabilities_to_tool_list,
+)
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -115,6 +125,13 @@ from .types import (
     DomainEventQueryResult,
     METRICS_EVIDENCE_TYPES,
     VERSION_CONTROL_EVIDENCE_TYPES,
+    STATE_MACHINE_EVIDENCE_TYPES,
+    StateMachineStatus,
+    StateMachineDefinition,
+    StateMachineRecord,
+    StateMachineTransitionResult,
+    CostHint,
+    SafetyHint,
     CapabilityMetrics,
     SessionMetricsReport,
     MaturityCriterion,
@@ -242,5 +259,18 @@ __all__ = [
     "register_git_capabilities",
     "register_version_control_capabilities",
     "VERSION_CONTROL_EVIDENCE_TYPES",
+    "StateMachineCapability",
+    "InMemoryStateMachine",
+    "register_state_machine_capability",
+    "STATE_MACHINE_EVIDENCE_TYPES",
+    "StateMachineStatus",
+    "StateMachineDefinition",
+    "StateMachineRecord",
+    "StateMachineTransitionResult",
+    "CostHint",
+    "SafetyHint",
+    "capability_to_anthropic_tool",
+    "capability_to_openai_tool",
+    "capabilities_to_tool_list",
     "wrap_tool_call",
 ]
