@@ -34,11 +34,13 @@ from .memory import MemoryCapability, register_memory_capability
 from .retrieval import (
     InMemoryKeywordRetrievalCapability,
     RetrievalCapability,
+    SQLiteKeywordRetrievalCapability,
     register_retrieval_capability,
 )
 from .ingestion import (
     IngestionCapability,
     InMemoryTextIngestionCapability,
+    SQLiteIngestionCapability,
     register_ingestion_capability,
 )
 from .transformation import (
@@ -49,6 +51,7 @@ from .transformation import (
 from .knowledge_graph import (
     KnowledgeGraphCapability,
     InMemoryKnowledgeGraph,
+    SQLiteKnowledgeGraph,
     register_knowledge_graph_capability,
 )
 from .workflow import (
@@ -59,12 +62,14 @@ from .workflow import (
 from .events import (
     EventBusCapability,
     InMemoryEventBus,
+    SQLiteEventBus,
     register_event_bus_capability,
 )
 from .version_control import register_git_capabilities, register_version_control_capabilities
 from .state_machine import (
     StateMachineCapability,
     InMemoryStateMachine,
+    SQLiteStateMachine,
     register_state_machine_capability,
 )
 from .agent_interface import (
@@ -74,7 +79,8 @@ from .agent_interface import (
 )
 from .safety import RuleBasedSafetyEvaluator, register_safety_capability
 from .compliance import SQLiteComplianceManager, register_compliance_capability
-from .incident import InMemoryIncidentManager, register_incident_capability
+from .incident import InMemoryIncidentManager, SQLiteIncidentManager, register_incident_capability
+from .persistence import setup_sqlite_capabilities
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -229,12 +235,14 @@ __all__ = [
     "register_planning_capability",
     "register_retrieval_capability",
     "InMemoryKeywordRetrievalCapability",
+    "SQLiteKeywordRetrievalCapability",
     "RetrievalCapability",
     "RetrievalResult",
     "RETRIEVAL_EVIDENCE_TYPES",
     "SourceRef",
     "IngestionCapability",
     "InMemoryTextIngestionCapability",
+    "SQLiteIngestionCapability",
     "IngestionRecord",
     "IngestionResult",
     "INGESTION_EVIDENCE_TYPES",
@@ -247,6 +255,7 @@ __all__ = [
     "register_transformation_capability",
     "KnowledgeGraphCapability",
     "InMemoryKnowledgeGraph",
+    "SQLiteKnowledgeGraph",
     "register_knowledge_graph_capability",
     "GRAPH_EVIDENCE_TYPES",
     "EntityRecord",
@@ -260,6 +269,7 @@ __all__ = [
     "WorkflowResult",
     "EventBusCapability",
     "InMemoryEventBus",
+    "SQLiteEventBus",
     "register_event_bus_capability",
     "DOMAIN_EVENT_EVIDENCE_TYPES",
     "DomainEventRecord",
@@ -278,6 +288,7 @@ __all__ = [
     "VERSION_CONTROL_EVIDENCE_TYPES",
     "StateMachineCapability",
     "InMemoryStateMachine",
+    "SQLiteStateMachine",
     "register_state_machine_capability",
     "STATE_MACHINE_EVIDENCE_TYPES",
     "StateMachineStatus",
@@ -303,7 +314,9 @@ __all__ = [
     "RetentionPolicy",
     "ComplianceReport",
     "InMemoryIncidentManager",
+    "SQLiteIncidentManager",
     "register_incident_capability",
+    "setup_sqlite_capabilities",
     "INCIDENT_EVIDENCE_TYPES",
     "IncidentSeverity",
     "IncidentStatus",

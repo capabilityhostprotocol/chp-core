@@ -1034,6 +1034,61 @@ async def check_compliance_capability(_host: Any) -> None:
         os.unlink(store_path)
 
 
+async def check_persistence(_host: Any) -> None:
+    """SQLite-backed capabilities persist state across manager reinstantiation."""
+    import os
+    import tempfile
+
+    from chp_core.state_machine import SQLiteStateMachine
+    from chp_core.incident import SQLiteIncidentManager
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sm_path = os.path.join(tmpdir, "state_machines.sqlite")
+        inc_path = os.path.join(tmpdir, "incidents.sqlite")
+
+        # ── state machine persistence ─────────────────────────────────────────
+        from chp_core.types import StateMachineDefinition
+
+        sm1 = SQLiteStateMachine(sm_path)
+        defn = StateMachineDefinition(
+            states=["draft", "review", "done"],
+            transitions={"draft": ["review"], "review": ["done"]},
+            initial_state="draft",
+            terminal_states=["done"],
+        )
+        record = sm1.create("persistence-test", defn, {"env": "test"})
+        sm1.transition(record.machine_id, "review")
+        sm1.close()
+
+        sm2 = SQLiteStateMachine(sm_path)
+        reloaded = sm2.get(record.machine_id)
+        assert reloaded is not None, "state machine not found after reopening store"
+        assert reloaded.current_state == "review", (
+            f"expected current_state='review', got {reloaded.current_state!r}"
+        )
+        assert len(reloaded.history) == 1, (
+            f"expected 1 history entry, got {len(reloaded.history)}"
+        )
+        sm2.close()
+
+        # ── incident persistence ──────────────────────────────────────────────
+        mgr1 = SQLiteIncidentManager(inc_path)
+        incident = mgr1.open("Persistence test", "P3")
+        mgr1.escalate(incident.incident_id, note="testing")
+        mgr1.close_conn()
+
+        mgr2 = SQLiteIncidentManager(inc_path)
+        reloaded_inc = mgr2.get(incident.incident_id)
+        assert reloaded_inc is not None, "incident not found after reopening store"
+        assert reloaded_inc.status == "escalated", (
+            f"expected status='escalated', got {reloaded_inc.status!r}"
+        )
+        assert len(reloaded_inc.timeline) == 2, (
+            f"expected 2 timeline entries, got {len(reloaded_inc.timeline)}"
+        )
+        mgr2.close_conn()
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -1060,6 +1115,7 @@ CHECKS: list[tuple[str, Check]] = [
     ("safety capability", check_safety_capability),
     ("compliance capability", check_compliance_capability),
     ("incident capability", check_incident_capability),
+    ("sqlite persistence", check_persistence),
 ]
 
 

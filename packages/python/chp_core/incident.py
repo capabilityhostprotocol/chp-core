@@ -160,6 +160,219 @@ class InMemoryIncidentManager:
         return fired
 
 
+class SQLiteIncidentManager:
+    """SQLite-backed incident manager — incidents survive restarts."""
+
+    def __init__(self, store_path: str = ".chp/incidents.sqlite") -> None:
+        import sqlite3
+        from pathlib import Path
+
+        p = Path(store_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(p), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS incidents (
+                incident_id          TEXT PRIMARY KEY,
+                title                TEXT NOT NULL,
+                severity             TEXT NOT NULL,
+                status               TEXT NOT NULL,
+                trigger_json         TEXT,
+                correlation_ids_json TEXT NOT NULL DEFAULT '[]',
+                detected_at          TEXT NOT NULL,
+                resolved_at          TEXT,
+                timeline_json        TEXT NOT NULL DEFAULT '[]'
+            )
+        """)
+        self._conn.commit()
+
+    def _row_to_incident(self, row: tuple) -> Incident:
+        import json
+        from dataclasses import asdict
+
+        (incident_id, title, severity, status, trigger_json,
+         corr_json, detected_at, resolved_at, timeline_json) = row
+        trigger = None
+        if trigger_json:
+            td = json.loads(trigger_json)
+            trigger = IncidentTrigger(
+                pattern=td["pattern"],
+                threshold=td["threshold"],
+                window_seconds=td["window_seconds"],
+            )
+        return Incident(
+            incident_id=incident_id,
+            title=title,
+            severity=severity,
+            status=status,
+            trigger=trigger,
+            correlation_ids=json.loads(corr_json),
+            detected_at=detected_at,
+            resolved_at=resolved_at,
+            timeline=json.loads(timeline_json),
+        )
+
+    def open(
+        self,
+        title: str,
+        severity: IncidentSeverity,
+        *,
+        correlation_ids: list[str] | None = None,
+        trigger: IncidentTrigger | None = None,
+    ) -> Incident:
+        import json
+        from dataclasses import asdict
+
+        incident_id = new_id("inc")
+        detected_at = utc_now()
+        timeline = [{"event": "opened", "at": detected_at}]
+        trigger_json = json.dumps(asdict(trigger)) if trigger else None
+        corr_ids = list(correlation_ids or [])
+        self._conn.execute(
+            """INSERT INTO incidents
+               (incident_id, title, severity, status, trigger_json, correlation_ids_json,
+                detected_at, resolved_at, timeline_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (incident_id, title, severity, "open", trigger_json,
+             json.dumps(corr_ids), detected_at, None, json.dumps(timeline)),
+        )
+        self._conn.commit()
+        return Incident(
+            incident_id=incident_id, title=title, severity=severity, status="open",
+            trigger=trigger, correlation_ids=corr_ids, detected_at=detected_at,
+            resolved_at=None, timeline=timeline,
+        )
+
+    def _transition(self, incident_id: str, new_status: IncidentStatus, note: str = "") -> Incident:
+        import json
+
+        row = self._conn.execute(
+            "SELECT * FROM incidents WHERE incident_id = ?", (incident_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"unknown incident: {incident_id!r}")
+        incident = self._row_to_incident(row)
+        allowed = _VALID_TRANSITIONS.get(incident.status, [])
+        if new_status not in allowed:
+            raise ValueError(
+                f"cannot transition {incident.status!r} → {new_status!r} for {incident_id!r}"
+            )
+        now = utc_now()
+        entry: dict = {"event": new_status, "at": now}
+        if note:
+            entry["note"] = note
+        new_timeline = incident.timeline + [entry]
+        resolved_at = now if new_status == "resolved" else incident.resolved_at
+        self._conn.execute(
+            """UPDATE incidents
+               SET status = ?, timeline_json = ?, resolved_at = ?
+               WHERE incident_id = ?""",
+            (new_status, json.dumps(new_timeline), resolved_at, incident_id),
+        )
+        self._conn.commit()
+        incident.status = new_status
+        incident.timeline = new_timeline
+        incident.resolved_at = resolved_at
+        return incident
+
+    def escalate(self, incident_id: str, *, note: str = "") -> Incident:
+        return self._transition(incident_id, "escalated", note)
+
+    def resolve(self, incident_id: str, *, note: str = "") -> Incident:
+        return self._transition(incident_id, "resolved", note)
+
+    def close(self, incident_id: str, *, note: str = "") -> Incident:
+        return self._transition(incident_id, "closed", note)
+
+    def get(self, incident_id: str) -> Incident | None:
+        row = self._conn.execute(
+            "SELECT * FROM incidents WHERE incident_id = ?", (incident_id,)
+        ).fetchone()
+        return self._row_to_incident(row) if row else None
+
+    def list_incidents(
+        self, *, status: IncidentStatus | None = None, severity: IncidentSeverity | None = None
+    ) -> list[Incident]:
+        clauses: list[str] = []
+        params: list = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if severity is not None:
+            clauses.append("severity = ?")
+            params.append(severity)
+        sql = "SELECT * FROM incidents"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_incident(r) for r in rows]
+
+    def apply_remediation(
+        self,
+        incident_id: str,
+        description: str,
+        *,
+        action_type: str = "manual",
+        outcome: str | None = None,
+    ) -> RemediationAction:
+        import json
+
+        row = self._conn.execute(
+            "SELECT timeline_json FROM incidents WHERE incident_id = ?", (incident_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"unknown incident: {incident_id!r}")
+        action = RemediationAction(
+            action_id=new_id("rem"),
+            incident_id=incident_id,
+            action_type=action_type,  # type: ignore[arg-type]
+            description=description,
+            executed_at=utc_now(),
+            outcome=outcome,
+        )
+        timeline = json.loads(row[0])
+        timeline.append({
+            "event": "remediation_applied",
+            "action_id": action.action_id,
+            "at": action.executed_at,
+        })
+        self._conn.execute(
+            "UPDATE incidents SET timeline_json = ? WHERE incident_id = ?",
+            (json.dumps(timeline), incident_id),
+        )
+        self._conn.commit()
+        return action
+
+    def scan_for_triggers(
+        self, store: Any, triggers: list[IncidentTrigger]
+    ) -> list[Incident]:
+        """Open incidents for any trigger whose threshold is breached in the evidence store."""
+        fired: list[Incident] = []
+        now = datetime.now(timezone.utc)
+        all_events: list[dict] = store.all()
+
+        for trigger in triggers:
+            window_start = now - timedelta(seconds=trigger.window_seconds)
+            window_start_str = window_start.isoformat().replace("+00:00", "Z")
+            matching = [
+                e for e in all_events
+                if e.get("event_type") == trigger.pattern
+                and e.get("timestamp", "") >= window_start_str
+            ]
+            if len(matching) >= trigger.threshold:
+                incident = self.open(
+                    title=f"Trigger fired: {trigger.pattern} x{len(matching)} in {trigger.window_seconds}s",
+                    severity="P2",
+                    trigger=trigger,
+                )
+                fired.append(incident)
+
+        return fired
+
+    def close_conn(self) -> None:
+        self._conn.close()
+
+
 def register_incident_capability(
     host: Any,
     manager: InMemoryIncidentManager | None = None,

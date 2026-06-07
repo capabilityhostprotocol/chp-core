@@ -116,6 +116,125 @@ class InMemoryEventBus(EventBusCapability):
         )
 
 
+class SQLiteEventBus(EventBusCapability):
+    """SQLite-backed domain event bus — survives restarts."""
+
+    def __init__(
+        self,
+        store_path: str = ".chp/events.sqlite",
+        *,
+        capability_id_prefix: str = "events",
+        capability_version: str = "0.1.0",
+        description: str = "SQLite-backed domain event bus.",
+    ) -> None:
+        import sqlite3
+        from pathlib import Path
+
+        self.capability_id_prefix = capability_id_prefix
+        self.capability_version = capability_version
+        self.description = description
+        p = Path(store_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(p), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS domain_events (
+                event_id        TEXT PRIMARY KEY,
+                event_type      TEXT NOT NULL,
+                source          TEXT NOT NULL,
+                data_json       TEXT NOT NULL,
+                data_hash       TEXT NOT NULL,
+                emitted_at      TEXT NOT NULL,
+                correlation_id  TEXT
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_de_type ON domain_events(event_type)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_de_source ON domain_events(source)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_de_corr ON domain_events(correlation_id)"
+        )
+        self._conn.commit()
+
+    def _row_to_record(self, row: tuple) -> DomainEventRecord:
+        import json
+
+        event_id, event_type, source, data_json, data_hash, emitted_at, correlation_id = row
+        return DomainEventRecord(
+            event_id=event_id,
+            event_type=event_type,
+            source=source,
+            data=json.loads(data_json),
+            data_hash=data_hash,
+            emitted_at=emitted_at,
+            correlation_id=correlation_id,
+        )
+
+    def emit_event(
+        self,
+        event_type: str,
+        source: str,
+        data: dict[str, Any],
+        *,
+        correlation_id: str | None = None,
+    ) -> DomainEventRecord:
+        import json
+
+        record = DomainEventRecord(
+            event_id=new_id("devt"),
+            event_type=event_type,
+            source=source,
+            data=data,
+            data_hash=_data_hash(data),
+            emitted_at=utc_now(),
+            correlation_id=correlation_id,
+        )
+        self._conn.execute(
+            """INSERT INTO domain_events
+               (event_id, event_type, source, data_json, data_hash, emitted_at, correlation_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (record.event_id, record.event_type, record.source,
+             json.dumps(data), record.data_hash, record.emitted_at, record.correlation_id),
+        )
+        self._conn.commit()
+        return record
+
+    def query_events(
+        self,
+        *,
+        event_type: str | None = None,
+        source: str | None = None,
+        limit: int | None = None,
+    ) -> DomainEventQueryResult:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if event_type is not None:
+            clauses.append("event_type = ?")
+            params.append(event_type)
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source)
+        sql = "SELECT * FROM domain_events"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY emitted_at"
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+        rows = self._conn.execute(sql, params).fetchall()
+        events = [self._row_to_record(r) for r in rows]
+        return DomainEventQueryResult(
+            events=events,
+            event_count=len(events),
+            event_type_filter=event_type,
+        )
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def register_event_bus_capability(host: Any, bus: EventBusCapability) -> None:
     prefix = bus.capability_id_prefix
     version = bus.capability_version

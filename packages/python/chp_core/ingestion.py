@@ -10,6 +10,7 @@ from .types import (
     IngestionRecord,
     IngestionResult,
     new_id,
+    utc_now,
 )
 
 if TYPE_CHECKING:
@@ -103,6 +104,87 @@ class InMemoryTextIngestionCapability(IngestionCapability):
     def as_retrieval_documents(self) -> list[dict]:
         """Return ingested docs in the format expected by InMemoryKeywordRetrievalCapability."""
         return list(self._store)
+
+
+class SQLiteIngestionCapability(IngestionCapability):
+    """SQLite-backed ingestion — documents survive restarts and are readable by SQLiteKeywordRetrievalCapability."""
+
+    def __init__(
+        self,
+        store_path: str = ".chp/documents.sqlite",
+        *,
+        capability_id: str = "ingestion.ingest",
+        capability_version: str = "0.1.0",
+        description: str = "SQLite-backed text ingestion.",
+    ) -> None:
+        import sqlite3
+        from pathlib import Path
+
+        self.capability_id = capability_id
+        self.capability_version = capability_version
+        self.description = description
+        p = Path(store_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(p), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS documents (
+                source_id    TEXT PRIMARY KEY,
+                content      TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                byte_count   INTEGER NOT NULL,
+                content_type TEXT NOT NULL DEFAULT 'text/plain',
+                title        TEXT,
+                uri          TEXT,
+                ingested_at  TEXT NOT NULL
+            )
+        """)
+        self._conn.commit()
+
+    def ingest(
+        self,
+        content: str,
+        *,
+        source_id: str | None = None,
+        title: str | None = None,
+        uri: str | None = None,
+        content_type: str = "text/plain",
+    ) -> IngestionResult:
+        import hashlib
+        import time
+
+        t0 = time.perf_counter()
+        sid = source_id or new_id("doc")
+        raw = content.encode("utf-8")
+        content_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+        byte_count = len(raw)
+        now = utc_now()
+        self._conn.execute(
+            """INSERT OR REPLACE INTO documents
+               (source_id, content, content_hash, byte_count, content_type, title, uri, ingested_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (sid, content, content_hash, byte_count, content_type, title, uri, now),
+        )
+        self._conn.commit()
+        record = IngestionRecord(
+            source_id=sid,
+            content_hash=content_hash,
+            byte_count=byte_count,
+            content_type=content_type,
+            title=title,
+            uri=uri,
+        )
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return IngestionResult(
+            source_uri=uri,
+            records=[record],
+            record_count=1,
+            total_bytes=byte_count,
+            latency_ms=latency_ms,
+        )
+
+    def close(self) -> None:
+        self._conn.close()
 
 
 def register_ingestion_capability(host: Any, cap: IngestionCapability) -> None:

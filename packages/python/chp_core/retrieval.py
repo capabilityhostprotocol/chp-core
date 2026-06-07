@@ -139,6 +139,85 @@ class InMemoryKeywordRetrievalCapability(RetrievalCapability):
         )
 
 
+class SQLiteKeywordRetrievalCapability(RetrievalCapability):
+    """SQLite-backed keyword retrieval — reads docs written by SQLiteIngestionCapability."""
+
+    retrieval_type: Literal["keyword", "vector", "hybrid"] = "keyword"
+
+    def __init__(
+        self,
+        store_path: str = ".chp/documents.sqlite",
+        *,
+        capability_id: str = "retrieval.query",
+        capability_version: str = "0.1.0",
+        description: str = "SQLite-backed keyword retrieval.",
+    ) -> None:
+        import sqlite3
+        from pathlib import Path
+
+        self.capability_id = capability_id
+        self.capability_version = capability_version
+        self.description = description
+        p = Path(store_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(p), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS documents (
+                source_id    TEXT PRIMARY KEY,
+                content      TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                byte_count   INTEGER NOT NULL,
+                content_type TEXT NOT NULL DEFAULT 'text/plain',
+                title        TEXT,
+                uri          TEXT,
+                ingested_at  TEXT NOT NULL
+            )
+        """)
+        self._conn.commit()
+
+    def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        filters: dict | None = None,
+    ) -> RetrievalResult:
+        t0 = time.perf_counter()
+        terms = query.lower().split()
+        rows = self._conn.execute(
+            "SELECT source_id, content, title, uri FROM documents"
+        ).fetchall()
+        scored: list[tuple[float, tuple]] = []
+        for row in rows:
+            source_id, content, title, uri = row
+            text = (content or "").lower()
+            word_count = len(text.split()) + 1
+            score = sum(text.count(t) for t in terms) / word_count
+            if score > 0:
+                scored.append((score, row))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        refs = [
+            SourceRef(
+                source_id=row[0],
+                title=row[2],
+                score=round(sc, 4),
+                uri=row[3],
+            )
+            for sc, row in scored[:top_k]
+        ]
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return RetrievalResult(
+            query=query,
+            source_refs=refs,
+            result_count=len(refs),
+            latency_ms=latency_ms,
+        )
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 # ── Host registration ──────────────────────────────────────────────────────────
 
 

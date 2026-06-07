@@ -144,6 +144,170 @@ class InMemoryStateMachine(StateMachineCapability):
         return machines
 
 
+class SQLiteStateMachine(StateMachineCapability):
+    """SQLite-backed state machine — survives restarts."""
+
+    def __init__(
+        self,
+        store_path: str = ".chp/state_machines.sqlite",
+        *,
+        capability_id_prefix: str = "state_machine",
+        capability_version: str = "0.1.0",
+        description: str = "SQLite-backed state machine.",
+    ) -> None:
+        import sqlite3
+        from pathlib import Path
+
+        self.capability_id_prefix = capability_id_prefix
+        self.capability_version = capability_version
+        self.description = description
+        p = Path(store_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(p), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS state_machines (
+                machine_id      TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                definition_json TEXT NOT NULL,
+                current_state   TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                context_json    TEXT NOT NULL DEFAULT '{}',
+                history_json    TEXT NOT NULL DEFAULT '[]',
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sm_status ON state_machines(status)"
+        )
+        self._conn.commit()
+
+    def _row_to_record(self, row: tuple) -> StateMachineRecord:
+        import json
+
+        (machine_id, name, defn_json, current_state, status,
+         ctx_json, hist_json, created_at, updated_at) = row
+        defn_raw = json.loads(defn_json)
+        definition = StateMachineDefinition(
+            states=defn_raw["states"],
+            transitions=defn_raw["transitions"],
+            initial_state=defn_raw["initial_state"],
+            terminal_states=defn_raw["terminal_states"],
+        )
+        return StateMachineRecord(
+            machine_id=machine_id,
+            name=name,
+            definition=definition,
+            current_state=current_state,
+            status=status,
+            context=json.loads(ctx_json),
+            created_at=created_at,
+            updated_at=updated_at,
+            history=json.loads(hist_json),
+        )
+
+    def create(self, name: str, definition: StateMachineDefinition, context: dict) -> StateMachineRecord:
+        import json
+
+        if definition.initial_state not in definition.states:
+            raise ValueError(f"initial_state {definition.initial_state!r} not in states")
+        for terminal in definition.terminal_states:
+            if terminal not in definition.states:
+                raise ValueError(f"terminal_state {terminal!r} not in states")
+        now = utc_now()
+        machine_id = new_id("sm")
+        defn_dict = {
+            "states": definition.states,
+            "transitions": definition.transitions,
+            "initial_state": definition.initial_state,
+            "terminal_states": definition.terminal_states,
+        }
+        self._conn.execute(
+            """INSERT INTO state_machines
+               (machine_id, name, definition_json, current_state, status,
+                context_json, history_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (machine_id, name, json.dumps(defn_dict), definition.initial_state,
+             "queued", json.dumps(context), "[]", now, now),
+        )
+        self._conn.commit()
+        return StateMachineRecord(
+            machine_id=machine_id,
+            name=name,
+            definition=definition,
+            current_state=definition.initial_state,
+            status="queued",
+            context=dict(context),
+            created_at=now,
+            updated_at=now,
+            history=[],
+        )
+
+    def transition(self, machine_id: str, event: str) -> StateMachineTransitionResult:
+        import json
+
+        row = self._conn.execute(
+            "SELECT * FROM state_machines WHERE machine_id = ?", (machine_id,)
+        ).fetchone()
+        if row is None:
+            return StateMachineTransitionResult(
+                machine_id=machine_id, from_state="", to_state="", event=event,
+                allowed=False, reason=f"machine {machine_id!r} not found", updated_at=utc_now(),
+            )
+        record = self._row_to_record(row)
+        if record.status in ("done", "failed", "cancelled"):
+            return StateMachineTransitionResult(
+                machine_id=machine_id, from_state=record.current_state,
+                to_state=record.current_state, event=event, allowed=False,
+                reason=f"machine is terminal (status={record.status!r})", updated_at=utc_now(),
+            )
+        allowed_next = record.definition.transitions.get(record.current_state, [])
+        if event not in allowed_next:
+            return StateMachineTransitionResult(
+                machine_id=machine_id, from_state=record.current_state,
+                to_state=event, event=event, allowed=False,
+                reason=f"transition {record.current_state!r} → {event!r} not defined",
+                updated_at=utc_now(),
+            )
+        from_state = record.current_state
+        now = utc_now()
+        new_history = record.history + [{"from": from_state, "to": event, "event": event, "at": now}]
+        if event in record.definition.terminal_states:
+            new_status = "done" if event not in ("failed", "cancelled") else event
+        else:
+            new_status = "running"
+        self._conn.execute(
+            """UPDATE state_machines
+               SET current_state = ?, status = ?, history_json = ?, updated_at = ?
+               WHERE machine_id = ?""",
+            (event, new_status, json.dumps(new_history), now, machine_id),
+        )
+        self._conn.commit()
+        return StateMachineTransitionResult(
+            machine_id=machine_id, from_state=from_state, to_state=event,
+            event=event, allowed=True, reason=None, updated_at=now,
+        )
+
+    def get(self, machine_id: str) -> StateMachineRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM state_machines WHERE machine_id = ?", (machine_id,)
+        ).fetchone()
+        return self._row_to_record(row) if row else None
+
+    def list_machines(self, *, status: StateMachineStatus | None = None) -> list[StateMachineRecord]:
+        if status is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM state_machines WHERE status = ?", (status,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute("SELECT * FROM state_machines").fetchall()
+        return [self._row_to_record(r) for r in rows]
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def register_state_machine_capability(host: Any, sm: StateMachineCapability | None = None) -> None:
     sm = sm or InMemoryStateMachine()
     prefix = sm.capability_id_prefix
