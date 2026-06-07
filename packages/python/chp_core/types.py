@@ -80,6 +80,21 @@ GRAPH_EVIDENCE_TYPES = {
     "graph_operation_failed",
 }
 
+WORKFLOW_EVIDENCE_TYPES = {
+    "workflow_started",
+    "workflow_step_started",
+    "workflow_step_completed",
+    "workflow_step_failed",
+    "workflow_completed",
+    "workflow_failed",
+}
+
+DOMAIN_EVENT_EVIDENCE_TYPES = {
+    "domain_event_emitted",
+    "domain_events_queried",
+    "domain_event_operation_failed",
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
@@ -690,6 +705,64 @@ class GraphQueryResult:
     entity_count: int
     query_type: str
     latency_ms: float | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class WorkflowStepResult:
+    """Result of a single step within a workflow execution."""
+
+    step_id: str
+    capability_id: str
+    success: bool
+    data: JSON = field(default_factory=dict)
+    error: str | None = None
+    duration_ms: float | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class WorkflowResult:
+    """Result returned by a workflow.run invocation."""
+
+    workflow_id: str
+    name: str | None
+    steps: list[WorkflowStepResult]
+    completed_steps: int
+    failed_steps: int
+    total_duration_ms: float | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class DomainEventRecord:
+    """A domain event stored in the event bus."""
+
+    event_id: str
+    event_type: str
+    source: str
+    data: JSON          # full data — in invocation result only, never in evidence payload
+    data_hash: str      # "sha256:<hex>" of json.dumps(data, sort_keys=True)
+    emitted_at: str
+    correlation_id: str | None = None
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class DomainEventQueryResult:
+    """Result returned by an events.query invocation."""
+
+    events: list[DomainEventRecord]
+    event_count: int
+    event_type_filter: str | None = None
 
     def to_dict(self) -> JSON:
         return asdict(self)

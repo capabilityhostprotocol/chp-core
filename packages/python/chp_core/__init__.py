@@ -49,6 +49,16 @@ from .knowledge_graph import (
     InMemoryKnowledgeGraph,
     register_knowledge_graph_capability,
 )
+from .workflow import (
+    WorkflowCapability,
+    InMemoryWorkflow,
+    register_workflow_capability,
+)
+from .events import (
+    EventBusCapability,
+    InMemoryEventBus,
+    register_event_bus_capability,
+)
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -94,6 +104,12 @@ from .types import (
     EntityRecord,
     RelationRecord,
     GraphQueryResult,
+    WORKFLOW_EVIDENCE_TYPES,
+    WorkflowStepResult,
+    WorkflowResult,
+    DOMAIN_EVENT_EVIDENCE_TYPES,
+    DomainEventRecord,
+    DomainEventQueryResult,
     RETRIEVAL_EVIDENCE_TYPES,
     RetrievalResult,
     SESSION_EVIDENCE_TYPES,
@@ -192,5 +208,17 @@ __all__ = [
     "EntityRecord",
     "RelationRecord",
     "GraphQueryResult",
+    "WorkflowCapability",
+    "InMemoryWorkflow",
+    "register_workflow_capability",
+    "WORKFLOW_EVIDENCE_TYPES",
+    "WorkflowStepResult",
+    "WorkflowResult",
+    "EventBusCapability",
+    "InMemoryEventBus",
+    "register_event_bus_capability",
+    "DOMAIN_EVENT_EVIDENCE_TYPES",
+    "DomainEventRecord",
+    "DomainEventQueryResult",
     "wrap_tool_call",
 ]

@@ -336,6 +336,72 @@ def cmd_session_transformation_report(args: argparse.Namespace) -> int:
     return 0 if transformation_events else 1
 
 
+def cmd_session_workflow_report(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..types import WORKFLOW_EVIDENCE_TYPES
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    workflow_events = [e for e in events if e.get("event_type") in WORKFLOW_EVIDENCE_TYPES]
+    completed = [e for e in workflow_events if e.get("event_type") == "workflow_completed"]
+    step_completed = [e for e in workflow_events if e.get("event_type") == "workflow_step_completed"]
+    step_failed = [e for e in workflow_events if e.get("event_type") == "workflow_step_failed"]
+
+    latencies = [
+        (e.get("payload") or {}).get("total_duration_ms")
+        for e in completed
+        if (e.get("payload") or {}).get("total_duration_ms") is not None
+    ]
+    avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
+
+    print_json({
+        "session_id": args.session_id,
+        "workflow_event_count": len(workflow_events),
+        "workflows_run": len(completed),
+        "steps_completed": len(step_completed),
+        "steps_failed": len(step_failed),
+        "avg_workflow_duration_ms": avg_latency,
+        "events": workflow_events,
+    })
+    return 0 if workflow_events else 1
+
+
+def cmd_session_events_report(args: argparse.Namespace) -> int:
+    from ..store import SQLiteEvidenceStore
+    from ..types import DOMAIN_EVENT_EVIDENCE_TYPES
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.by_correlation(args.session_id)
+    finally:
+        store.close()
+
+    domain_events = [e for e in events if e.get("event_type") in DOMAIN_EVENT_EVIDENCE_TYPES]
+    emitted = [e for e in domain_events if e.get("event_type") == "domain_event_emitted"]
+    queried = [e for e in domain_events if e.get("event_type") == "domain_events_queried"]
+
+    events_by_type: dict[str, int] = {}
+    for e in emitted:
+        t = (e.get("payload") or {}).get("event_type", "unknown")
+        events_by_type[t] = events_by_type.get(t, 0) + 1
+
+    print_json({
+        "session_id": args.session_id,
+        "domain_event_count": len(domain_events),
+        "events_emitted": len(emitted),
+        "events_queried": len(queried),
+        "events_by_type": events_by_type,
+        "events": domain_events,
+    })
+    return 0 if domain_events else 1
+
+
 def cmd_session_graph_report(args: argparse.Namespace) -> int:
     from ..store import SQLiteEvidenceStore
     from ..types import GRAPH_EVIDENCE_TYPES

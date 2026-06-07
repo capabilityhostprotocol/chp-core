@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.4/workflow-step.schema.json",
+  "title": "WorkflowStepCompleted",
+  "description": "Payload of workflow_step_completed evidence events (v0.4.4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workflow_id", "step_id", "success", "duration_ms"],
+  "properties": {
+    "workflow_id": { "type": "string", "minLength": 1 },
+    "step_id":     { "type": "string", "minLength": 1 },
+    "success":     { "type": "boolean" },
+    "duration_ms": { "type": "number", "minimum": 0 }
+  }
+}

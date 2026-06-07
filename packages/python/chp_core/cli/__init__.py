@@ -47,6 +47,8 @@ from ._session import (
     cmd_session_show,
     cmd_session_transformation_report,
     cmd_session_graph_report,
+    cmd_session_workflow_report,
+    cmd_session_events_report,
     cmd_session_tree,
 )
 from ._ci import (
@@ -476,6 +478,20 @@ def build_parser() -> argparse.ArgumentParser:
     session_graph_p.add_argument("session_id")
     session_graph_p.add_argument("--store", default=None)
     session_graph_p.set_defaults(func=cmd_session_graph_report)
+
+    session_workflow_p = session_sub.add_parser(
+        "workflow-report", help="Show workflow execution events and metrics for a session."
+    )
+    session_workflow_p.add_argument("session_id")
+    session_workflow_p.add_argument("--store", default=None)
+    session_workflow_p.set_defaults(func=cmd_session_workflow_report)
+
+    session_events_p = session_sub.add_parser(
+        "events-report", help="Show domain event bus events and metrics for a session."
+    )
+    session_events_p.add_argument("session_id")
+    session_events_p.add_argument("--store", default=None)
+    session_events_p.set_defaults(func=cmd_session_events_report)
 
     registry_p = subcommands.add_parser("registry", help="Manage the local CHP adapter registry.")
     registry_sub = registry_p.add_subparsers(dest="registry_command", required=True)

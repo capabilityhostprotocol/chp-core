@@ -434,6 +434,124 @@ async def check_knowledge_graph_capability(_host: Any) -> None:
         os.unlink(store_path)
 
 
+async def check_workflow_capability(_host: Any) -> None:
+    """workflow.run executes steps sequentially and emits workflow_started, step, and workflow_completed events."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        InMemoryKnowledgeGraph,
+        InMemoryWorkflow,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+        register_knowledge_graph_capability,
+        register_workflow_capability,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-workflow", store=store)
+        kg = InMemoryKnowledgeGraph()
+        register_knowledge_graph_capability(host, kg)
+        wf = InMemoryWorkflow()
+        register_workflow_capability(host, wf)
+
+        result = await host.ainvoke(
+            "workflow.run",
+            {
+                "workflow_id": "conf-wf-001",
+                "name": "conformance-workflow",
+                "steps": [
+                    {"capability_id": "graph.add_entity", "payload": {"entity_id": "e1", "entity_type": "node"}},
+                    {"capability_id": "graph.add_entity", "payload": {"entity_id": "e2", "entity_type": "node"}},
+                ],
+            },
+            correlation={"correlation_id": "conf-workflow-001"},
+        )
+        assert result.success, f"workflow.run failed: {result}"
+
+        events = host.replay("conf-workflow-001")
+        types = [e["event_type"] for e in events]
+        assert "workflow_started" in types, f"missing workflow_started: {types}"
+        assert "workflow_completed" in types, f"missing workflow_completed: {types}"
+        assert types.count("workflow_step_started") >= 2, f"missing workflow_step_started x2: {types}"
+        assert types.count("workflow_step_completed") >= 2, f"missing workflow_step_completed x2: {types}"
+
+        completed = next(e for e in events if e["event_type"] == "workflow_completed")
+        payload = completed.get("payload") or {}
+        assert payload.get("completed_steps") == 2, f"expected completed_steps=2: {payload}"
+        assert payload.get("failed_steps") == 0, f"expected failed_steps=0: {payload}"
+
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
+async def check_event_bus_capability(_host: Any) -> None:
+    """events.emit records domain_event_emitted with data_hash (no raw data); events.query returns count."""
+    import os
+    import tempfile
+
+    from chp_core import (
+        InMemoryEventBus,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+        register_event_bus_capability,
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-events", store=store)
+        bus = InMemoryEventBus()
+        register_event_bus_capability(host, bus)
+
+        r1 = await host.ainvoke(
+            "events.emit",
+            {"event_type": "order.placed", "source": "orders", "data": {"order_id": "o1"}},
+            correlation={"correlation_id": "conf-events-001"},
+        )
+        assert r1.success, f"events.emit 1 failed: {r1}"
+
+        r2 = await host.ainvoke(
+            "events.emit",
+            {"event_type": "order.placed", "source": "orders", "data": {"order_id": "o2"}},
+            correlation={"correlation_id": "conf-events-001"},
+        )
+        assert r2.success, f"events.emit 2 failed: {r2}"
+
+        r3 = await host.ainvoke(
+            "events.emit",
+            {"event_type": "order.shipped", "source": "fulfillment", "data": {}},
+            correlation={"correlation_id": "conf-events-001"},
+        )
+        assert r3.success, f"events.emit 3 failed: {r3}"
+
+        r4 = await host.ainvoke(
+            "events.query",
+            {"event_type": "order.placed"},
+            correlation={"correlation_id": "conf-events-001"},
+        )
+        assert r4.success, f"events.query failed: {r4}"
+
+        events = host.replay("conf-events-001")
+        types = [e["event_type"] for e in events]
+        assert types.count("domain_event_emitted") == 3, f"expected 3 domain_event_emitted: {types}"
+        assert "domain_events_queried" in types, f"missing domain_events_queried: {types}"
+
+        emitted = next(e for e in events if e["event_type"] == "domain_event_emitted")
+        em_payload = emitted.get("payload") or {}
+        assert em_payload.get("data_hash", "").startswith("sha256:"), f"bad data_hash: {em_payload}"
+        assert "data" not in em_payload, f"evidence must not include raw data: {em_payload}"
+
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -448,6 +566,8 @@ CHECKS: list[tuple[str, Check]] = [
     ("ingestion capability", check_ingestion_capability),
     ("transformation capability", check_transformation_capability),
     ("knowledge graph capability", check_knowledge_graph_capability),
+    ("workflow capability", check_workflow_capability),
+    ("event bus capability", check_event_bus_capability),
 ]
 
 

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.4/domain-event.schema.json",
+  "title": "DomainEventEmitted",
+  "description": "Payload of domain_event_emitted evidence events (v0.4.4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "event_type", "source", "data_hash"],
+  "properties": {
+    "event_id":   { "type": "string", "minLength": 1 },
+    "event_type": { "type": "string", "minLength": 1 },
+    "source":     { "type": "string" },
+    "data_hash":  {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}
