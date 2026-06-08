@@ -1,4 +1,4 @@
-"""Small HTTP surface for serving a local CHP host."""
+"""Small HTTP surface for serving a local CHP host and a client for remote hosts."""
 
 from __future__ import annotations
 
@@ -8,9 +8,17 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
 
 from .host import LocalCapabilityHost
-from .types import InvocationEnvelope, JSON, ReplayQuery
+from .types import (
+    CorrelationContext,
+    DenialReason,
+    InvocationEnvelope,
+    InvocationResult,
+    JSON,
+    ReplayQuery,
+)
 
 
 class CapabilityHostHTTPServer(ThreadingHTTPServer):
@@ -137,3 +145,146 @@ def serve_http(
         server.serve_forever()
     finally:
         server.server_close()
+
+
+class RemoteCapabilityHost:
+    """Client that mirrors the LocalCapabilityHost public API over HTTP.
+
+    Uses only stdlib ``urllib.request`` — zero additional dependencies.
+    HTTP 4xx/5xx responses raise ``RuntimeError`` with the JSON error body
+    preserved so callers can inspect ``code`` and ``message``.
+
+    Usage::
+
+        remote = RemoteCapabilityHost("http://agent-b.internal:8765")
+        result = remote.invoke("data.query", {"q": "..."})
+    """
+
+    def __init__(self, base_url: str, *, timeout: int = 30) -> None:
+        self._base = base_url.rstrip("/")
+        self._timeout = timeout
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _get(self, path: str) -> JSON:
+        req = Request(f"{self._base}{path}", method="GET")
+        return self._send(req)
+
+    def _post(self, path: str, body: JSON) -> JSON:
+        raw = json.dumps(body).encode("utf-8")
+        req = Request(
+            f"{self._base}{path}",
+            data=raw,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        return self._send(req)
+
+    def _send(self, req: Request) -> JSON:
+        from urllib.error import HTTPError
+
+        try:
+            with urlopen(req, timeout=self._timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                detail = json.loads(body)
+            except Exception:
+                detail = {"raw": body}
+            raise RuntimeError(
+                f"CHP remote error {exc.code}: {detail}"
+            ) from exc
+
+    @staticmethod
+    def _parse_result(data: JSON) -> InvocationResult:
+        denial_raw = data.get("denial")
+        denial = (
+            DenialReason(
+                code=str(denial_raw.get("code", "")),
+                message=str(denial_raw.get("message", "")),
+                retryable=bool(denial_raw.get("retryable", False)),
+                details=dict(denial_raw.get("details") or {}),
+            )
+            if denial_raw
+            else None
+        )
+        return InvocationResult(
+            invocation_id=str(data.get("invocation_id", "")),
+            capability_id=str(data.get("capability_id", "")),
+            capability_version=data.get("capability_version"),
+            correlation=CorrelationContext.from_mapping(data.get("correlation")),
+            outcome=data.get("outcome", "failure"),  # type: ignore[arg-type]
+            success=bool(data.get("success", False)),
+            data=data.get("data"),
+            error=data.get("error"),
+            denial=denial,
+            evidence_ids=list(data.get("evidence_ids") or []),
+            started_at=data.get("started_at"),
+            completed_at=data.get("completed_at", ""),
+        )
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    async def ainvoke(
+        self,
+        capability_id: str,
+        payload: JSON | None = None,
+        *,
+        version: str | None = None,
+        correlation: CorrelationContext | JSON | None = None,
+        subject: JSON | None = None,
+        mode: str = "sync",
+        metadata: JSON | None = None,
+    ) -> InvocationResult:
+        if isinstance(correlation, CorrelationContext):
+            corr_dict: JSON = correlation.to_dict()
+        else:
+            corr_dict = dict(correlation) if correlation else {}
+        body: JSON = {
+            "capability_id": capability_id,
+            "payload": payload or {},
+            "mode": mode,
+            "correlation": corr_dict,
+            "subject": subject or {"id": "remote", "type": "user"},
+            "metadata": metadata or {},
+        }
+        if version is not None:
+            body["version"] = version
+        data = self._post("/invoke", body)
+        return self._parse_result(data)
+
+    def invoke(
+        self,
+        capability_id: str,
+        payload: JSON | None = None,
+        **kwargs: Any,
+    ) -> InvocationResult:
+        return asyncio.run(self.ainvoke(capability_id, payload, **kwargs))
+
+    def discover(self, **filter_kwargs: Any) -> JSON:
+        """Return the host descriptor, optionally filtering capabilities."""
+        descriptor = self._get("/host")
+        if not filter_kwargs:
+            return descriptor
+        caps = descriptor.get("capabilities", [])
+        for key, val in filter_kwargs.items():
+            caps = [c for c in caps if c.get(key) == val]
+        return {**descriptor, "capabilities": caps}
+
+    def replay(self, correlation_id: str) -> list[JSON]:
+        """Return the evidence events list for *correlation_id*."""
+        result = self._get(f"/replay/{correlation_id}")
+        return list(result.get("events", []))
+
+    def replay_result(self, query: "str | ReplayQuery | JSON") -> JSON:
+        """Replay by correlation ID (str) or a ReplayQuery object/dict."""
+        if isinstance(query, str):
+            return self._get(f"/replay/{query}")
+        if isinstance(query, ReplayQuery):
+            return self._post("/replay", query.to_dict())
+        return self._post("/replay", dict(query))
+
+    def health(self) -> JSON:
+        """Return the /health response from the remote host."""
+        return self._get("/health")
