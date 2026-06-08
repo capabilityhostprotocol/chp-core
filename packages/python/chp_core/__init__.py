@@ -19,7 +19,7 @@ from .capabilities import (
     register_trace_execution,
 )
 from .host import CapabilityExecutionContext, LocalCapabilityHost
-from .http import CapabilityHostHTTPServer, create_http_server, serve_http
+from .http import CapabilityHostHTTPServer, RemoteCapabilityHost, create_http_server, serve_http
 from .store import SQLiteEvidenceStore
 from .decorators import capability
 from .codex import (
@@ -33,8 +33,11 @@ from .certification import assess_maturity
 from .memory import MemoryCapability, register_memory_capability
 from .retrieval import (
     InMemoryKeywordRetrievalCapability,
+    InMemoryVectorRetrievalCapability,
     RetrievalCapability,
     SQLiteKeywordRetrievalCapability,
+    SQLiteVectorRetrievalCapability,
+    VectorRetrievalCapability,
     register_retrieval_capability,
 )
 from .ingestion import (
@@ -179,6 +182,7 @@ __all__ = [
     "CapabilityStatus",
     "CapabilityDescriptor",
     "CapabilityHostHTTPServer",
+    "RemoteCapabilityHost",
     "CapabilityExecutionContext",
     "capability",
     "CorrelationContext",
@@ -235,7 +239,10 @@ __all__ = [
     "register_planning_capability",
     "register_retrieval_capability",
     "InMemoryKeywordRetrievalCapability",
+    "InMemoryVectorRetrievalCapability",
     "SQLiteKeywordRetrievalCapability",
+    "SQLiteVectorRetrievalCapability",
+    "VectorRetrievalCapability",
     "RetrievalCapability",
     "RetrievalResult",
     "RETRIEVAL_EVIDENCE_TYPES",

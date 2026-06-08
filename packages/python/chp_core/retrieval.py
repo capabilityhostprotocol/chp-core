@@ -21,7 +21,7 @@ Usage (as a CHP capability on a host)::
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from .types import (
     CapabilityCategory,
@@ -212,6 +212,227 @@ class SQLiteKeywordRetrievalCapability(RetrievalCapability):
             source_refs=refs,
             result_count=len(refs),
             latency_ms=latency_ms,
+        )
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Stdlib-only cosine similarity — no numpy required."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    return dot / (na * nb) if na and nb else 0.0
+
+
+class VectorRetrievalCapability(RetrievalCapability):
+    """Abstract base for vector retrieval capabilities.
+
+    Subclasses receive ``embed_fn`` — a callable that maps a text string to a
+    list of floats. The embedding provider is entirely user-supplied, keeping
+    the SDK dependency-free.
+    """
+
+    retrieval_type: Literal["keyword", "vector", "hybrid"] = "vector"
+
+    def __init__(
+        self,
+        embed_fn: Callable[[str], list[float]],
+        *,
+        capability_id: str = "retrieval.query",
+        capability_version: str = "0.1.0",
+        description: str = "Vector retrieval capability.",
+    ) -> None:
+        self.embed_fn = embed_fn
+        self.capability_id = capability_id
+        self.capability_version = capability_version
+        self.description = description
+
+
+class InMemoryVectorRetrievalCapability(VectorRetrievalCapability):
+    """Cosine-similarity retrieval over an in-memory vector store.
+
+    Documents are embedded at construction time; call ``ingest()`` to add more
+    without restarting. Zero external dependencies — uses ``_cosine()`` which
+    requires only stdlib.
+
+    Documents are dicts with:
+    - ``source_id`` (required)
+    - ``content``   (required, embedded)
+    - ``title``     (optional)
+    - ``uri``       (optional)
+    """
+
+    def __init__(
+        self,
+        embed_fn: Callable[[str], list[float]],
+        documents: list[dict] | None = None,
+        *,
+        capability_id: str = "retrieval.query",
+        capability_version: str = "0.1.0",
+        description: str = "In-memory vector retrieval.",
+    ) -> None:
+        super().__init__(
+            embed_fn,
+            capability_id=capability_id,
+            capability_version=capability_version,
+            description=description,
+        )
+        self._items: list[tuple[str, list[float], dict]] = []
+        for doc in (documents or []):
+            self._embed_and_store(doc)
+
+    def _embed_and_store(self, doc: dict) -> None:
+        content = doc.get("content", "")
+        vector = self.embed_fn(content)
+        self._items.append((doc["source_id"], vector, doc))
+
+    def ingest(self, doc: dict) -> None:
+        """Embed *doc* and add it to the in-memory store."""
+        self._embed_and_store(doc)
+
+    def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        filters: dict | None = None,
+    ) -> RetrievalResult:
+        t0 = time.perf_counter()
+        q_vec = self.embed_fn(query)
+        scored: list[tuple[float, dict]] = []
+        for source_id, vec, doc in self._items:
+            score = _cosine(q_vec, vec)
+            if score > 0:
+                scored.append((score, doc))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        refs = [
+            SourceRef(
+                source_id=doc["source_id"],
+                title=doc.get("title"),
+                score=round(sc, 4),
+                uri=doc.get("uri"),
+            )
+            for sc, doc in scored[:top_k]
+        ]
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return RetrievalResult(
+            query=query,
+            source_refs=refs,
+            result_count=len(refs),
+            latency_ms=latency_ms,
+            retrieval_type="vector",
+        )
+
+
+class SQLiteVectorRetrievalCapability(VectorRetrievalCapability):
+    """Vector retrieval backed by SQLite.
+
+    Shares the same ``documents.sqlite`` file as ``SQLiteIngestionCapability``
+    so no separate ingestion step is required when both capabilities are
+    registered. Embeddings are stored in a separate ``embeddings`` table.
+
+    ``retrieve()`` loads all embeddings into Python and computes cosine
+    similarity in-process. Suitable for corpora up to ~10k documents; for
+    larger datasets, the inner loop can be swapped for ``sqlite-vec`` without
+    any API change.
+    """
+
+    def __init__(
+        self,
+        store_path: str = ".chp/documents.sqlite",
+        embed_fn: Callable[[str], list[float]] | None = None,
+        *,
+        capability_id: str = "retrieval.query",
+        capability_version: str = "0.1.0",
+        description: str = "SQLite-backed vector retrieval.",
+    ) -> None:
+        import json as _json
+        import sqlite3
+        from pathlib import Path
+
+        if embed_fn is None:
+            raise ValueError("SQLiteVectorRetrievalCapability requires embed_fn")
+
+        super().__init__(
+            embed_fn,
+            capability_id=capability_id,
+            capability_version=capability_version,
+            description=description,
+        )
+        self._json = _json
+        p = Path(store_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(p), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS documents (
+                source_id    TEXT PRIMARY KEY,
+                content      TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                byte_count   INTEGER NOT NULL,
+                content_type TEXT NOT NULL DEFAULT 'text/plain',
+                title        TEXT,
+                uri          TEXT,
+                ingested_at  TEXT NOT NULL
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS embeddings (
+                source_id   TEXT PRIMARY KEY,
+                vector_json TEXT NOT NULL
+            )
+        """)
+        self._conn.commit()
+
+    def embed_and_store(self, source_id: str, text: str) -> None:
+        """Compute and persist the embedding for *source_id*."""
+        vector = self.embed_fn(text)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO embeddings (source_id, vector_json) VALUES (?, ?)",
+            (source_id, self._json.dumps(vector)),
+        )
+        self._conn.commit()
+
+    def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        filters: dict | None = None,
+    ) -> RetrievalResult:
+        t0 = time.perf_counter()
+        q_vec = self.embed_fn(query)
+        rows = self._conn.execute(
+            """SELECT e.source_id, e.vector_json, d.title, d.uri
+               FROM embeddings e
+               LEFT JOIN documents d ON d.source_id = e.source_id"""
+        ).fetchall()
+        scored: list[tuple[float, tuple]] = []
+        for row in rows:
+            source_id, vector_json, title, uri = row
+            vec: list[float] = self._json.loads(vector_json)
+            score = _cosine(q_vec, vec)
+            if score > 0:
+                scored.append((score, row))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        refs = [
+            SourceRef(
+                source_id=row[0],
+                title=row[2],
+                score=round(sc, 4),
+                uri=row[3],
+            )
+            for sc, row in scored[:top_k]
+        ]
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return RetrievalResult(
+            query=query,
+            source_refs=refs,
+            result_count=len(refs),
+            latency_ms=latency_ms,
+            retrieval_type="vector",
         )
 
     def close(self) -> None:
