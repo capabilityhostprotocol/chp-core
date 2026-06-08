@@ -73,6 +73,50 @@ Evidence is stored in `.chp/my-project.sqlite` (or `~/.chp/my-project.sqlite` if
 
 ---
 
+## Verify your setup
+
+After installing, run a quick smoke test to confirm the host and evidence store are working:
+
+```bash
+chp host verify
+# chp host is healthy — evidence recorded and replayed
+```
+
+Pass `--store-dir` to also verify a real SQLite file gets written and cleaned up:
+
+```bash
+chp host verify --store-dir .chp
+```
+
+Exits 0 on success, 1 on failure (with a reason printed to stderr).
+
+---
+
+## Serve over HTTP
+
+Expose any host over the CHP HTTP API with one command:
+
+```bash
+chp serve-http --module my_app:create_host
+# Serving CHP host 'my-project' at http://127.0.0.1:8765
+```
+
+`my_app:create_host` is a Python import path + a zero-argument factory function that returns a `LocalCapabilityHost`.
+
+Available routes:
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/health` | GET | Liveness check |
+| `/host` | GET | Full host descriptor |
+| `/capabilities` | GET | Capability list |
+| `/invoke` | POST | Invoke a capability |
+| `/replay/{id}` | GET | Replay by correlation ID |
+
+Options: `--port 8765`, `--bind 127.0.0.1`.
+
+---
+
 ## What you get
 
 | Feature | How |

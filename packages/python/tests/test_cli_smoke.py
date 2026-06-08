@@ -53,6 +53,38 @@ class CLIEntryPointTests(unittest.TestCase):
         result = _run("definitely-not-a-command")
         self.assertNotEqual(result.returncode, 0)
 
+    def test_host_group_help(self) -> None:
+        result = _run("host", "--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("verify", result.stdout)
+
+    def test_serve_http_help(self) -> None:
+        result = _run("serve-http", "--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--module", result.stdout)
+
+
+class HostVerifyTests(unittest.TestCase):
+    def test_host_verify_exits_0(self) -> None:
+        result = _run("host", "verify")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("healthy", result.stdout)
+
+    def test_host_verify_with_store_dir(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            result = _run("host", "verify", "--store-dir", d)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("healthy", result.stdout)
+
+    def test_serve_http_missing_module_exits_nonzero(self) -> None:
+        result = _run("serve-http", "--module", "nonexistent.module:create_host")
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_serve_http_bad_module_spec_exits_nonzero(self) -> None:
+        result = _run("serve-http", "--module", "no_colon_in_here")
+        self.assertNotEqual(result.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

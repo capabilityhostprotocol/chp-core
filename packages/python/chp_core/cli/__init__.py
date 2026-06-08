@@ -14,6 +14,10 @@ from ._core import (
     cmd_validate_contract,
     cmd_verify_evidence,
 )
+from ._host import (
+    cmd_host_verify,
+    cmd_serve_http,
+)
 from ._hooks import (
     _install_hooks,
     _install_prepush_hook,
@@ -117,9 +121,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    host = subcommands.add_parser("host", help="Read a served host descriptor.")
+    host = subcommands.add_parser("host", help="Inspect a served host or verify local host health.")
     host.add_argument("--url", default="http://127.0.0.1:8765")
     host.set_defaults(func=cmd_host)
+    host_sub = host.add_subparsers(dest="host_command")
+    host_verify = host_sub.add_parser("verify", help="Smoke-test a local CHP host and evidence store.")
+    host_verify.add_argument("--store-dir", default=None, metavar="DIR",
+                             help="If provided, also verify a real SQLite store in this directory.")
+    host_verify.set_defaults(func=cmd_host_verify)
+
+    serve_http_p = subcommands.add_parser("serve-http", help="Serve a host loaded from an application module.")
+    serve_http_p.add_argument("--module", required=True, metavar="MODULE:FACTORY",
+                              help="Python import path + factory function, e.g. my_app:create_host")
+    serve_http_p.add_argument("--port", type=int, default=8765)
+    serve_http_p.add_argument("--bind", default="127.0.0.1")
+    serve_http_p.set_defaults(func=cmd_serve_http)
 
     serve_demo = subcommands.add_parser("serve-demo", help="Serve the built-in demo host.")
     serve_demo.add_argument("--bind", default="127.0.0.1")
