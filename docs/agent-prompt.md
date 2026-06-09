@@ -1,10 +1,12 @@
 # CHP Adoption — Capability Host Protocol
 
-Status: legacy internal adoption prompt.
+Status: legacy. This document describes pre-v0.1 TypeScript adoption paths that are no longer in use.
 
-This prompt targets older internal TypeScript adoption paths. It is not the
-public CHP v0.1 launch guide. For public v0.1 usage, start with `README.md`,
-`docs/quickstart.md`, and `spec/chp-v0.1.md`.
+Start here instead:
+- `README.md` — protocol overview and quick start
+- `docs/adopter-quickstart.md` — 10-minute path to first evidence event
+- `spec/chp-v0.1.md` — normative protocol specification
+- `AGENTS.md` — orientation for AI agents working in this repo
 
 CHP lets you expose your project's operations as governed, evidence-emitting capabilities. Any function you wrap gets automatic entitlement checks, risk classification, and evidence trails.
 
