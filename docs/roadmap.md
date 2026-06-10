@@ -98,13 +98,16 @@ Cross-host invocation over HTTP. A host can invoke capabilities on another CHP h
 
 Local visibility should be free. Production trust should be paid.
 
-## Current — v0.6.3
+**v0.7.0 — Protocol hardening and gap closure**  
+End-to-end hardening pass: input validation at public API boundaries (`capability_id`, `mode`, `jsonschema` field paths), `ReplayResult.truncated` flag (spec §10 MUST), `RemoteCapabilityHost` network resilience (`URLError`/`OSError`), conformance suite expanded to 29 checks with broken-host negative samples, 42-check alignment suite, 745 tests.
 
-The protocol is stable and public. Focus shifts to adoption: third-party implementors, external language SDKs, and production deployments.
+## Current — v0.7.0
 
-## Up Next — v0.7
+The protocol is hardened and conformance-tested. Focus shifts to adoption: third-party implementors, external language SDKs, and production deployments.
 
-Candidate work items for the v0.7 wave:
+## Up Next — v0.8
+
+Candidate work items for the v0.8 wave:
 
 - **Redaction policies** — `chp.redact_evidence_payload` capability; per-capability redaction rules stored in `.chp/policy.json`
 - **Catalog alignment tooling** — `chp.check_catalog_alignment` to verify roadmap, contracts, and examples against the registered capability catalog
