@@ -20,6 +20,11 @@
       "type": "integer",
       "minimum": 0
     },
+    "truncated": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when the result was capped by the host's replay limit. Use since_sequence to page through remaining events."
+    },
     "replayed_at": {
       "type": "string",
       "format": "date-time"

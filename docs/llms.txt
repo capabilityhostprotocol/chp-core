@@ -51,7 +51,7 @@ entitlement_denied            — caller lacks required entitlement
 correlation_id (required) · limit (optional, RECOMMENDED cap: 10000) · since_sequence · include_payloads
 
 ## ReplayResult fields
-correlation_id · events (ordered by sequence) · event_count · replayed_at
+correlation_id · events (ordered by sequence) · event_count · truncated · replayed_at
 
 ## Conformance checklist (9 requirements)
 1. Capability declaration

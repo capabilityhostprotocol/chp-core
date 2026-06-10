@@ -205,11 +205,13 @@ class LocalCapabilityHost:
         if not query.include_payloads:
             events = [{**event, "payload": {}} for event in events]
         effective_limit = min(query.limit, MAX_REPLAY_LIMIT) if query.limit is not None else MAX_REPLAY_LIMIT
+        total_available = len(events)
         events = events[:effective_limit]
         return ReplayResult(
             correlation_id=query.correlation_id,
             events=events,
             event_count=len(events),
+            truncated=len(events) < total_available,
         )
 
     def query_evidence(
@@ -340,6 +342,16 @@ class LocalCapabilityHost:
             subject=subject or {"id": "local", "type": "user"},
             metadata=metadata or {},
         )
+        _KNOWN_MODES = {"sync", "async", "stream", "fire_and_forget"}
+        if envelope.mode not in _KNOWN_MODES:
+            return self._deny(
+                envelope,
+                DenialReason(
+                    code="unsupported_mode",
+                    message=f"Unknown invocation mode {envelope.mode!r}. Standard modes: {sorted(_KNOWN_MODES)}",
+                    retryable=False,
+                ),
+            )
         return await self.ainvoke_envelope(envelope)
 
     async def invoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
@@ -348,6 +360,16 @@ class LocalCapabilityHost:
     async def ainvoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
         if isinstance(envelope, dict):
             envelope = InvocationEnvelope.from_mapping(envelope)
+
+        if not envelope.capability_id or not envelope.capability_id.strip():
+            return self._deny(
+                envelope,
+                DenialReason(
+                    code="capability_not_found",
+                    message="capability_id must be a non-empty string",
+                    retryable=False,
+                ),
+            )
 
         entry = self._resolve(envelope.capability_id, envelope.version)
         if entry is None:
@@ -395,12 +417,25 @@ class LocalCapabilityHost:
             try:
                 import jsonschema
                 jsonschema.validate(envelope.payload, descriptor.input_schema)
+            except jsonschema.ValidationError as exc:
+                return self._deny(
+                    envelope,
+                    DenialReason(
+                        code="input_schema_validation_failed",
+                        message=exc.message,
+                        retryable=False,
+                        details={
+                            "schema_id": descriptor.input_schema.get("$id"),
+                            "path": list(exc.absolute_path) or None,
+                        },
+                    ),
+                )
             except Exception as exc:
                 return self._deny(
                     envelope,
                     DenialReason(
                         code="input_schema_validation_failed",
-                        message=str(exc).split("\n")[0],
+                        message=f"Schema validation error: {exc}",
                         retryable=False,
                         details={"schema_id": descriptor.input_schema.get("$id")},
                     ),

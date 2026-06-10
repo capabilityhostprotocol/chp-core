@@ -158,6 +158,7 @@ class LocalHostTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result.success)
         self.assertEqual(result.outcome, "skipped")
+        self.assertEqual(result.error["code"], "capability_disabled")
         replay = self.host.replay("corr-skipped")
         self.assertEqual([event["event_type"] for event in replay], ["execution_skipped"])
 
@@ -378,6 +379,191 @@ class LocalHostTests(unittest.IsolatedAsyncioTestCase):
             self.host.invoke("async.check", {})
 
         self.assertIn("ainvoke", str(cm.exception))
+
+    # --- Phase 2 hardening tests ---
+
+    async def test_input_schema_validation_denied(self) -> None:
+        async def handler(_ctx, _payload):
+            return {"ok": True}
+
+        self.host.register(
+            CapabilityDescriptor(
+                id="typed.cap",
+                version="1.0.0",
+                description="Typed capability.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}},
+                    "required": ["x"],
+                    "additionalProperties": False,
+                },
+            ),
+            handler,
+        )
+
+        result = await self.host.ainvoke(
+            "typed.cap",
+            {"x": "not-an-int"},
+            correlation={"correlation_id": "corr-schema-denied"},
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.outcome, "denied")
+        self.assertEqual(result.denial.code, "input_schema_validation_failed")
+        self.assertFalse(result.denial.retryable)
+        replay = self.host.replay("corr-schema-denied")
+        self.assertEqual(len(replay), 1)
+        self.assertEqual(replay[0]["denial"]["code"], "input_schema_validation_failed")
+
+    async def test_input_schema_valid_payload_succeeds(self) -> None:
+        async def handler(_ctx, _payload):
+            return {"ok": True}
+
+        self.host.register(
+            CapabilityDescriptor(
+                id="typed.valid",
+                version="1.0.0",
+                description="Typed capability — valid path.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}},
+                    "required": ["x"],
+                    "additionalProperties": False,
+                },
+            ),
+            handler,
+        )
+
+        result = await self.host.ainvoke(
+            "typed.valid",
+            {"x": 42},
+            correlation={"correlation_id": "corr-schema-ok"},
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.outcome, "success")
+
+    async def test_replay_result_limit_is_respected(self) -> None:
+        from chp_core.host import MAX_REPLAY_LIMIT
+        self.assertGreater(MAX_REPLAY_LIMIT, 0)
+
+        async def handler(_ctx, _payload):
+            return {}
+
+        self.host.register(
+            CapabilityDescriptor(id="limit.cap", version="1.0.0", description=""),
+            handler,
+        )
+
+        corr = "corr-limit"
+        for _ in range(5):
+            await self.host.ainvoke("limit.cap", {}, correlation={"correlation_id": corr})
+
+        full = self.host.replay_result(ReplayQuery(correlation_id=corr))
+        self.assertEqual(full.event_count, 10)
+
+        capped = self.host.replay_result(ReplayQuery(correlation_id=corr, limit=3))
+        self.assertEqual(capped.event_count, 3)
+        self.assertEqual(len(capped.events), 3)
+        self.assertTrue(capped.truncated)
+        self.assertFalse(full.truncated)
+
+    def test_duplicate_registration_emits_warning(self) -> None:
+        import warnings as _warnings
+        desc = CapabilityDescriptor(id="dup.cap", version="1.0.0", description="Duplicate.")
+
+        async def handler(_ctx, _payload):
+            return {}
+
+        self.host.register(desc, handler)
+        with _warnings.catch_warnings(record=True) as w:
+            _warnings.simplefilter("always")
+            self.host.register(desc, handler)
+
+        self.assertEqual(len(w), 1)
+        self.assertIn("already registered", str(w[0].message))
+
+    async def test_error_type_in_failure_evidence(self) -> None:
+        async def handler(_ctx, _payload):
+            raise ValueError("structured error")
+
+        self.host.register(
+            CapabilityDescriptor(id="errtype.cap", version="1.0.0", description=""),
+            handler,
+        )
+
+        result = await self.host.ainvoke(
+            "errtype.cap",
+            {},
+            correlation={"correlation_id": "corr-errtype"},
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.outcome, "failure")
+        replay = self.host.replay("corr-errtype")
+        failed_event = replay[-1]
+        self.assertEqual(failed_event["event_type"], "execution_failed")
+        self.assertEqual(failed_event["error"]["error_type"], "ValueError")
+        self.assertEqual(failed_event["error"]["type"], "ValueError")
+
+    async def test_unsupported_mode_denied(self) -> None:
+        async def handler(_ctx, _payload):
+            return {}
+
+        self.host.register(
+            CapabilityDescriptor(id="sync.only", version="1.0.0", description="", modes=["sync"]),
+            handler,
+        )
+        result = await self.host.ainvoke(
+            "sync.only", {}, mode="stream",
+            correlation={"correlation_id": "corr-mode"},
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(result.outcome, "denied")
+        self.assertEqual(result.denial.code, "unsupported_mode")
+
+    async def test_empty_capability_id_denied(self) -> None:
+        result = await self.host.ainvoke(
+            "", {}, correlation={"correlation_id": "corr-empty-id"}
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(result.outcome, "denied")
+        self.assertEqual(result.denial.code, "capability_not_found")
+
+    async def test_unknown_mode_string_denied(self) -> None:
+        async def handler(_ctx, _payload):
+            return {}
+
+        self.host.register(
+            CapabilityDescriptor(id="mode.cap", version="1.0.0", description="", modes=["sync"]),
+            handler,
+        )
+        result = await self.host.ainvoke(
+            "mode.cap", {}, mode="garbage_mode",
+            correlation={"correlation_id": "corr-unknown-mode"},
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(result.denial.code, "unsupported_mode")
+        self.assertIn("garbage_mode", result.denial.message)
+
+    async def test_input_schema_error_includes_field_path(self) -> None:
+        self.host.register(
+            CapabilityDescriptor(
+                id="typed.cap2",
+                version="1.0.0",
+                description="",
+                input_schema={"type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"]},
+            ),
+            lambda _ctx, _payload: {},
+        )
+        result = await self.host.ainvoke(
+            "typed.cap2", {"x": "not-an-int"},
+            correlation={"correlation_id": "corr-schema-path"},
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(result.denial.code, "input_schema_validation_failed")
+        # path should identify the failing field
+        self.assertIsNotNone(result.denial.details.get("path"))
 
 
 if __name__ == "__main__":

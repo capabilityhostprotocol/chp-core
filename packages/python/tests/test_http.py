@@ -244,6 +244,108 @@ class RemoteCapabilityHostTests(unittest.TestCase):
         self.assertIn("inv", result.invocation_id)
         self.assertEqual(result.capability_id, "math.multiply")
 
+    def test_remote_connection_refused_raises_connection_error(self) -> None:
+        dead = RemoteCapabilityHost("http://127.0.0.1:1")  # port 1 — no listener
+        with self.assertRaises(ConnectionError):
+            dead.invoke("any.cap", {})
+
+    def test_remote_non_json_response_raises_runtime_error(self) -> None:
+        """A 200 response with non-JSON body should raise RuntimeError."""
+        import socketserver
+        import threading
+        from http.server import BaseHTTPRequestHandler
+
+        class HTMLHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = b"<html><body>Not JSON</body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args): pass
+
+        srv = socketserver.TCPServer(("127.0.0.1", 0), HTMLHandler)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            remote = RemoteCapabilityHost(f"http://127.0.0.1:{srv.server_address[1]}")
+            with self.assertRaises(RuntimeError) as ctx:
+                remote.invoke("any.cap", {})
+            self.assertIn("non-JSON", str(ctx.exception))
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_remote_http_500_raises_runtime_error(self) -> None:
+        """A 500 response should raise RuntimeError mentioning the status code."""
+        import socketserver
+        import threading
+        from http.server import BaseHTTPRequestHandler
+
+        class ErrorHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = b'{"error": "internal"}'
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args): pass
+
+        srv = socketserver.TCPServer(("127.0.0.1", 0), ErrorHandler)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            remote = RemoteCapabilityHost(f"http://127.0.0.1:{srv.server_address[1]}")
+            with self.assertRaises(RuntimeError) as ctx:
+                remote.invoke("any.cap", {})
+            self.assertIn("500", str(ctx.exception))
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
+class HTTPServerEdgeCaseTests(unittest.TestCase):
+    """Tests for HTTP server error handling."""
+
+    def setUp(self) -> None:
+        self.host = LocalCapabilityHost("edge-test-host", store=SQLiteEvidenceStore(":memory:"))
+        self.server = create_http_server(self.host, port=0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def test_unknown_path_returns_404(self) -> None:
+        from urllib.error import HTTPError
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(f"{self.base_url}/nonexistent", timeout=5)
+        self.assertEqual(ctx.exception.code, 404)
+
+    def test_malformed_json_body_returns_error_response(self) -> None:
+        raw = b"this is not json"
+        req = Request(
+            f"{self.base_url}/invoke",
+            data=raw,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        from urllib.error import HTTPError
+        try:
+            with urlopen(req, timeout=5) as resp:
+                result = json.loads(resp.read())
+            # some servers return 200 with an error body
+            self.assertFalse(result.get("success", True))
+        except HTTPError as exc:
+            self.assertIn(exc.code, (400, 422, 500))
+
 
 if __name__ == "__main__":
     unittest.main()

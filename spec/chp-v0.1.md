@@ -230,11 +230,12 @@ A replay result contains:
 - `correlation_id`
 - ordered `events`
 - `event_count`
+- `truncated`
 - `replayed_at`
 
 Replay ordering is by local evidence sequence. v0.1 does not define cross-host total ordering.
 
-Hosts SHOULD enforce a maximum `limit` (RECOMMENDED cap: 10,000 events). Clients requesting an unbounded replay MAY receive a bounded result; the `event_count` field reflects the actual count returned.
+Hosts SHOULD enforce a maximum `limit` (RECOMMENDED cap: 10,000 events). Clients requesting an unbounded replay MAY receive a bounded result; the `event_count` field reflects the actual count returned. When a host returns a bounded result, the `ReplayResult.truncated` field MUST be set to `true`. Clients MAY use `since_sequence` to page through remaining events.
 
 Schemas:
 
