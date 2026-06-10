@@ -30,7 +30,7 @@ One command wires automatic evidence capture for every Claude Code session. See 
 - Replay by correlation ID
 - Minimal conformance requirements
 
-## Quickstart
+## From Source
 
 Install the Python reference host from this checkout:
 
@@ -44,46 +44,22 @@ Run the agent/tool observability demo:
 python examples/agent-operations-demo/demo.py
 ```
 
-Run a served capability host endpoint demo:
-
-```bash
-chp demo endpoint
-```
-
-Run conformance:
+Run conformance (29 checks):
 
 ```bash
 python conformance/runner.py
 ```
 
-Record development work as CHP evidence:
+Run the test suite:
 
 ```bash
-chp work run \
-  --intent "Verify CHP tests." \
-  --correlation-id chp-dev-001 \
-  --test-run unit \
-  -- python -m unittest discover -s packages/python/tests
-chp work summary chp-dev-001
+python -m pytest packages/python/tests/
 ```
 
-Validate the served-host demo as evidence:
+Check spec/implementation alignment (41 checks — required before commits to `spec/` or `types.py`):
 
 ```bash
-chp work validate-demo endpoint --correlation-id chp-demo-validation
-chp work replay chp-demo-validation
-```
-
-Check v0.1 protocol alignment:
-
-```bash
-chp work check-alignment --correlation-id chp-alignment
-```
-
-Check launch messaging:
-
-```bash
-chp work check-messaging --correlation-id chp-messaging
+chp work check-alignment --repo-root .
 ```
 
 ## Minimal Capability
@@ -116,23 +92,20 @@ The host emits `execution_started` and `execution_completed` evidence for the in
 
 ## Repository Map
 
-- `spec/chp-v0.1.md`: minimal CHP v0.1 specification
-- `schemas/`: JSON Schemas for protocol objects
-- `packages/python/chp_core/`: reference local host
+- `spec/chp-v0.1.md`: normative CHP v0.1 specification
+- `schemas/`: JSON Schemas for all protocol objects
+- `packages/python/chp_core/`: Python reference host (`LocalCapabilityHost`, `SQLiteEvidenceStore`)
+- `conformance/`: 29-check conformance runner
+- `AGENTS.md`: orientation for AI agents working in this repo
+- `docs/llms.txt`: compact protocol reference for LLM context windows
+- `docs/adopter-quickstart.md`: 10-minute path to first evidence event
+- `docs/roadmap.md`: shipped history and upcoming milestones
 - `examples/capability-host-endpoint-demo/`: HTTP-served host demo
 - `examples/agent-operations-demo/`: agent/tool observability demo
 - `examples/codex-self-observation-demo/`: Codex dogfooding demo
 - `examples/mcp-bridge-demo/`: experimental MCP-style bridge prototype
-- `conformance/`: conformance runner
 - `docs/comparisons/chp-vs-mcp.md`: precise MCP comparison
-- `docs/comparisons/chp-and-opentelemetry.md`: OpenTelemetry alignment note
-- `docs/comparisons/landscape.md`: adjacent framework comparison
-- `docs/design/codex-self-observation.md`: Codex dogfooding pattern
-- `docs/design/public-v0.1-internal-legacy-boundary.md`: public/internal boundary
-- `docs/design/evidence-integrity-v0.2.md`: future evidence integrity proposal
 - `docs/security/threat-model-v0.1.md`: v0.1 threat model
-- `docs/release-checklist-v0.1.md`: release-readiness checklist
-- `docs/packaging-v0.1.md`: packaging and versioning plan
 
 ## CHP vs MCP
 

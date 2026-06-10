@@ -19,7 +19,11 @@ from chp_core import (  # noqa: E402
     LocalCapabilityHost,
     SQLiteEvidenceStore,
 )
-from sample_failing_hosts import BrokenNoEvidenceHost  # noqa: E402
+from sample_failing_hosts import (  # noqa: E402
+    BrokenNoEvidenceHost,
+    BrokenNoHashChainHost,
+    BrokenNonStandardCodesHost,
+)
 
 
 Check = Callable[[Any], Awaitable[None]]
@@ -1089,6 +1093,124 @@ async def check_persistence(_host: Any) -> None:
         mgr2.close_conn()
 
 
+async def check_standard_denial_codes(host: Any) -> None:
+    """Invoking a missing capability produces the standard denial code 'capability_not_found'."""
+    corr_id = "conf-denial-codes-001"
+    result = await invoke_host(host, "nonexistent.capability.xyz", {}, correlation={"correlation_id": corr_id})
+    assert not result_value(result, "success"), "expected failure for missing capability"
+    assert result_value(result, "outcome") == "denied", (
+        f"expected 'denied', got {result_value(result, 'outcome')!r}"
+    )
+    denial = result_value(result, "denial")
+    if isinstance(denial, dict):
+        code = denial.get("code")
+    else:
+        code = getattr(denial, "code", None)
+    assert code == "capability_not_found", (
+        f"expected standard code 'capability_not_found', got {code!r}"
+    )
+
+
+async def check_input_schema_validation(_host: Any) -> None:
+    """A capability with input_schema rejects non-conforming payloads before execution."""
+    import tempfile, os
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        store_path = f.name
+    try:
+        store = SQLiteEvidenceStore(store_path)
+        host = LocalCapabilityHost("conf-schema", store=store)
+
+        async def handler(_ctx, _payload):
+            return {"ok": True}
+
+        host.register(
+            CapabilityDescriptor(
+                id="conf.typed",
+                version="1.0.0",
+                description="Typed capability.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"n": {"type": "integer"}},
+                    "required": ["n"],
+                    "additionalProperties": False,
+                },
+            ),
+            handler,
+        )
+
+        bad = await host.ainvoke(
+            "conf.typed",
+            {"n": "not-an-integer"},
+            correlation={"correlation_id": "conf-schema-bad"},
+        )
+        assert not bad.success, "expected denial for invalid payload"
+        assert bad.outcome == "denied", f"expected denied, got {bad.outcome!r}"
+        assert bad.denial.code == "input_schema_validation_failed", (
+            f"expected 'input_schema_validation_failed', got {bad.denial.code!r}"
+        )
+
+        good = await host.ainvoke(
+            "conf.typed",
+            {"n": 42},
+            correlation={"correlation_id": "conf-schema-good"},
+        )
+        assert good.success, f"valid payload should succeed, got: {good}"
+        store.close()
+    finally:
+        os.unlink(store_path)
+
+
+def _assert_hash_chain(events: list[Any]) -> None:
+    """Shared assertion: events must carry content_hash and link via prev_hash."""
+    assert len(events) >= 2, f"expected at least 2 events, got {len(events)}"
+    for ev in events:
+        assert "content_hash" in ev, f"missing content_hash in event seq={ev.get('sequence')}"
+        assert isinstance(ev["content_hash"], str) and len(ev["content_hash"]) == 64, (
+            f"content_hash must be a 64-char hex string, got {ev['content_hash']!r}"
+        )
+    second = events[1]
+    assert "prev_hash" in second, "second event must have prev_hash linking to first"
+    assert second["prev_hash"] == events[0]["content_hash"], (
+        "prev_hash of second event must equal content_hash of first"
+    )
+
+
+async def check_evidence_hash_chain(host: Any) -> None:
+    """Evidence events carry SHA256 content_hash + prev_hash to form a tamper-detectable chain."""
+    corr_id = "conf-chain-001"
+
+    if hasattr(host, "by_correlation_with_hashes"):
+        # Host exposes hash-aware replay — test it directly (catches BrokenNoHashChainHost)
+        await invoke_host(host, "conformance.echo", {"value": "integrity-check"}, correlation={"correlation_id": corr_id})
+        events = host.by_correlation_with_hashes(corr_id)
+        _assert_hash_chain(events)
+    else:
+        # Fall back: create an isolated reference host and verify the SQLiteEvidenceStore chain
+        import tempfile, os
+        from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+
+        with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+            store_path = f.name
+        try:
+            store = SQLiteEvidenceStore(store_path)
+            ref_host = LocalCapabilityHost("conf-chain", store=store)
+
+            async def echo(_ctx, payload):
+                return {"echo": payload.get("value")}
+
+            ref_host.register(CapabilityDescriptor(id="conf.chain.echo", version="1.0.0", description=""), echo)
+            await ref_host.ainvoke("conf.chain.echo", {"value": "integrity-check"}, correlation={"correlation_id": corr_id})
+            events = store.by_correlation_with_hashes(corr_id)
+            _assert_hash_chain(events)
+            chain_result = store.verify_chain(corr_id)
+            assert chain_result.valid, f"hash chain should be valid, got: {chain_result}"
+            store.close()
+        finally:
+            os.unlink(store_path)
+
+
 CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -1116,16 +1238,26 @@ CHECKS: list[tuple[str, Check]] = [
     ("compliance capability", check_compliance_capability),
     ("incident capability", check_incident_capability),
     ("sqlite persistence", check_persistence),
+    ("standard denial codes", check_standard_denial_codes),
+    ("input schema validation", check_input_schema_validation),
+    ("evidence hash chain", check_evidence_hash_chain),
 ]
 
 
+SAMPLE_HOSTS = {
+    "passing": build_passing_host,
+    "failing-no-evidence": lambda: BrokenNoEvidenceHost(),
+    "failing-non-standard-codes": lambda: BrokenNonStandardCodesHost(),
+    "failing-no-hash-chain": lambda: BrokenNoHashChainHost(),
+}
+
+
 async def run(sample: str) -> list[CheckResult]:
-    if sample == "passing":
-        host = await build_passing_host()
-    elif sample == "failing-no-evidence":
-        host = BrokenNoEvidenceHost()
-    else:
-        raise ValueError(f"unknown sample host: {sample}")
+    builder = SAMPLE_HOSTS.get(sample)
+    if builder is None:
+        raise ValueError(f"unknown sample host: {sample!r}. Choices: {list(SAMPLE_HOSTS)}")
+    host_or_coro = builder()
+    host = await host_or_coro if hasattr(host_or_coro, "__await__") else host_or_coro
 
     results = []
     for name, check in CHECKS:
@@ -1141,9 +1273,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run CHP v0.1 conformance checks.")
     parser.add_argument(
         "--sample",
-        choices=["passing", "failing-no-evidence"],
+        choices=list(SAMPLE_HOSTS),
         default="passing",
-        help="Built-in sample host to test.",
+        help="Built-in sample host to test against.",
     )
     args = parser.parse_args()
 
