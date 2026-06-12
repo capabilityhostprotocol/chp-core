@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -56,6 +57,11 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/replay/"):
             correlation_id = unquote(path.removeprefix("/replay/"))
             self._write_json(self.server.chp_host.replay_result(correlation_id).to_dict())
+            return
+        if path.startswith("/verify/"):
+            correlation_id = unquote(path.removeprefix("/verify/"))
+            result = self.server.chp_host.store.verify_chain(correlation_id)
+            self._write_json(asdict(result))
             return
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
 
@@ -181,20 +187,40 @@ class RemoteCapabilityHost:
         return self._send(req)
 
     def _send(self, req: Request) -> JSON:
-        from urllib.error import HTTPError
+        from urllib.error import HTTPError, URLError
 
         try:
             with urlopen(req, timeout=self._timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                body = resp.read().decode("utf-8")
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             try:
                 detail = json.loads(body)
             except Exception:
-                detail = {"raw": body}
-            raise RuntimeError(
-                f"CHP remote error {exc.code}: {detail}"
+                detail = {"raw": body[:500]}
+            raise RuntimeError(f"CHP remote error {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise ConnectionError(
+                f"CHP remote host unavailable ({self._base}): {exc.reason}"
             ) from exc
+        except OSError as exc:
+            raise ConnectionError(
+                f"CHP remote host connection failed ({self._base}): {exc}"
+            ) from exc
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"CHP remote returned non-JSON response: {body[:200]!r}"
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"CHP remote returned unexpected response type: {type(data).__name__}"
+            )
+
+        return data
 
     @staticmethod
     def _parse_result(data: JSON) -> InvocationResult:
@@ -262,6 +288,11 @@ class RemoteCapabilityHost:
     ) -> InvocationResult:
         return asyncio.run(self.ainvoke(capability_id, payload, **kwargs))
 
+    def invoke_envelope(self, envelope: InvocationEnvelope) -> InvocationResult:
+        """Invoke from a pre-built envelope (synchronous; mirrors the server's /invoke)."""
+        data = self._post("/invoke", envelope.to_dict())
+        return self._parse_result(data)
+
     def discover(self, **filter_kwargs: Any) -> JSON:
         """Return the host descriptor, optionally filtering capabilities."""
         descriptor = self._get("/host")
@@ -288,3 +319,12 @@ class RemoteCapabilityHost:
     def health(self) -> JSON:
         """Return the /health response from the remote host."""
         return self._get("/health")
+
+    def verify(self, correlation_id: str) -> JSON:
+        """Return the SHA256 chain verification result for *correlation_id*.
+
+        Shape mirrors ``ChainVerificationResult``: ``correlation_id``,
+        ``event_count``, ``verified_count``, ``unverified_count``, ``valid``,
+        ``first_broken_sequence``.
+        """
+        return self._get(f"/verify/{correlation_id}")

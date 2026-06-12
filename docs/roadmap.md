@@ -49,25 +49,68 @@ OpenTelemetry export via `chp session otel`. `export_otlp_http` ships spans to a
 **v0.3.4 — Autonomy Profile + Budget Gates**  
 `AutonomyProfile` field on `CapabilityDescriptor`: `tier` (`automated` | `supervised` | `approval_required` | `human_driven`), `spend_limit`, `action_limit`, `rollback_policy`. Budget gates block invocations when limits are exceeded and emit `budget_exceeded` / `approval_requested` evidence. `chp session autonomy-report` shows all autonomy decisions for a session.
 
+**v0.3.5 — Approval Resolution**  
+Closes the `approval_required` open loop. `host.grant_approval()` and `host.deny_approval()` record `approval_granted` / `approval_denied` evidence events. `chp session autonomy-report` updated with `pending_approvals` count and resolved/unresolved classification.
+
+**v0.4.0 — Retrieval Capability**  
+`RetrievalCapability` base class for keyword, vector, and hybrid search. Source citation (document ID, title, score) recorded in hash-chained evidence for every retrieval call. Every RAG query becomes auditable and replayable.
+
+**v0.4.1 — Data Ingestion Capability**  
+`DataIngestionCapability` with governed ingest, SHA256 content provenance, and `ingestion_completed` evidence events.
+
+**v0.4.2 — Transformation Capability**  
+`TransformationCapability` for normalize/chunk/redact operations. SHA256 provenance links output back to input across every transformation step.
+
+**v0.4.3 — Knowledge Graph Capability**  
+Governed entity/relation store with BFS traversal. Every graph mutation emits structured evidence.
+
+**v0.4.4 — Workflow Orchestration + Domain Events**  
+Workflow steps as first-class capabilities. Domain event bus with `event_published` / `event_consumed` evidence.
+
+**v0.4.5 — Metrics + Capability Certification**  
+Metrics naming convention and `chp certify` CLI. Capabilities can be assessed against a maturity rubric and issued a certification record.
+
+**v0.4.6–v0.4.7 — Approval CLI, Version Control, Identity, Composability**  
+`chp approval` subcommands, version control capability exports, identity propagation through delegation chains, composability utilities.
+
+**v0.5.0 — State Machine + Agent Interface**  
+`StateMachineCapability` (§6.3) and `AgentInterfaceCapability` (§7.2). State transitions emit structured evidence; agent interfaces expose governed tool manifests.
+
+**v0.5.1 — Safety + Compliance**  
+Safety gate capability (§8.5) and compliance check capability (§8.6). Pre-execution safety scoring and policy-aligned compliance assertions with evidence.
+
+**v0.5.2 — Incident Management**  
+`IncidentManagementCapability` (§9.5). Structured incident lifecycle: `incident_opened`, `incident_updated`, `incident_resolved` evidence events.
+
+**v0.6.0 — SQLite Persistence Wave**  
+All stateful capabilities (memory, knowledge graph, workflow, retrieval, incident) persist to SQLite stores. Evidence and capability state survive process restarts.
+
+**v0.6.1 — Adopter Experience**  
+`chp host verify` — smoke-tests a host and evidence store end-to-end. `chp serve-http` — exposes any `LocalCapabilityHost` over HTTP with a single command. `docs/adopter-quickstart.md` revised.
+
+**v0.6.2 — Vector Retrieval**  
+Cosine-similarity vector search using only stdlib (`array`, `math`). No numpy, no external deps. Plugs into `RetrievalCapability` as a scored backend.
+
+**v0.6.3 — RemoteCapabilityHost**  
+Cross-host invocation over HTTP. A host can invoke capabilities on another CHP host running `chp serve-http`. Correlation IDs, evidence, and denial codes propagate across the boundary.
+
 ## Guiding Rule
 
 Local visibility should be free. Production trust should be paid.
 
-## Up Next — v0.3.5
+**v0.7.0 — Protocol hardening and gap closure**  
+End-to-end hardening pass: input validation at public API boundaries (`capability_id`, `mode`, `jsonschema` field paths), `ReplayResult.truncated` flag (spec §10 MUST), `RemoteCapabilityHost` network resilience (`URLError`/`OSError`), conformance suite expanded to 29 checks with broken-host negative samples, 42-check alignment suite, 745 tests.
 
-Closes the open loop from v0.3.4. `tier="approval_required"` blocks invocations but has no
-resolution path. v0.3.5 adds:
+## Current — v0.7.0
 
-- `host.grant_approval(correlation_id, capability_uri, ...)` — records `approval_granted` event
-- `host.deny_approval(correlation_id, capability_uri, ...)` — records `approval_denied` event
-- `chp session autonomy-report` updated with `pending_approvals` count and resolved/unresolved classification
+The protocol is hardened and conformance-tested. Focus shifts to adoption: third-party implementors, external language SDKs, and production deployments.
 
-## Up Next — v0.4
+## Up Next — v0.8
 
-The v0.4 milestone shifts focus to governed data access. Candidate work items:
+Candidate work items for the v0.8 wave:
 
-- **Retrieval Capability** — `RetrievalCapability` base class for keyword, vector, and hybrid
-  search. Source citation (document ID, title, score) recorded in evidence for every retrieval
-  call. Every RAG query becomes auditable, replayable, and policy-addressable.
-- **Ingestion Capability** — governed data loading with provenance tracking
-- **Knowledge Graph Capability** — entity/relationship stores as first-class capabilities
+- **Redaction policies** — `chp.redact_evidence_payload` capability; per-capability redaction rules stored in `.chp/policy.json`
+- **Catalog alignment tooling** — `chp.check_catalog_alignment` to verify roadmap, contracts, and examples against the registered capability catalog
+- **Capability contract validation** — `chp.validate_capability_contract` against the canonical contract template
+- **Maturity assessment** — `chp.assess_capability_maturity` scores capabilities against the L1–L7 maturity ladder
+- **Cross-run comparison** — `chp.compare_runs` diffs two work traces for regressions and improvements

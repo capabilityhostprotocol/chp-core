@@ -103,6 +103,10 @@ If a caller supplies a correlation ID, the host MUST preserve it. If no correlat
 
 Hosts SHOULD NOT copy raw invocation payloads into evidence by default. Capabilities may emit explicit redacted evidence payloads.
 
+A host SHOULD validate `payload` against the capability's `input_schema` when present. Validation failures MUST produce an `execution_denied` outcome with denial code `input_schema_validation_failed` and MUST NOT invoke the capability handler.
+
+If a capability URI (`id:version`) is registered more than once on the same host, the host MUST either raise an error or emit a warning. Silent overwrites are NOT RECOMMENDED.
+
 Schema: `schemas/invocation-envelope.schema.json`
 
 ## 6. Execution Evidence Schema
@@ -133,7 +137,7 @@ Required fields:
 - `redacted`
 - `assurance`
 
-Evidence SHOULD be stored append-only. v0.1 does not require cryptographic tamper evidence, remote notarization, or consensus.
+Evidence MUST be stored append-only. Hosts MUST NOT modify or delete evidence events after they are written. v0.1 does not require cryptographic tamper evidence, remote notarization, or consensus.
 
 Schemas:
 
@@ -195,6 +199,19 @@ Denial records SHOULD include:
 - `retryable`
 - structured `details`
 
+**Standard denial codes.** Implementations SHOULD use these stable codes when applicable:
+
+| Code | When |
+|---|---|
+| `capability_not_found` | No capability registered at the requested URI |
+| `capability_disabled` | Capability exists but is disabled |
+| `unsupported_mode` | Requested `mode` not in `modes` |
+| `invariant_failed` | A declared invariant rejected the invocation |
+| `input_schema_validation_failed` | Payload failed `input_schema` validation |
+| `policy_block_pattern_matched` | A policy block pattern matched the payload |
+| `risk_tier_exceeded` | Payload risk tier above configured maximum |
+| `entitlement_denied` | Caller lacks required entitlement |
+
 v0.1 does not require a complete entitlement system. A host may deny based on local rules or invariants.
 
 ## 10. Replay Semantics
@@ -213,9 +230,12 @@ A replay result contains:
 - `correlation_id`
 - ordered `events`
 - `event_count`
+- `truncated`
 - `replayed_at`
 
 Replay ordering is by local evidence sequence. v0.1 does not define cross-host total ordering.
+
+Hosts SHOULD enforce a maximum `limit` (RECOMMENDED cap: 10,000 events). Clients requesting an unbounded replay MAY receive a bounded result; the `event_count` field reflects the actual count returned. When a host returns a bounded result, the `ReplayResult.truncated` field MUST be set to `true`. Clients MAY use `since_sequence` to page through remaining events.
 
 Schemas:
 
@@ -263,3 +283,5 @@ Patch-level implementation changes may occur without changing the protocol versi
 Breaking schema or semantic changes require a new protocol version. Until v1.0, breaking changes may occur, but they should be documented with migration notes and conformance updates.
 
 Capability versions are independent of protocol versions. A capability descriptor version identifies the action contract, not the CHP protocol revision.
+
+Conformance runners SHOULD tag results with the `protocol_version` they validated against. A conformance pass is valid only for the protocol version under which it was run.

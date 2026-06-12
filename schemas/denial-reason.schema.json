@@ -8,7 +8,18 @@
   "properties": {
     "code": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "Stable denial code. Implementations SHOULD use the standard codes when applicable (spec §9).",
+      "examples": [
+        "capability_not_found",
+        "capability_disabled",
+        "unsupported_mode",
+        "invariant_failed",
+        "input_schema_validation_failed",
+        "policy_block_pattern_matched",
+        "risk_tier_exceeded",
+        "entitlement_denied"
+      ]
     },
     "message": {
       "type": "string"
