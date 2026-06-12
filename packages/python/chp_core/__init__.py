@@ -20,6 +20,7 @@ from .capabilities import (
 )
 from .host import CapabilityExecutionContext, LocalCapabilityHost
 from .http import CapabilityHostHTTPServer, RemoteCapabilityHost, create_http_server, serve_http
+from .transport import HttpTransport, LocalTransport, Transport
 from .store import SQLiteEvidenceStore
 from .decorators import capability
 from .codex import (
@@ -197,6 +198,9 @@ __all__ = [
     "InvocationEnvelope",
     "InvocationResult",
     "LocalCapabilityHost",
+    "Transport",
+    "LocalTransport",
+    "HttpTransport",
     "PolicyDescriptor",
     "ReplayQuery",
     "ReplayResult",
