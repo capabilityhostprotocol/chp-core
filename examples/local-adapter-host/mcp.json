@@ -1,0 +1,9 @@
+{
+  "_comment": "MCP servers the local host bridges. Run server.py from THIS directory so 'mcp_demo_server.py' resolves. To use a real server instead, replace with e.g. {\"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/tmp\"]}.",
+  "mcpServers": {
+    "demo": {
+      "command": "python",
+      "args": ["mcp_demo_server.py"]
+    }
+  }
+}

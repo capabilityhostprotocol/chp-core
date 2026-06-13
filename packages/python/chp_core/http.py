@@ -181,20 +181,40 @@ class RemoteCapabilityHost:
         return self._send(req)
 
     def _send(self, req: Request) -> JSON:
-        from urllib.error import HTTPError
+        from urllib.error import HTTPError, URLError
 
         try:
             with urlopen(req, timeout=self._timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                body = resp.read().decode("utf-8")
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             try:
                 detail = json.loads(body)
             except Exception:
-                detail = {"raw": body}
-            raise RuntimeError(
-                f"CHP remote error {exc.code}: {detail}"
+                detail = {"raw": body[:500]}
+            raise RuntimeError(f"CHP remote error {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise ConnectionError(
+                f"CHP remote host unavailable ({self._base}): {exc.reason}"
             ) from exc
+        except OSError as exc:
+            raise ConnectionError(
+                f"CHP remote host connection failed ({self._base}): {exc}"
+            ) from exc
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"CHP remote returned non-JSON response: {body[:200]!r}"
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"CHP remote returned unexpected response type: {type(data).__name__}"
+            )
+
+        return data
 
     @staticmethod
     def _parse_result(data: JSON) -> InvocationResult:

@@ -834,6 +834,7 @@ class ReplayResult:
     correlation_id: str
     events: list[JSON]
     event_count: int
+    truncated: bool = False
     replayed_at: str = field(default_factory=utc_now)
 
     def to_dict(self) -> JSON:

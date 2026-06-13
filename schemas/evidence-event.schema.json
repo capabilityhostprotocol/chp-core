@@ -62,7 +62,17 @@
       "additionalProperties": true,
       "description": "Identity that triggered this invocation (§13.1)."
     },
-    "assurance": { "$ref": "https://chp.dev/schemas/v0.1/evidence-event.schema.json#/$defs/AssuranceMetadata" }
+    "assurance": { "$ref": "https://chp.dev/schemas/v0.1/evidence-event.schema.json#/$defs/AssuranceMetadata" },
+    "content_hash": {
+      "type": ["string", "null"],
+      "description": "SHA256 hex digest of this event's stable fields. Set by the evidence store. Present when returned from hash-aware replay APIs (e.g. store.by_correlation_with_hashes()).",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "prev_hash": {
+      "type": ["string", "null"],
+      "description": "content_hash of the preceding event in the same correlation chain. Null for the first event. Forms a tamper-detectable linked chain per spec §6 (Evidence MUST be append-only).",
+      "pattern": "^[a-f0-9]{64}$"
+    }
   },
   "$defs": {
     "DenialReason": {
