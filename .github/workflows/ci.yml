@@ -37,9 +37,8 @@ jobs:
           python examples/agent-operations-demo/demo.py >/tmp/chp-agent-demo.out
           python examples/codex-self-observation-demo/demo.py >/tmp/chp-codex-demo.out
           python examples/mcp-bridge-demo/bridge.py >/tmp/chp-mcp-demo.out
-          python examples/multi-agent-tree-demo/demo.py >/tmp/chp-multi-agent-demo.out
-          python examples/custom-adapter-demo/demo.py >/tmp/chp-custom-adapter-demo.out
-          python examples/evidence-query-and-policy-demo/demo.py >/tmp/chp-evidence-query-demo.out
+          python examples/simple-tool-call/demo.py >/tmp/chp-simple-demo.out
+          python examples/model-adapter-demo/demo.py >/tmp/chp-model-adapter-demo.out
 
       - name: Validate schema JSON
         run: |
