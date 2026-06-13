@@ -1,12 +1,8 @@
 # CHP Onboarding Guide
 
-Status: legacy. This document describes pre-v0.1 Zenoh-mesh adoption patterns that are no longer in use.
+Status: legacy mesh-oriented onboarding.
 
-Start here instead:
-- `README.md` — protocol overview and quick start
-- `docs/adopter-quickstart.md` — 10-minute path to first evidence event
-- `spec/chp-v0.1.md` — normative protocol specification
-- `AGENTS.md` — orientation for AI agents working in this repo
+For the open-source v0.1 launch path, start with `README.md`, `docs/quickstart.md`, and `spec/chp-v0.1.md`. CHP v0.1 is local-first and evidence-first. Zenoh mesh participation and heavier governance are post-v0.1 transport and product layers, not requirements for conformance.
 
 How to adopt the Capability Host Protocol in your project. Self-serve — pick your language, follow the path.
 

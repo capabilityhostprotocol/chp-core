@@ -12,3 +12,5 @@ __pycache__/
 .python-version
 .coverage
 .hypothesis/
+.chp-agent/
+*.sqlite

@@ -17,20 +17,13 @@ Run Python tests:
 
 ```bash
 cd packages/python
-python -m pytest tests/
+python -m unittest discover -s tests
 ```
 
-Run conformance (26 checks):
+Run conformance:
 
 ```bash
 python conformance/runner.py
-# or: chp conformance run
-```
-
-Verify spec/implementation alignment (41 checks — run before any commit touching `spec/`, `schemas/`, or `types.py`):
-
-```bash
-chp work check-alignment --repo-root .
 ```
 
 Run demos:
@@ -39,10 +32,6 @@ Run demos:
 python examples/agent-operations-demo/demo.py
 python examples/mcp-bridge-demo/bridge.py
 ```
-
-## For AI Agents
-
-AI agents working in this repo should read `AGENTS.md` first — it describes the three invariants they must never violate and has the key commands in compact form.
 
 ## Pull Requests
 

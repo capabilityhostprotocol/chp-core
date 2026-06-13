@@ -1,0 +1,56 @@
+{
+  "name": "@capabilityhostprotocol/chp-core",
+  "version": "0.3.0",
+  "description": "TypeScript runtime SDK for the Capability Host Protocol (CHP).",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --external better-sqlite3",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external better-sqlite3",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "chp",
+    "capability-host-protocol",
+    "governance",
+    "evidence",
+    "capabilities",
+    "typescript",
+    "runtime"
+  ],
+  "author": "Capability Host Protocol Contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/capabilityhostprotocol/chp-core",
+    "directory": "packages/ts-runtime"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@capabilityhostprotocol/types": "^0.4.0",
+    "better-sqlite3": "^9.4.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^2.0.0"
+  }
+}

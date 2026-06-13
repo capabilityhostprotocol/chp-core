@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 from .checks import add_check, read_json, read_text, safe_check_name
@@ -60,6 +61,48 @@ FORBIDDEN_PUBLIC_CLAIMS = [
     "universal protocol for everything",
     "full governance on day one",
 ]
+
+
+def check_sync_integrity(repo_root: Path) -> JSON:
+    """Check that chp-core's Python package is in sync with chp-dev source of truth."""
+    checks: list[JSON] = []
+    chp_dev_python = repo_root.parent / "chp-dev" / "packages" / "python" / "chp_core"
+    chp_core_python = repo_root / "packages" / "python" / "chp_core"
+
+    if not chp_dev_python.exists():
+        add_check(
+            checks,
+            "chp_dev_sync_skipped",
+            True,
+            {"reason": "chp-dev not found as sibling — sync check skipped (CI environment)"},
+        )
+        return {"passed": True, "checks": checks, "skipped": True}
+
+    result = subprocess.run(
+        [
+            "diff", "-rq",
+            "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=*.pyo",
+            str(chp_dev_python), str(chp_core_python),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    diverged = [line for line in result.stdout.splitlines() if line]
+    add_check(
+        checks,
+        "chp_dev_python_sync_clean",
+        len(diverged) == 0,
+        {
+            "diverged_files": diverged[:10],
+            "total_diverged": len(diverged),
+            "hint": "run: bash scripts/sync-to-public.sh from chp-dev to resync",
+        },
+    )
+    return {
+        "passed": all(c["passed"] for c in checks),
+        "checks": checks,
+        "diverged_count": len(diverged),
+    }
 
 
 def check_alignment(repo_root: Path) -> JSON:
@@ -147,6 +190,9 @@ def check_alignment(repo_root: Path) -> JSON:
         and "ExecutionEvidenceEvent" not in python_types,
         {"forbidden": ["CapabilityHostDescriptor", "ExecutionEvidenceEvent"]},
     )
+
+    sync = check_sync_integrity(repo_root)
+    checks.extend(sync["checks"])
 
     return {
         "passed": all(check["passed"] for check in checks),

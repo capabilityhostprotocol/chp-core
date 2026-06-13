@@ -1,0 +1,3 @@
+# Local evidence stores and credentials — never commit.
+.chp/
+.env
