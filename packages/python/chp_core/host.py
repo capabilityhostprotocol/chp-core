@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import threading
 import traceback
+import warnings
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
+
+MAX_REPLAY_LIMIT = 10_000
 
 from .store import SQLiteEvidenceStore
 from .decorators import adapt_callable, get_capability_descriptor
@@ -99,6 +103,7 @@ class LocalCapabilityHost:
         self.store = store or SQLiteEvidenceStore()
         self.metadata = metadata or {}
         self._capabilities: dict[str, RegisteredCapability] = {}
+        self._registry_lock = threading.RLock()
 
     def register(
         self,
@@ -121,20 +126,27 @@ class LocalCapabilityHost:
             raise ValueError("capability descriptor id is required")
         if not descriptor.version:
             raise ValueError("capability descriptor version is required")
-        self._capabilities[descriptor.capability_uri] = RegisteredCapability(
-            descriptor=descriptor,
-            handler=handler,
-            enabled=enabled,
-        )
+        with self._registry_lock:
+            if descriptor.capability_uri in self._capabilities:
+                warnings.warn(
+                    f"Capability '{descriptor.capability_uri}' already registered — overwriting.",
+                    stacklevel=2,
+                )
+            self._capabilities[descriptor.capability_uri] = RegisteredCapability(
+                descriptor=descriptor,
+                handler=handler,
+                enabled=enabled,
+            )
         return descriptor
 
     def descriptor(self) -> HostDescriptor:
-        return HostDescriptor(
-            id=self.host_id,
-            version=self.version,
-            capabilities=[entry.descriptor for entry in self._capabilities.values()],
-            metadata=self.metadata,
-        )
+        with self._registry_lock:
+            return HostDescriptor(
+                id=self.host_id,
+                version=self.version,
+                capabilities=[entry.descriptor for entry in self._capabilities.values()],
+                metadata=self.metadata,
+            )
 
     def discover(
         self,
@@ -192,12 +204,14 @@ class LocalCapabilityHost:
             events = [event for event in events if event["sequence"] > query.since_sequence]
         if not query.include_payloads:
             events = [{**event, "payload": {}} for event in events]
-        if query.limit is not None:
-            events = events[: query.limit]
+        effective_limit = min(query.limit, MAX_REPLAY_LIMIT) if query.limit is not None else MAX_REPLAY_LIMIT
+        total_available = len(events)
+        events = events[:effective_limit]
         return ReplayResult(
             correlation_id=query.correlation_id,
             events=events,
             event_count=len(events),
+            truncated=len(events) < total_available,
         )
 
     def query_evidence(
@@ -328,6 +342,16 @@ class LocalCapabilityHost:
             subject=subject or {"id": "local", "type": "user"},
             metadata=metadata or {},
         )
+        _KNOWN_MODES = {"sync", "async", "stream", "fire_and_forget"}
+        if envelope.mode not in _KNOWN_MODES:
+            return self._deny(
+                envelope,
+                DenialReason(
+                    code="unsupported_mode",
+                    message=f"Unknown invocation mode {envelope.mode!r}. Standard modes: {sorted(_KNOWN_MODES)}",
+                    retryable=False,
+                ),
+            )
         return await self.ainvoke_envelope(envelope)
 
     async def invoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
@@ -336,6 +360,16 @@ class LocalCapabilityHost:
     async def ainvoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
         if isinstance(envelope, dict):
             envelope = InvocationEnvelope.from_mapping(envelope)
+
+        if not envelope.capability_id or not envelope.capability_id.strip():
+            return self._deny(
+                envelope,
+                DenialReason(
+                    code="capability_not_found",
+                    message="capability_id must be a non-empty string",
+                    retryable=False,
+                ),
+            )
 
         entry = self._resolve(envelope.capability_id, envelope.version)
         if entry is None:
@@ -379,6 +413,34 @@ class LocalCapabilityHost:
         if autonomy_denial is not None:
             return self._deny(envelope, autonomy_denial)
 
+        if descriptor.input_schema:
+            try:
+                import jsonschema
+                jsonschema.validate(envelope.payload, descriptor.input_schema)
+            except jsonschema.ValidationError as exc:
+                return self._deny(
+                    envelope,
+                    DenialReason(
+                        code="input_schema_validation_failed",
+                        message=exc.message,
+                        retryable=False,
+                        details={
+                            "schema_id": descriptor.input_schema.get("$id"),
+                            "path": list(exc.absolute_path) or None,
+                        },
+                    ),
+                )
+            except Exception as exc:
+                return self._deny(
+                    envelope,
+                    DenialReason(
+                        code="input_schema_validation_failed",
+                        message=f"Schema validation error: {exc}",
+                        retryable=False,
+                        details={"schema_id": descriptor.input_schema.get("$id")},
+                    ),
+                )
+
         started = self.emit_evidence(
             "execution_started",
             envelope,
@@ -415,8 +477,9 @@ class LocalCapabilityHost:
                 outcome="failure",
                 error={
                     "type": exc.__class__.__name__,
+                    "error_type": exc.__class__.__name__,
                     "message": str(exc),
-                    "traceback": traceback.format_exc(limit=3),
+                    "traceback": traceback.format_exc(),
                 },
             )
             return InvocationResult(
@@ -462,18 +525,19 @@ class LocalCapabilityHost:
         return self.store.append(event)
 
     def _resolve(self, capability_id: str, version: str | None) -> RegisteredCapability | None:
-        if ":" in capability_id and version is None:
-            return self._capabilities.get(capability_id)
-        if version is not None:
-            return self._capabilities.get(f"{capability_id}:{version}")
-        matches = [
-            entry
-            for uri, entry in self._capabilities.items()
-            if uri.startswith(f"{capability_id}:")
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        return None
+        with self._registry_lock:
+            if ":" in capability_id and version is None:
+                return self._capabilities.get(capability_id)
+            if version is not None:
+                return self._capabilities.get(f"{capability_id}:{version}")
+            matches = [
+                entry
+                for uri, entry in self._capabilities.items()
+                if uri.startswith(f"{capability_id}:")
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            return None
 
     def _deny(self, envelope: InvocationEnvelope, denial: DenialReason) -> InvocationResult:
         denied = self.emit_evidence(

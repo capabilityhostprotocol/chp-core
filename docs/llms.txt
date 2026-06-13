@@ -1,0 +1,77 @@
+# Capability Host Protocol v0.1 — Compact Reference
+
+## Purpose
+Make agent, tool, and system execution observable, replayable, and governable at the capability boundary. Local-first, transport-agnostic, zero mandatory deps.
+
+## Canonical protocol objects (8)
+CapabilityDescriptor · HostDescriptor · InvocationEnvelope · InvocationResult · ExecutionEvidence · CorrelationContext · ReplayQuery · ReplayResult
+
+## CapabilityDescriptor required fields
+id · version · description · modes (min: ["sync"]) · emits
+Optional: input_schema · output_schema · invariants · risk · assurance · owner · tags
+
+## HostDescriptor required fields
+id · version · protocol_version ("0.1") · kind · capabilities · evidence
+
+## InvocationEnvelope required fields
+invocation_id · capability_id · mode · correlation · subject · payload · requested_at
+Rule: if caller supplies correlation_id, host MUST preserve it. If absent, host MUST generate one.
+Rule: host SHOULD validate payload against input_schema when present.
+
+## ExecutionEvidence required fields
+event_id · event_type · invocation_id · capability_id · host_id · correlation · timestamp · sequence · payload · redacted · assurance
+Rule: Evidence MUST be stored append-only. Hosts MUST NOT modify or delete events.
+
+## Core evidence event types
+execution_started · execution_completed · execution_failed · execution_denied · execution_skipped
+
+## Outcome enum
+success — handler completed and returned data
+failure — execution began but failed
+denied  — host rejected before handler ran
+skipped — host intentionally did not execute
+
+## Evidence emission rules
+success  → MUST emit execution_started + execution_completed
+failure  → MUST emit execution_started + execution_failed
+denied   → MUST emit execution_denied (may occur before execution_started)
+skipped  → MUST emit execution_skipped
+
+## Standard denial codes
+capability_not_found          — no capability at requested URI
+capability_disabled           — exists but disabled
+unsupported_mode              — mode not in descriptor.modes
+invariant_failed              — declared invariant rejected invocation
+input_schema_validation_failed — payload failed input_schema validation
+policy_block_pattern_matched  — policy block pattern matched payload
+risk_tier_exceeded            — payload risk tier above configured max
+entitlement_denied            — caller lacks required entitlement
+
+## ReplayQuery fields
+correlation_id (required) · limit (optional, RECOMMENDED cap: 10000) · since_sequence · include_payloads
+
+## ReplayResult fields
+correlation_id · events (ordered by sequence) · event_count · truncated · replayed_at
+
+## Conformance checklist (9 requirements)
+1. Capability declaration
+2. Capability discovery
+3. Invocation through envelope-compatible boundary
+4. Correlation propagation
+5. Evidence emission on success
+6. Evidence emission on failure
+7. Evidence emission on denial or unsupported action
+8. Replay by correlation ID
+9. Representation of skipped execution (where host supports it)
+
+## Non-goals (v0.1)
+Distributed host discovery · required network transport · workflow language · agent framework · complete policy engine · enterprise RBAC · hosted retention · cryptographic proof of evidence integrity · replacement for MCP / OTel / Temporal / Kafka / API gateways
+
+## Key file paths
+spec/chp-v0.1.md                            — normative specification
+schemas/                                    — JSON Schema for all protocol objects
+packages/python/chp_core/host.py            — LocalCapabilityHost reference impl
+packages/python/chp_core/store.py           — SQLiteEvidenceStore (append-only, SHA256-chained)
+packages/python/chp_core/types.py           — Python protocol dataclasses
+conformance/runner.py                       — 9-check conformance suite
+docs/adopter-quickstart.md                  — 10-minute adopter path
