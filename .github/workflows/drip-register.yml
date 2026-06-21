@@ -1,0 +1,91 @@
+name: Drip Register
+
+# Registers up to 4 new PyPI packages per day until all chp-adapter-* and
+# chp-host are live. Runs on a schedule and can be triggered manually.
+# Once all packages are registered, this workflow becomes a no-op (skip-existing).
+#
+# PYPI_API_TOKEN must be set in repository secrets.
+
+on:
+  schedule:
+    - cron: '0 14 * * *'  # 14:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  drip:
+    name: Register next batch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build + twine
+        run: pip install build twine
+
+      - name: Build and register packages (4 per run)
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          # Priority order: host-critical first, specialised last
+          PACKAGES=(
+            packages/chp-host
+            packages/chp-adapter-http
+            packages/chp-adapter-filesystem
+            packages/chp-adapter-secrets
+            packages/chp-adapter-jobs
+            packages/chp-adapter-process
+            packages/chp-adapter-mcp
+            packages/chp-adapter-tailscale
+            packages/chp-adapter-git
+            packages/chp-adapter-github
+            packages/chp-adapter-radicle
+            packages/chp-adapter-planning
+            packages/chp-adapter-delegation
+            packages/chp-adapter-safety
+            packages/chp-adapter-messages
+            packages/chp-adapter-launchd
+            packages/chp-adapter-registry
+            packages/chp-adapter-local-llm
+            packages/chp-adapter-scout
+            packages/chp-adapter-smolagents
+            packages/chp-adapter-huggingface
+            packages/chp-adapter-tei
+            packages/chp-adapter-vllm
+            packages/chp-adapter-sglang
+            packages/chp-adapter-raspi
+            packages/chp-adapter-synology
+            packages/chp-adapter-release
+          )
+
+          registered=0
+          for pkg in "${PACKAGES[@]}"; do
+            echo "--- $pkg ---"
+            python -m build "$pkg" --outdir /tmp/drip-dist 2>/dev/null
+
+            name=$(basename "$pkg")
+            whl=$(ls /tmp/drip-dist/${name//-/_}-*.whl 2>/dev/null | head -1)
+            tar=$(ls /tmp/drip-dist/${name//-/_}-*.tar.gz 2>/dev/null | head -1)
+
+            out=$(twine upload "$whl" "$tar" --skip-existing 2>&1) && rc=0 || rc=$?
+            echo "$out"
+
+            if echo "$out" | grep -qiE "File already exists|Skipping|was already uploaded"; then
+              echo "  → already live, skipping"
+            elif echo "$out" | grep -q "429"; then
+              echo "  → hit daily limit after $registered new registrations — stopping gracefully"
+              exit 0
+            elif [ $rc -ne 0 ]; then
+              echo "  → unexpected error, aborting"
+              exit 1
+            else
+              echo "  → registered"
+              registered=$((registered + 1))
+              sleep 5
+            fi
+          done
+
+          echo "Done. $registered new packages registered this run."
