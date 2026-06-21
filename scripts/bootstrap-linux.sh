@@ -46,10 +46,13 @@ if [[ "$DEV_MODE" == true ]]; then
     pip install -e "${REPO_ROOT}/packages/${pkg}"
   done
 else
-  echo "==> Installing chp-core + chp-host from PyPI..."
-  pip install "chp-core>=0.7.0" "chp-host>=0.7.0"
+  GH_RELEASE_LINKS="https://github.com/capabilityhostprotocol/chp-core/releases/expanded_assets/v0.8.0"
+  PIP_INSTALL="pip install --find-links ${GH_RELEASE_LINKS}"
+
+  echo "==> Installing chp-core + chp-host..."
+  ${PIP_INSTALL} "chp-core>=0.8.0" "chp-host>=0.8.0"
   echo "==> Installing common adapters..."
-  pip install "${COMMON_ADAPTERS[@]}"
+  ${PIP_INSTALL} "${COMMON_ADAPTERS[@]}"
 fi
 
 echo "==> Running chp-host init --role ${ROLE} --yes"

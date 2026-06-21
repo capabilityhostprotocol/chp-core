@@ -74,17 +74,22 @@ if [[ "$DEV_MODE" == true ]]; then
     done
   fi
 else
-  # PyPI installs — works on any machine with Python + pip
-  echo "==> Installing chp-core + chp-host from PyPI..."
-  pip install "chp-core>=0.7.0" "chp-host>=0.7.0"
+  # PyPI + GitHub Releases fallback.
+  # New packages appear on PyPI gradually (4/day limit on new project creation).
+  # --find-links covers the gap: pip prefers PyPI when the version is there,
+  # falls back to the release asset if not.
+  GH_RELEASE_LINKS="https://github.com/capabilityhostprotocol/chp-core/releases/expanded_assets/v0.8.0"
+  PIP_INSTALL="pip install --find-links ${GH_RELEASE_LINKS}"
+
+  echo "==> Installing chp-core + chp-host..."
+  ${PIP_INSTALL} "chp-core>=0.8.0" "chp-host>=0.8.0"
 
   echo "==> Installing common adapters..."
-  pip install "${COMMON_ADAPTERS[@]/#/chp-adapter-}" 2>/dev/null || \
-    pip install "${COMMON_ADAPTERS[@]}"
+  ${PIP_INSTALL} "${COMMON_ADAPTERS[@]}"
 
   if [[ "${ROLE}" == "primary" ]]; then
     echo "==> Installing primary-role adapters..."
-    pip install "${PRIMARY_ADAPTERS[@]}"
+    ${PIP_INSTALL} "${PRIMARY_ADAPTERS[@]}"
   fi
 fi
 
