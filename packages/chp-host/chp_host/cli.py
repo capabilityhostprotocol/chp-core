@@ -27,6 +27,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 from chp_core.http import serve_http
 
