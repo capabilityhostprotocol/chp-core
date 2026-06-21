@@ -20,11 +20,36 @@ for arg in "$@"; do [[ "$arg" == "--dev" ]] && DEV_MODE=true; done
 
 echo "==> CHP bootstrap: macOS — role=${ROLE}${DEV_MODE:+ (dev/editable mode)}"
 
-# Require Python 3.10+
-python3 -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" || {
-  echo "Error: Python 3.10+ required. Install via: brew install python@3.12" >&2
+# Find Python 3.11+ — prefer brew's explicit binaries over pyenv shims,
+# which may intercept 'python3' with an older version from .python-version.
+PYTHON=""
+for candidate in python3.13 python3.12 python3.11; do
+  if bin=$(command -v "$candidate" 2>/dev/null); then
+    if "$bin" -c "import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
+      PYTHON="$bin"
+      break
+    fi
+  fi
+done
+
+# Fall back to 'python3' only if it's new enough (handles non-pyenv setups)
+if [[ -z "$PYTHON" ]]; then
+  if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
+    PYTHON="python3"
+  fi
+fi
+
+if [[ -z "$PYTHON" ]]; then
+  echo "" >&2
+  echo "Error: Python 3.11+ not found." >&2
+  echo "" >&2
+  echo "If you have pyenv with an older version pinned, install a newer Python:" >&2
+  echo "  brew install python@3.12" >&2
+  echo "Then re-run this script — it will find brew's python3.12 automatically." >&2
   exit 1
-}
+fi
+
+echo "==> Using $PYTHON ($("$PYTHON" --version))"
 
 # Adapters common to all roles
 COMMON_ADAPTERS=(
@@ -64,13 +89,13 @@ if [[ "$DEV_MODE" == true ]]; then
   # Editable installs from local repo (for contributors)
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
   echo "==> Dev mode: installing from ${REPO_ROOT}"
-  pip install -e "${REPO_ROOT}/packages/python" "${REPO_ROOT}/packages/chp-host"
+  "$PYTHON" -m pip install -e "${REPO_ROOT}/packages/python" "${REPO_ROOT}/packages/chp-host"
   for pkg in "${COMMON_ADAPTERS[@]}"; do
-    pip install -e "${REPO_ROOT}/packages/${pkg}"
+    "$PYTHON" -m pip install -e "${REPO_ROOT}/packages/${pkg}"
   done
   if [[ "${ROLE}" == "primary" ]]; then
     for pkg in "${PRIMARY_ADAPTERS[@]}"; do
-      pip install -e "${REPO_ROOT}/packages/${pkg}"
+      "$PYTHON" -m pip install -e "${REPO_ROOT}/packages/${pkg}"
     done
   fi
 else
@@ -79,7 +104,7 @@ else
   # --find-links covers the gap: pip prefers PyPI when the version is there,
   # falls back to the release asset if not.
   GH_RELEASE_LINKS="https://github.com/capabilityhostprotocol/chp-core/releases/expanded_assets/v0.8.0"
-  PIP_INSTALL="pip install --find-links ${GH_RELEASE_LINKS}"
+  PIP_INSTALL="$PYTHON -m pip install --find-links ${GH_RELEASE_LINKS}"
 
   echo "==> Installing chp-core + chp-host..."
   ${PIP_INSTALL} "chp-core>=0.8.0" "chp-host>=0.8.0"
@@ -94,4 +119,8 @@ else
 fi
 
 echo "==> Running chp-host init --role ${ROLE} --yes"
+# Add this Python's scripts dir to PATH so the installed chp-host binary is found
+# even when pyenv shims shadow the system PATH.
+PY_SCRIPTS="$("$PYTHON" -c "import sysconfig; print(sysconfig.get_path('scripts'))")"
+export PATH="${PY_SCRIPTS}:${PATH}"
 chp-host init --role "${ROLE}" --yes
