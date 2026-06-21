@@ -397,9 +397,12 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         from .mesh import mesh_path
         default_mesh = mesh_path()
         if default_mesh.exists():
-            env_name = "mesh"
-            base_dir = str(default_mesh.parent)
             print(f"CHP gateway: loading default mesh manifest {default_mesh}")
+            try:
+                env = EnvironmentConfig.load(str(default_mesh))
+            except (FileNotFoundError, ValueError) as exc:
+                print(f"ERROR: cannot load mesh manifest: {exc}", file=sys.stderr)
+                return 1
         else:
             print(
                 "ERROR: --environment NAME is required (or create ~/.chp/mesh.json with "
@@ -407,12 +410,12 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-
-    try:
-        env = EnvironmentConfig.load(env_name, base_dir=base_dir)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"ERROR: cannot load environment {env_name!r}: {exc}", file=sys.stderr)
-        return 1
+    else:
+        try:
+            env = EnvironmentConfig.load(env_name, base_dir=base_dir)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"ERROR: cannot load environment {env_name!r}: {exc}", file=sys.stderr)
+            return 1
 
     gw = env.gateway
     bind = getattr(args, "bind", None) or (gw.bind if gw else "0.0.0.0")
