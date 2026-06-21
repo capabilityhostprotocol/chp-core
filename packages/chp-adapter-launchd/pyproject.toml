@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chp-adapter-launchd"
+version = "0.7.0"
+description = "CHP capability adapter — govern macOS launchd (LaunchAgent) services"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Auxo" }]
+keywords = ["chp", "capability-host-protocol", "launchd", "launchctl", "macos", "service", "adapter"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "chp-core>=0.7.0",
+]
+
+[project.entry-points."chp.adapters"]
+launchd = "chp_adapter_launchd:LaunchdAdapter"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "strict"
+
+[tool.hatch.build.targets.wheel]
+packages = ["chp_adapter_launchd"]

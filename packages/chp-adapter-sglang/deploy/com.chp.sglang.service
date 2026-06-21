@@ -1,0 +1,47 @@
+# SGLang LaunchAgent for FastContext-1.0-4B-RL (Linux/CUDA deployment target)
+# ─────────────────────────────────────────────────────────────────────────────
+# Platform notes:
+#   CUDA/NVIDIA:   primary target, recommended for production
+#   CPU fallback:  add --device cpu (slow, ~10x latency vs GPU)
+#   Mac/Metal:     NOT supported — use com.chp.vllm.plist (vllm-metal) instead
+#
+# Install (Linux systemd):
+#   pip install "sglang[all]==0.5.10.post1"
+#   cp com.chp.sglang.service /etc/systemd/system/
+#   systemctl enable --now com.chp.sglang
+#
+# SGLang advantages over vLLM for FastContext:
+#   --tool-call-parser qwen   → structured tool_calls in every response (no XML fallback)
+#   radix-tree KV cache       → shared system prompt cached across multi-turn scout loops
+#   parallel tool calls       → FastContext issues multiple READ/GLOB/GREP per turn
+#
+# Port 8093 — runs alongside vLLM (8092) for A/B evaluation.
+# Set ScoutConfig(base_url="http://localhost:8093") to route scout through SGLang.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[Unit]
+Description=SGLang inference server — FastContext-1.0-4B-RL
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+User=chp
+
+ExecStart=/usr/local/bin/python -m sglang.launch_server \
+    --model-path microsoft/FastContext-1.0-4B-RL \
+    --served-model-name fastcontext \
+    --tool-call-parser qwen \
+    --context-length 131072 \
+    --dtype bfloat16 \
+    --port 8093 \
+    --host 0.0.0.0 \
+    --tp-size 1 \
+    --mem-fraction-static 0.8
+
+StandardOutput=append:/var/log/chp/sglang.log
+StandardError=append:/var/log/chp/sglang.err
+
+[Install]
+WantedBy=multi-user.target

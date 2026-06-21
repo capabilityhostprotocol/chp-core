@@ -5,32 +5,44 @@
 ## Shipped
 
 **v0.1 — Local Execution Evidence**  
-Minimal protocol spec, JSON schemas, Python reference host (`chp-core`), TypeScript types (`@capabilityhostprotocol/types`), append-only SQLite evidence store, replay by correlation ID, conformance suite.
+Protocol spec, JSON schemas, Python reference host (`chp-core`), TypeScript types
+(`@capabilityhostprotocol/types`), append-only SQLite evidence store, replay by
+correlation ID, conformance suite.
 
-**v0.2.0 — Model Adapters**  
-First-class adapters for Claude, OpenAI, and Gemini. Every LLM call becomes a governed, replayable CHP capability. `chp validate-contract` CLI.
+**v0.1 Adapter Tier — 66 Governed Adapters**  
+Full `chp-adapter-*` library: HTTP, filesystem, git, GitHub, Radicle, audit, secrets,
+CI, conformance, safety, planning, delegation, composition, jobs, HuggingFace, TEI,
+vLLM, Scout, SGLang, smolagents, Tailscale, and more. Every adapter wraps its
+operations in evidence. See `docs/capabilities/adapter-build-status.md`.
 
-**v0.2.1 — Agentic Emission**  
-Zero-config evidence from Claude Code sessions. `chp hooks install` → every tool call and session stored automatically. No application code changes required.
+**v0.1 Host Infrastructure — `chp-host`**  
+`chp-host serve/mcp/gateway/init/mesh` CLI. Profile-based host config, multi-host
+router, Tailscale mesh, `chp-host init` one-command node setup, `chp-host mesh`
+peer management, zero-arg gateway via `~/.chp/mesh.json`.
 
-## Active — v0.2 Series
+**Claude Desktop / MCP Integration**  
+`chp-host mcp` exposes all capabilities as MCP tools. Every Claude tool call is
+governed and evidenced. See `docs/claude-desktop-mcp.md`.
 
-The v0.2 series focuses on making agentic development fully observable by default. Upcoming patches (no dates, no promises):
+## Active — Multi-Host Mesh
 
-- **Session intelligence** — pre-tool governance hooks, session export, richer session view
-- **Multi-agent correlation** — parent-child session trees when agents spawn agents
-- **More agent adapters** — Codex, Gemini CLI, others following the same hook pattern
-- **Programmatic wrapping** — `AgentSession` context manager, `wrap_tool_call()` one-shot wrapper
-- **Evidence integrity** — hash chaining, portable signed bundles, `chp verify-evidence`
-- **Policy gates** — pre-tool invariant enforcement, risk tiers, approval events
-- **Observability alignment** — OpenTelemetry export, capability health endpoints
-- **Local registry** — `~/.chp/registry.yaml`, maturity assessment, `chp registry`
+Ongoing work to make distributed CHP clusters feel natural:
 
-## Next — v0.3 Series
+- **Bootstrap scripts** — `scripts/bootstrap-mac.sh`, `scripts/bootstrap-linux.sh`
+- **Service persistence** — LaunchAgent on macOS, systemd on Linux, auto-loaded by init
+- **Tailscale mesh** — peer discovery via `chp.adapters.tailscale.chp_hosts`
+- **Edge nodes** — Synology NAS (port 8802), Raspberry Pi (port 8801)
 
-The v0.3 series adds the **agent cognition layer**: first-class protocol primitives for memory,
-planning, reflection, and delegation. Agents become governed first-class actors in the protocol,
-not just consumers of it. The v0.2 series must ship before v0.3 begins.
+## Next — v0.2 Protocol
+
+The v0.2 protocol layer adds tamper-evident evidence and richer query:
+
+- **Evidence integrity** — JCS hash chains, ed25519 signed bundles, graduated assurance
+  (`none` / `hash-chain` / `signed`). Design: `docs/design/evidence-integrity-v0.2.md`
+- **Streaming evidence** — chunked evidence events during long-running capabilities
+- **Evidence query API** — filter by capability_id, time range, outcome, issue_id
+- **Capability versioning** — schema evolution path, `deprecated` lifecycle state
+- **`chp verify`** — portable bundle verification CLI
 
 ## Guiding Rule
 

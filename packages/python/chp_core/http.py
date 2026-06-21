@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import os
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -11,6 +15,7 @@ from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .host import LocalCapabilityHost
+from .metrics import aggregate_session_metrics, aggregate_token_metrics, format_prometheus, format_token_prometheus
 from .types import (
     CorrelationContext,
     DenialReason,
@@ -22,9 +27,9 @@ from .types import (
 
 
 class CapabilityHostHTTPServer(ThreadingHTTPServer):
-    """Threading HTTP server bound to a LocalCapabilityHost."""
+    """Threading HTTP server bound to a CHP host (LocalCapabilityHost or MultiHostRouter)."""
 
-    def __init__(self, server_address: tuple[str, int], host: LocalCapabilityHost) -> None:
+    def __init__(self, server_address: tuple[str, int], host: Any) -> None:
         super().__init__(server_address, CapabilityHostRequestHandler)
         self.chp_host = host
 
@@ -34,32 +39,96 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
 
     server: CapabilityHostHTTPServer
 
+    def _check_auth(self) -> bool:
+        """Return True if the request is authorized (or auth is not configured)."""
+        key = os.environ.get("CHP_HOST_API_KEY")
+        if not key:
+            return True
+        if self.headers.get("X-CHP-Key") == key:
+            return True
+        self._write_error(HTTPStatus.UNAUTHORIZED, "unauthorized", "Missing or invalid X-CHP-Key")
+        return False
+
+    def _sync_discover(self) -> JSON:
+        """Call discover() on either a LocalCapabilityHost (sync) or MultiHostRouter (async)."""
+        host = self.server.chp_host
+        if inspect.iscoroutinefunction(host.discover):
+            return asyncio.run(host.discover())
+        return host.discover()
+
     def do_GET(self) -> None:
+        if not self._check_auth():
+            return
         path = urlparse(self.path).path
         if path == "/" or path == "/health":
-            host_desc = self.server.chp_host.discover()
+            host_desc = self._sync_discover()
             cap_count = len(host_desc.get("capabilities", []))
             self._write_json({
                 "status": "ok",
-                "host_id": host_desc.get("id", "unknown"),
+                "host_id": host_desc.get("id") or host_desc.get("hosts", ["unknown"])[0],
                 "protocol": "chp",
                 "version": "0.1",
                 "capability_count": cap_count,
             })
             return
         if path == "/host":
-            self._write_json(self.server.chp_host.discover())
+            self._write_json(self._sync_discover())
             return
         if path == "/capabilities":
-            self._write_json({"capabilities": self.server.chp_host.discover()["capabilities"]})
+            self._write_json({"capabilities": self._sync_discover()["capabilities"]})
             return
         if path.startswith("/replay/"):
             correlation_id = unquote(path.removeprefix("/replay/"))
-            self._write_json(self.server.chp_host.replay_result(correlation_id).to_dict())
+            result = self.server.chp_host.replay_result(correlation_id)
+            self._write_json(result.to_dict() if hasattr(result, "to_dict") else result)
+            return
+        if path.startswith("/verify/"):
+            correlation_id = unquote(path.removeprefix("/verify/"))
+            if not hasattr(self.server.chp_host, "store"):
+                self._write_json({
+                    "note": "Verification not available in gateway mode — evidence is distributed.",
+                    "correlation_id": correlation_id,
+                    "hosts": list(getattr(self.server.chp_host, "_descriptors", {}).keys()),
+                })
+                return
+            result = self.server.chp_host.store.verify_chain(correlation_id)
+            self._write_json(asdict(result))
+            return
+        if path == "/metrics":
+            self._write_metrics()
             return
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
 
+    def _write_metrics(self) -> None:
+        """Serve Prometheus text metrics aggregated over the last hour of evidence."""
+        host = self.server.chp_host
+        store = getattr(host, "store", None)
+        if store is None:
+            body = b"# /metrics not available in gateway mode\n"
+            self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        since = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+        events = store.query(since=since)
+        report = aggregate_session_metrics("live", events)
+        token_report = aggregate_token_metrics(events)
+        body = (
+            format_prometheus(report).encode("utf-8")
+            + b"\n"
+            + format_token_prometheus(token_report).encode("utf-8")
+        )
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/plain; version=0.0.4")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self) -> None:
+        if not self._check_auth():
+            return
         path = urlparse(self.path).path
         try:
             body = self._read_json()
@@ -68,7 +137,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/replay":
                 query = ReplayQuery.from_mapping(body)
-                self._write_json(self.server.chp_host.replay_result(query).to_dict())
+                result = self.server.chp_host.replay_result(query)
+                self._write_json(result.to_dict() if hasattr(result, "to_dict") else result)
                 return
             self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
         except KeyError as exc:
@@ -122,23 +192,32 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
 
 
 def create_http_server(
-    host: LocalCapabilityHost,
+    host: Any,
     *,
     bind: str = "127.0.0.1",
     port: int = 8765,
 ) -> CapabilityHostHTTPServer:
-    """Create, but do not start, a CHP HTTP server."""
+    """Create, but do not start, a CHP HTTP server.
+
+    *host* may be a ``LocalCapabilityHost`` or a ``MultiHostRouter`` — both
+    satisfy the duck-type surface the handler expects.
+    """
 
     return CapabilityHostHTTPServer((bind, port), host)
 
 
 def serve_http(
-    host: LocalCapabilityHost,
+    host: Any,
     *,
     bind: str = "127.0.0.1",
     port: int = 8765,
 ) -> None:
-    """Serve a CHP host until interrupted."""
+    """Serve a CHP host until interrupted.
+
+    *host* may be a ``LocalCapabilityHost`` (single-host) or a
+    ``MultiHostRouter`` (gateway mode). For a router, call
+    ``asyncio.run(router.connect())`` before calling this function.
+    """
 
     server = create_http_server(host, bind=bind, port=port)
     try:
@@ -160,22 +239,28 @@ class RemoteCapabilityHost:
         result = remote.invoke("data.query", {"q": "..."})
     """
 
-    def __init__(self, base_url: str, *, timeout: int = 30) -> None:
+    def __init__(self, base_url: str, *, timeout: int = 30, api_key: str | None = None) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
+        self._api_key = api_key  # never emitted in evidence or logs
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _get(self, path: str) -> JSON:
         req = Request(f"{self._base}{path}", method="GET")
+        if self._api_key:
+            req.add_header("X-CHP-Key", self._api_key)
         return self._send(req)
 
     def _post(self, path: str, body: JSON) -> JSON:
         raw = json.dumps(body).encode("utf-8")
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["X-CHP-Key"] = self._api_key
         req = Request(
             f"{self._base}{path}",
             data=raw,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         return self._send(req)
@@ -282,6 +367,11 @@ class RemoteCapabilityHost:
     ) -> InvocationResult:
         return asyncio.run(self.ainvoke(capability_id, payload, **kwargs))
 
+    def invoke_envelope(self, envelope: InvocationEnvelope) -> InvocationResult:
+        """Invoke from a pre-built envelope (synchronous; mirrors the server's /invoke)."""
+        data = self._post("/invoke", envelope.to_dict())
+        return self._parse_result(data)
+
     def discover(self, **filter_kwargs: Any) -> JSON:
         """Return the host descriptor, optionally filtering capabilities."""
         descriptor = self._get("/host")
@@ -308,3 +398,12 @@ class RemoteCapabilityHost:
     def health(self) -> JSON:
         """Return the /health response from the remote host."""
         return self._get("/health")
+
+    def verify(self, correlation_id: str) -> JSON:
+        """Return the SHA256 chain verification result for *correlation_id*.
+
+        Shape mirrors ``ChainVerificationResult``: ``correlation_id``,
+        ``event_count``, ``verified_count``, ``unverified_count``, ``valid``,
+        ``first_broken_sequence``.
+        """
+        return self._get(f"/verify/{correlation_id}")

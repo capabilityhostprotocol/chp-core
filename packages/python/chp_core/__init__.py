@@ -20,6 +20,7 @@ from .capabilities import (
 )
 from .host import CapabilityExecutionContext, LocalCapabilityHost
 from .http import CapabilityHostHTTPServer, RemoteCapabilityHost, create_http_server, serve_http
+from .transport import HttpTransport, LocalTransport, Transport
 from .store import SQLiteEvidenceStore
 from .decorators import capability
 from .codex import (
@@ -102,6 +103,7 @@ from .types import (
     CapabilityIdempotency,
     CapabilityStatus,
     COGNITION_EVIDENCE_TYPES,
+    ConversationEvent,
     CorrelationContext,
     DenialReason,
     EvaluationResult,
@@ -185,6 +187,7 @@ __all__ = [
     "RemoteCapabilityHost",
     "CapabilityExecutionContext",
     "capability",
+    "ConversationEvent",
     "CorrelationContext",
     "DEFAULT_SENSITIVE_KEYS",
     "DenialReason",
@@ -197,6 +200,9 @@ __all__ = [
     "InvocationEnvelope",
     "InvocationResult",
     "LocalCapabilityHost",
+    "Transport",
+    "LocalTransport",
+    "HttpTransport",
     "PolicyDescriptor",
     "ReplayQuery",
     "ReplayResult",

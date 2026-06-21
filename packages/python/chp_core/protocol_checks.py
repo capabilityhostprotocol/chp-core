@@ -48,7 +48,6 @@ PUBLIC_MESSAGING_FILES = [
 ]
 LEGACY_MESSAGING_FILES = [
     "docs/onboarding.md",
-    "docs/transports/zenoh.md",
     "docs/agent-prompt.md",
     "docs/capability-lookup-prompt.md",
 ]
@@ -82,6 +81,7 @@ def check_sync_integrity(repo_root: Path) -> JSON:
         [
             "diff", "-rq",
             "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=*.pyo",
+            "--exclude=.chp",
             str(chp_dev_python), str(chp_core_python),
         ],
         capture_output=True,
@@ -218,9 +218,9 @@ def check_messaging(repo_root: Path) -> JSON:
     add_check(
         checks,
         "quickstart_cli_first_controls",
-        "chp demo endpoint" in quickstart
-        and "chp work check-alignment" in quickstart
-        and "chp work validate-demo" in quickstart,
+        "chp-host serve" in quickstart
+        and "chp-host init" in quickstart
+        and "chp-host mesh" in quickstart,
         {"path": "docs/quickstart.md"},
     )
     add_check(

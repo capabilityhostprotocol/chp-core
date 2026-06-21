@@ -9,7 +9,12 @@ name: Release
 #   2. git tag v0.2.3-rc.1 && git push github v0.2.3-rc.1  → staging.yml
 #   3. All staging jobs green
 #   4. git tag v0.2.3   && git push github v0.2.3            → this workflow
-#   5. verify-staged passes → publish-python + publish-npm → create-release
+#   5. verify-staged passes → publish-python + publish-npm + publish-host
+#      + publish-adapters (matrix) → create-release
+#
+# Before first publish of a new package, register it as a PyPI Trusted Publisher:
+#   https://pypi.org/manage/project/<package-name>/settings/publishing/
+#   Repository: capabilityhostprotocol/chp-core  |  Workflow: release.yml  |  Env: release
 
 on:
   push:
@@ -75,6 +80,98 @@ jobs:
           packages-dir: packages/python/dist/
           skip-existing: true
 
+  # ── Publish chp-host CLI to PyPI ─────────────────────────────────────────
+  publish-host:
+    name: Publish chp-host
+    runs-on: ubuntu-latest
+    needs: [verify-staged]
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build package
+        run: python -m build packages/chp-host
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/chp-host/dist/
+          skip-existing: true
+
+  # ── Publish chp-adapter-* to PyPI (matrix) ───────────────────────────────
+  publish-adapters:
+    name: Publish ${{ matrix.adapter }}
+    runs-on: ubuntu-latest
+    needs: [verify-staged, publish-python]
+    environment: release
+    permissions:
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - chp-adapter-http
+          - chp-adapter-filesystem
+          - chp-adapter-git
+          - chp-adapter-audit
+          - chp-adapter-secrets
+          - chp-adapter-jobs
+          - chp-adapter-tailscale
+          - chp-adapter-mcp
+          - chp-adapter-registry
+          - chp-adapter-conformance
+          - chp-adapter-github
+          - chp-adapter-radicle
+          - chp-adapter-ci
+          - chp-adapter-process
+          - chp-adapter-messages
+          - chp-adapter-planning
+          - chp-adapter-delegation
+          - chp-adapter-safety
+          - chp-adapter-composition
+          - chp-adapter-huggingface
+          - chp-adapter-tei
+          - chp-adapter-vllm
+          - chp-adapter-scout
+          - chp-adapter-sglang
+          - chp-adapter-smolagents
+          - chp-adapter-local-llm
+          - chp-adapter-launchd
+          - chp-adapter-synology
+          - chp-adapter-raspi
+          - chp-adapter-release
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build package
+        run: python -m build packages/${{ matrix.adapter }}
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/${{ matrix.adapter }}/dist/
+          skip-existing: true
+
   # ── Publish TypeScript types to npm ──────────────────────────────────────
   publish-npm:
     name: Publish TypeScript types
@@ -108,7 +205,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [publish-python, publish-npm]
+    needs: [publish-python, publish-npm, publish-host, publish-adapters]
     permissions:
       contents: write
     steps:

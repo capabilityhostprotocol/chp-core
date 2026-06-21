@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chp-adapter-conformance"
+version = "0.7.0"
+description = "CHP capability adapter — static and runtime violation checker for capability implementations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Auxo" }]
+keywords = ["chp", "capability-host-protocol", "conformance", "linting", "adapter"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "chp-core>=0.7.0",
+]
+
+[project.entry-points."chp.adapters"]
+conformance = "chp_adapter_conformance:ConformanceAdapter"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.hatch.build.targets.wheel]
+packages = ["chp_adapter_conformance"]

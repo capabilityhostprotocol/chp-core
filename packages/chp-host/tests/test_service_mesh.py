@@ -1,0 +1,264 @@
+"""Tests for service.py (plist/unit generation) and mesh.py manifest I/O."""
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# service.py — plist generation
+# ---------------------------------------------------------------------------
+
+def _make_profile(tmp_path: Path, host_id: str = "test-host") -> Path:
+    p = tmp_path / "test-profile.json"
+    p.write_text(json.dumps({
+        "host_id": host_id,
+        "bind": "0.0.0.0",
+        "port": 8803,
+        "adapters": ["http"],
+    }))
+    return p
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="launchd only on macOS")
+def test_launchd_no_secrets(tmp_path):
+    from chp_host.service import install_service, _launchd_plist_path
+    profile_path = _make_profile(tmp_path, "myhost")
+    # Redirect plist destination into tmp_path
+    import chp_host.service as svc
+    orig = svc._launchd_plist_path
+    svc._launchd_plist_path = lambda name, system: tmp_path / f"{name}.plist"
+    try:
+        install_service(str(profile_path), host_id="myhost", unit_name="chp-host-myhost", system=False, secrets=[])
+    finally:
+        svc._launchd_plist_path = orig
+    plist = (tmp_path / "chp-host-myhost.plist").read_text()
+    assert "REPLACE_ME" not in plist
+    assert "EnvironmentVariables" not in plist
+    assert "--secrets-from-keychain" not in plist
+    assert "chp_host.cli" in plist
+    assert "serve" in plist
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="launchd only on macOS")
+def test_launchd_with_secrets(tmp_path):
+    from chp_host.service import install_service, _launchd_plist_path
+    import chp_host.service as svc
+    profile_path = _make_profile(tmp_path, "sechost")
+    orig = svc._launchd_plist_path
+    svc._launchd_plist_path = lambda name, system: tmp_path / f"{name}.plist"
+    try:
+        install_service(
+            str(profile_path),
+            host_id="sechost",
+            unit_name="chp-host-sechost",
+            system=False,
+            secrets=["CHP_HOST_API_KEY", "GITHUB_TOKEN"],
+        )
+    finally:
+        svc._launchd_plist_path = orig
+    plist = (tmp_path / "chp-host-sechost.plist").read_text()
+    assert "REPLACE_ME" not in plist
+    assert "EnvironmentVariables" not in plist
+    assert "--secrets-from-keychain" in plist
+    assert "CHP_HOST_API_KEY" in plist
+    assert "GITHUB_TOKEN" in plist
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="systemd only on Linux")
+def test_systemd_with_secrets(tmp_path):
+    from chp_host.service import install_service, _systemd_unit_path
+    import chp_host.service as svc
+    profile_path = _make_profile(tmp_path, "linuxhost")
+    orig = svc._systemd_unit_path
+    svc._systemd_unit_path = lambda name, system: tmp_path / f"{name}.service"
+    try:
+        install_service(
+            str(profile_path),
+            host_id="linuxhost",
+            unit_name="chp-linuxhost",
+            system=False,
+            secrets=["CHP_HOST_API_KEY"],
+        )
+    finally:
+        svc._systemd_unit_path = orig
+    unit = (tmp_path / "chp-linuxhost.service").read_text()
+    assert "--secrets-from-keychain CHP_HOST_API_KEY" in unit
+    assert "REPLACE_ME" not in unit
+
+
+def test_build_launchd_plist_no_secrets():
+    from chp_host.service import _build_launchd_plist
+    content = _build_launchd_plist(
+        label="chp.myhost",
+        python="/usr/bin/python3",
+        profile_path="/tmp/p.json",
+        host_id="myhost",
+        log_dir="/tmp/logs",
+        secrets=[],
+    )
+    assert "REPLACE_ME" not in content
+    assert "EnvironmentVariables" not in content
+    assert "--secrets-from-keychain" not in content
+    assert "com.chp.chp.myhost" in content
+
+
+def test_build_launchd_plist_with_secrets():
+    from chp_host.service import _build_launchd_plist
+    content = _build_launchd_plist(
+        label="chp.sechost",
+        python="/usr/bin/python3",
+        profile_path="/tmp/p.json",
+        host_id="sechost",
+        log_dir="/tmp/logs",
+        secrets=["CHP_HOST_API_KEY", "MY_TOKEN"],
+    )
+    assert "--secrets-from-keychain" in content
+    assert "CHP_HOST_API_KEY" in content
+    assert "MY_TOKEN" in content
+    assert "REPLACE_ME" not in content
+
+
+# ---------------------------------------------------------------------------
+# mesh.py — manifest I/O
+# ---------------------------------------------------------------------------
+
+def test_load_mesh_creates_empty(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    data = mesh_mod.load_mesh()
+    assert data["name"] == "mesh"
+    assert data["agent_remotes"] == []
+    assert "gateway" in data
+
+
+def test_save_and_reload(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    d = mesh_mod._empty_mesh()
+    d["agent_remotes"].append({"url": "http://1.2.3.4:8803", "api_key_env": "KEY0"})
+    mesh_mod.save_mesh(d)
+    loaded = mesh_mod.load_mesh()
+    assert len(loaded["agent_remotes"]) == 1
+    assert loaded["agent_remotes"][0]["url"] == "http://1.2.3.4:8803"
+
+
+def test_next_peer_key_name_empty():
+    from chp_host import mesh as mesh_mod
+    data = mesh_mod._empty_mesh()
+    assert mesh_mod.next_peer_key_name(data) == "CHP_PEER_0_KEY"
+
+
+def test_next_peer_key_name_increments():
+    from chp_host import mesh as mesh_mod
+    data = mesh_mod._empty_mesh()
+    data["agent_remotes"] = [
+        {"url": "http://a:8803", "api_key_env": "CHP_PEER_0_KEY"},
+        {"url": "http://b:8803", "api_key_env": "CHP_PEER_1_KEY"},
+    ]
+    assert mesh_mod.next_peer_key_name(data) == "CHP_PEER_2_KEY"
+
+
+def test_add_remote_roundtrip(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    mesh_mod.add_remote("http://10.0.0.1:8803", api_key_env="CHP_PEER_0_KEY", role="worker")
+    data = mesh_mod.load_mesh()
+    assert len(data["agent_remotes"]) == 1
+    r = data["agent_remotes"][0]
+    assert r["url"] == "http://10.0.0.1:8803"
+    assert r["role"] == "worker"
+    assert r["api_key_env"] == "CHP_PEER_0_KEY"
+    assert "added" in r
+
+
+def test_add_remote_duplicate_raises(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    mesh_mod.add_remote("http://10.0.0.1:8803", api_key_env="CHP_PEER_0_KEY")
+    with pytest.raises(ValueError, match="already in mesh"):
+        mesh_mod.add_remote("http://10.0.0.1:8803", api_key_env="CHP_PEER_1_KEY")
+
+
+def test_remove_remote(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    mesh_mod.add_remote("http://10.0.0.1:8803", api_key_env="CHP_PEER_0_KEY")
+    freed = mesh_mod.remove_remote("http://10.0.0.1:8803")
+    assert freed == "CHP_PEER_0_KEY"
+    data = mesh_mod.load_mesh()
+    assert data["agent_remotes"] == []
+
+
+def test_remove_remote_not_found(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    with pytest.raises(ValueError, match="not found"):
+        mesh_mod.remove_remote("http://nonexistent:8803")
+
+
+# ---------------------------------------------------------------------------
+# cli.py — init/mesh/gateway arg parsing (no execution)
+# ---------------------------------------------------------------------------
+
+def test_cli_init_parses():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    args = p.parse_args(["init", "--role", "worker", "--yes"])
+    assert args.role == "worker"
+    assert args.yes is True
+
+
+def test_cli_mesh_invite_parses():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    args = p.parse_args(["mesh", "invite", "--role", "raspi"])
+    assert args.role == "raspi"
+
+
+def test_cli_mesh_add_parses():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    args = p.parse_args(["mesh", "add", "http://1.2.3.4:8803", "--role", "worker"])
+    assert args.url == "http://1.2.3.4:8803"
+    assert args.role == "worker"
+
+
+def test_cli_mesh_remove_parses():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    args = p.parse_args(["mesh", "remove", "http://1.2.3.4:8803"])
+    assert args.url == "http://1.2.3.4:8803"
+
+
+def test_cli_gateway_no_env_parses():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    args = p.parse_args(["gateway"])
+    assert args.environment is None
+
+
+def test_cli_gateway_with_env_parses():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    args = p.parse_args(["gateway", "--environment", "edge-tailscale"])
+    assert args.environment == "edge-tailscale"
+
+
+def test_cli_status_mesh_flag():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    args = p.parse_args(["status", "--mesh"])
+    assert args.mesh is True
+
+
+def test_cli_install_service_secrets():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    profile = "/tmp/fake.json"
+    args = p.parse_args(["install-service", "--profile", profile, "--secrets", "KEY1", "KEY2"])
+    assert args.secrets == ["KEY1", "KEY2"]

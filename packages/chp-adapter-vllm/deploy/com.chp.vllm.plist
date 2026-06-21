@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Model: microsoft/FastContext-1.0-4B-RL (Qwen3-4B RL fine-tune, ~8 GB safetensors)
+     Download: python -c "from huggingface_hub import snapshot_download; \
+                  snapshot_download('microsoft/FastContext-1.0-4B-RL')"
+     Install:  cp com.chp.vllm.plist ~/Library/LaunchAgents/
+               launchctl load ~/Library/LaunchAgents/com.chp.vllm.plist
+
+     Metal note: FastContext (4B) uses ~15 GB Metal on a 36 GB M-series Mac.
+     Context: 32k window (model supports 262k; 32k balances KV-cache memory vs
+     scout depth — each grep result is ~1k tokens, 6-turn scout needs ~24k).
+     Served as model name "fastcontext" so adapters don't need the full HF path.
+     Tool calling enabled via --enable-auto-tool-choice --tool-call-parser qwen3_xml
+     (required for chp-adapter-scout's multi-turn agentic loop). -->
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/patrickschmied</string>
+		<key>PATH</key>
+		<string>/Users/patrickschmied/.venv-vllm-metal/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>com.chp.vllm</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/patrickschmied/.venv-vllm-metal/bin/vllm</string>
+		<string>serve</string>
+		<string>microsoft/FastContext-1.0-4B-RL</string>
+		<string>--port</string>
+		<string>8092</string>
+		<string>--max-model-len</string>
+		<string>32768</string>
+		<string>--served-model-name</string>
+		<string>fastcontext</string>
+		<string>--enable-auto-tool-choice</string>
+		<string>--tool-call-parser</string>
+		<string>qwen3_xml</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/patrickschmied/.chp/logs/vllm.err</string>
+	<key>StandardOutPath</key>
+	<string>/Users/patrickschmied/.chp/logs/vllm.log</string>
+</dict>
+</plist>
