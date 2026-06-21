@@ -85,7 +85,7 @@ def cmd_serve_http(args: argparse.Namespace) -> int:
     bind: str = args.bind
     port: int = args.port
     print(f"Serving CHP host {host.host_id!r} at http://{bind}:{port}")
-    print("Routes: GET /health, GET /host, GET /capabilities, POST /invoke, GET /replay/{id}")
+    print("Routes: GET /health, GET /host, GET /capabilities, POST /invoke, GET /replay/{id}, GET /verify/{id}")
     try:
         serve_http(host, bind=bind, port=port)
     except KeyboardInterrupt:

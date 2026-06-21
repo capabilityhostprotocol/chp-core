@@ -14,8 +14,9 @@ from chp_core import LocalCapabilityHost, capability
     description="Count words in a text string.",
     tags=["text", "analysis"],
 )
-def word_count(text: str) -> dict:
+def word_count(ctx, text: str) -> dict:
     count = len(text.split())
+    ctx.emit("word_count_completed", {"word_count": count, "char_count": len(text)})
     return {"word_count": count, "char_count": len(text)}
 
 
@@ -25,8 +26,10 @@ def word_count(text: str) -> dict:
     description="Add two numbers.",
     tags=["math"],
 )
-def add(a: float, b: float) -> dict:
-    return {"result": a + b}
+def add(ctx, a: float, b: float) -> dict:
+    result = a + b
+    ctx.emit("add_completed", {"result": result})
+    return {"result": result}
 
 
 host = LocalCapabilityHost(host_id="simple-demo")

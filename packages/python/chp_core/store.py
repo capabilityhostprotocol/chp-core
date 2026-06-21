@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .types import ExecutionEvidence, JSON
+from .types import ConversationEvent, ExecutionEvidence, JSON
 
 
 @dataclass
@@ -58,6 +58,13 @@ class SQLiteEvidenceStore:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # Durability + read/write concurrency: WAL lets readers (replay/query)
+        # proceed without blocking the append writer, and avoids ROLLBACK-journal
+        # corruption on unclean shutdown. synchronous=NORMAL is the standard WAL
+        # pairing. (:memory: ignores journal pragmas.) Same pattern as memory.py.
+        if self.path != ":memory:":
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -120,66 +127,176 @@ class SQLiteEvidenceStore:
             )
             self._conn.commit()
 
-    def append(self, event: ExecutionEvidence) -> ExecutionEvidence:
+    def append(self, event: ExecutionEvidence | ConversationEvent) -> ExecutionEvidence | ConversationEvent:
+        if isinstance(event, ConversationEvent):
+            return self._append_conversation(event)
+        return self._append_evidence(event)
+
+    def _insert_evidence_locked(self, event: ExecutionEvidence) -> None:
+        """Insert one evidence event. Caller MUST hold self._lock; does not commit.
+
+        Reads prev_hash from rows inserted earlier in the same (uncommitted)
+        transaction too, so hash-chaining is correct within a batch.
+        """
+        cursor = self._conn.execute("INSERT INTO evidence_sequence DEFAULT VALUES")
+        event.sequence = int(cursor.lastrowid or 0)
+        data = event.to_dict()
+        prev_row = self._conn.execute(
+            "SELECT content_hash FROM evidence_events "
+            "WHERE correlation_id = ? ORDER BY sequence DESC LIMIT 1",
+            (event.correlation.correlation_id,),
+        ).fetchone()
+        prev_hash: str | None = prev_row["content_hash"] if prev_row else None
+        content_hash = _compute_event_hash(data, prev_hash)
+
+        self._conn.execute(
+            """
+            INSERT INTO evidence_events (
+              sequence,
+              event_id,
+              event_type,
+              invocation_id,
+              capability_id,
+              capability_version,
+              host_id,
+              correlation_id,
+              timestamp,
+              outcome,
+              payload_json,
+              event_json,
+              content_hash,
+              prev_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.sequence,
+                event.event_id,
+                event.event_type,
+                event.invocation_id,
+                event.capability_id,
+                event.capability_version,
+                event.host_id,
+                event.correlation.correlation_id,
+                event.timestamp,
+                event.outcome,
+                json.dumps(event.payload, sort_keys=True),
+                json.dumps(data, sort_keys=True),
+                content_hash,
+                prev_hash,
+            ),
+        )
+
+    def _append_evidence(self, event: ExecutionEvidence) -> ExecutionEvidence:
         with self._lock:
             try:
-                cursor = self._conn.execute("INSERT INTO evidence_sequence DEFAULT VALUES")
-                event.sequence = int(cursor.lastrowid or 0)
-                data = event.to_dict()
-                # Look up the most recent hash for this correlation to chain from
-                prev_row = self._conn.execute(
-                    "SELECT content_hash FROM evidence_events "
-                    "WHERE correlation_id = ? ORDER BY sequence DESC LIMIT 1",
-                    (event.correlation.correlation_id,),
-                ).fetchone()
-                prev_hash: str | None = prev_row["content_hash"] if prev_row else None
-                content_hash = _compute_event_hash(data, prev_hash)
-
-                self._conn.execute(
-                    """
-                    INSERT INTO evidence_events (
-                      sequence,
-                      event_id,
-                      event_type,
-                      invocation_id,
-                      capability_id,
-                      capability_version,
-                      host_id,
-                      correlation_id,
-                      timestamp,
-                      outcome,
-                      payload_json,
-                      event_json,
-                      content_hash,
-                      prev_hash
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        event.sequence,
-                        event.event_id,
-                        event.event_type,
-                        event.invocation_id,
-                        event.capability_id,
-                        event.capability_version,
-                        event.host_id,
-                        event.correlation.correlation_id,
-                        event.timestamp,
-                        event.outcome,
-                        json.dumps(event.payload, sort_keys=True),
-                        json.dumps(data, sort_keys=True),
-                        content_hash,
-                        prev_hash,
-                    ),
-                )
+                self._insert_evidence_locked(event)
             except sqlite3.IntegrityError as exc:
                 self._conn.rollback()
                 raise ValueError(f"failed to append evidence event: {event.event_id}") from exc
             self._conn.commit()
         return event
 
+    def _append_conversation(self, event: ConversationEvent) -> ConversationEvent:
+        payload_dict: JSON = {
+            "role": event.role,
+            "agent": event.agent,
+            "word_count": event.word_count,
+            "content_hash": event.content_hash,
+        }
+        if event.content is not None:
+            payload_dict["content"] = event.content
+        with self._lock:
+            try:
+                self._insert_conversation_locked(event, payload_dict)
+            except sqlite3.IntegrityError as exc:
+                self._conn.rollback()
+                raise ValueError(f"failed to append conversation event: {event.event_id}") from exc
+            self._conn.commit()
+        return event
+
+    def _insert_conversation_locked(self, event: ConversationEvent, payload_dict: JSON | None = None) -> None:
+        """Insert one conversation event. Caller MUST hold self._lock; does not commit."""
+        if payload_dict is None:
+            payload_dict = {
+                "role": event.role,
+                "agent": event.agent,
+                "word_count": event.word_count,
+                "content_hash": event.content_hash,
+            }
+            if event.content is not None:
+                payload_dict["content"] = event.content
+        cursor = self._conn.execute("INSERT INTO evidence_sequence DEFAULT VALUES")
+        event.sequence = int(cursor.lastrowid or 0)
+        data = event.to_dict()
+        prev_row = self._conn.execute(
+            "SELECT content_hash FROM evidence_events "
+            "WHERE correlation_id = ? ORDER BY sequence DESC LIMIT 1",
+            (event.correlation.correlation_id,),
+        ).fetchone()
+        prev_hash: str | None = prev_row["content_hash"] if prev_row else None
+        chain_hash = _compute_event_hash(data, prev_hash)
+
+        self._conn.execute(
+            """
+            INSERT INTO evidence_events (
+              sequence,
+              event_id,
+              event_type,
+              invocation_id,
+              capability_id,
+              capability_version,
+              host_id,
+              correlation_id,
+              timestamp,
+              outcome,
+              payload_json,
+              event_json,
+              content_hash,
+              prev_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.sequence,
+                event.event_id,
+                "conversation_turn",
+                event.event_id,          # invocation_id = own event_id
+                "chp.core.conversation.turn",
+                None,                    # capability_version
+                "",                      # host_id (not tied to one host)
+                event.correlation.correlation_id,
+                event.timestamp,
+                None,                    # outcome
+                json.dumps(payload_dict, sort_keys=True),
+                json.dumps(data, sort_keys=True),
+                chain_hash,
+                prev_hash,
+            ),
+        )
+
     def append_many(self, events: Iterable[ExecutionEvidence]) -> list[ExecutionEvidence]:
-        return [self.append(event) for event in events]
+        """Append a batch of events in a single transaction (one commit).
+
+        Hash-chaining stays correct: events are inserted in order on one
+        connection, so each event's prev_hash lookup sees the prior batch rows.
+        Conversation events (if any) are routed through their own insert path.
+        """
+        batch = list(events)
+        if not batch:
+            return []
+        with self._lock:
+            try:
+                for event in batch:
+                    if isinstance(event, ConversationEvent):
+                        self._insert_conversation_locked(event)
+                    else:
+                        self._insert_evidence_locked(event)
+            except sqlite3.IntegrityError as exc:
+                self._conn.rollback()
+                raise ValueError("failed to append evidence batch") from exc
+            self._conn.commit()
+        return batch
 
     def by_correlation(self, correlation_id: str) -> list[JSON]:
         with self._lock:

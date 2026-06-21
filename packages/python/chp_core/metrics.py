@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -171,6 +172,47 @@ def _build_report(session_id: str, stats: dict[str, dict[str, Any]]) -> SessionM
         total_failures=total_fail,
         capabilities=capabilities,
     )
+
+
+@dataclass
+class TokenMetricsReport:
+    """Aggregated sovereign inference token counts for a time window."""
+    prompt_by_model: dict[str, int] = field(default_factory=dict)
+    completion_by_model: dict[str, int] = field(default_factory=dict)
+    calls_by_model: dict[str, int] = field(default_factory=dict)
+
+
+def aggregate_token_metrics(events: list[JSON]) -> TokenMetricsReport:
+    """Aggregate prompt/completion token counts from http_response events."""
+    report = TokenMetricsReport()
+    for e in events:
+        if e.get("event_type") != "http_response":
+            continue
+        p = e.get("payload", {})
+        if "prompt_tokens" not in p:
+            continue
+        model = p.get("model", "unknown")
+        report.prompt_by_model[model] = report.prompt_by_model.get(model, 0) + p["prompt_tokens"]
+        report.completion_by_model[model] = report.completion_by_model.get(model, 0) + p.get("completion_tokens", 0)
+        report.calls_by_model[model] = report.calls_by_model.get(model, 0) + 1
+    return report
+
+
+def format_token_prometheus(report: TokenMetricsReport) -> str:
+    """Return Prometheus text exposition for sovereign token counters."""
+    lines: list[str] = [
+        "# HELP chp_sovereign_prompt_tokens_total Prompt tokens consumed by sovereign models (1h window).",
+        "# TYPE chp_sovereign_prompt_tokens_total counter",
+    ]
+    for model, count in report.prompt_by_model.items():
+        lines.append(f'chp_sovereign_prompt_tokens_total{{model="{model}"}} {count}')
+    lines += [
+        "# HELP chp_sovereign_completion_tokens_total Completion tokens by sovereign models (1h window).",
+        "# TYPE chp_sovereign_completion_tokens_total counter",
+    ]
+    for model, count in report.completion_by_model.items():
+        lines.append(f'chp_sovereign_completion_tokens_total{{model="{model}"}} {count}')
+    return "\n".join(lines) + "\n"
 
 
 def format_prometheus(report: SessionMetricsReport) -> str:

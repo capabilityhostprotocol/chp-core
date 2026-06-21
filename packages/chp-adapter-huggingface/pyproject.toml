@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chp-adapter-huggingface"
+version = "1.0.0"
+description = "CHP adapter for local HuggingFace artifact consumption — pull, pipeline, embed, tokenize, dataset, cache"
+requires-python = ">=3.11"
+dependencies = [
+    "chp-core",
+    "huggingface_hub>=0.24",
+    "transformers>=4.40",
+    "datasets>=2.20",
+    "tokenizers>=0.19",
+]
+keywords = ["chp", "capability-host-protocol", "huggingface", "transformers", "nlp"]
+
+[project.optional-dependencies]
+torch = ["torch"]
+lifecycle = ["evaluate>=0.4", "gradio-client>=1.0", "peft>=0.10"]
+multimodal = ["diffusers>=0.30", "librosa>=0.10", "soundfile>=0.12"]
+
+[project.entry-points."chp.adapters"]
+huggingface = "chp_adapter_huggingface:HuggingFaceAdapter"
+
+[tool.hatch.build.targets.wheel]
+packages = ["chp_adapter_huggingface"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"

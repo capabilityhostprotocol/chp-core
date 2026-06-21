@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chp-adapter-mcp"
+version = "0.7.0"
+description = "CHP capability adapter — wraps Model Context Protocol (MCP) server tools as governed CHP capabilities"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Auxo" }]
+keywords = ["chp", "capability-host-protocol", "mcp", "model-context-protocol", "adapter", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "chp-core>=0.7.0",
+    "mcp>=1.0",
+]
+
+# Discoverable via chp_core.discover_adapters(). Note: MCPAdapter requires a
+# server config, so the primary registration path is manual
+# register_adapter(host, MCPAdapter(config)); the entry point exposes the class
+# for tooling and introspection.
+[project.entry-points."chp.adapters"]
+mcp = "chp_adapter_mcp:MCPAdapter"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.hatch.build.targets.wheel]
+packages = ["chp_adapter_mcp"]

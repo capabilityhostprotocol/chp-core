@@ -618,7 +618,7 @@ class InvocationEnvelope:
             mode=value.get("mode", "sync"),
             correlation=CorrelationContext.from_mapping(value.get("correlation")),
             subject=dict(value.get("subject") or {"id": "local", "type": "user"}),
-            payload=dict(value.get("payload") or {}),
+            payload=dict(value.get("payload") or value.get("arguments") or {}),
             requested_at=value.get("requested_at") or utc_now(),
             metadata=dict(value.get("metadata") or {}),
         )
@@ -657,6 +657,46 @@ class ExecutionEvidence:
         if self.subject is None:
             data.pop("subject", None)
         return data
+
+
+@dataclass(slots=True)
+class ConversationEvent:
+    """A conversation turn stored as a first-class event in the evidence chain.
+
+    Slots into evidence_events alongside ExecutionEvidence using the same
+    hash-chaining fields. invocation_id is set to the event's own ID and
+    capability_id uses the sentinel "chp.core.conversation.turn".
+    """
+
+    event_id: str                          # "conv_<uuid>"
+    correlation: CorrelationContext
+    role: str                              # "user" | "assistant" | "system"
+    agent: str                             # "claude-code" | "codex" | "gemini" | "chp-agent"
+    event_type: str = "conversation_turn"
+    timestamp: str = field(default_factory=utc_now)
+    sequence: int = 0                      # assigned by store.append()
+    content: Any = None                    # full text/blocks; None when redacted
+    content_hash: str = ""                 # SHA256 of content — always present
+    word_count: int = 0
+    subject: JSON | None = None
+
+    def to_dict(self) -> JSON:
+        return {
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "invocation_id": self.event_id,          # sentinel: turn is its own invocation
+            "capability_id": "chp.core.conversation.turn",
+            "host_id": "",
+            "correlation": self.correlation.to_dict(),
+            "role": self.role,
+            "agent": self.agent,
+            "timestamp": self.timestamp,
+            "sequence": self.sequence,
+            "content": self.content,
+            "content_hash": self.content_hash,
+            "word_count": self.word_count,
+            "subject": self.subject,
+        }
 
 
 @dataclass(slots=True)

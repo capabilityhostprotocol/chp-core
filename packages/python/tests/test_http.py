@@ -126,6 +126,17 @@ class HTTPHostTests(unittest.TestCase):
         replay = json.loads(replay_output.getvalue())
         self.assertEqual(replay["event_count"], 2)
 
+    def test_metrics_returns_prometheus_text(self) -> None:
+        # Run an invocation so there is evidence to aggregate.
+        self.post("/invoke", {"capability_id": "math.add", "payload": {"a": 1, "b": 2}})
+        with urlopen(f"{self.base_url}/metrics", timeout=5) as response:
+            content_type = response.headers.get("Content-Type", "")
+            body = response.read().decode("utf-8")
+        assert "text/plain" in content_type
+        assert "chp_invocations_total" in body
+        assert 'capability_id="math.add"' in body
+        assert 'outcome="success"' in body
+
     def get(self, path: str):
         with urlopen(f"{self.base_url}{path}", timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))

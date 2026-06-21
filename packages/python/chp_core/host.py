@@ -20,6 +20,7 @@ from .types import (
     AutonomyProfile,
     AUTONOMY_EVIDENCE_TYPES,
     CapabilityDescriptor,
+    ConversationEvent,
     CorrelationContext,
     DenialReason,
     ExecutionEvidence,
@@ -80,6 +81,21 @@ class CapabilityExecutionContext:
 
     def replay(self, correlation_id: str | None = None) -> list[JSON]:
         return self.host.replay(correlation_id or self.correlation_id)
+
+    async def ainvoke(
+        self,
+        capability_id: str,
+        payload: "JSON | None" = None,
+        *,
+        subject: "JSON | None" = None,
+    ) -> "InvocationResult":
+        """Invoke another capability governed through the host, propagating correlation."""
+        return await self.host.ainvoke(
+            capability_id,
+            payload,
+            correlation=self.envelope.correlation,
+            subject=subject,
+        )
 
 
 class LocalCapabilityHost:
@@ -522,7 +538,51 @@ class LocalCapabilityHost:
             subject=envelope.subject,
             assurance=AssuranceMetadata(),
         )
-        return self.store.append(event)
+        return self.store.append(event)  # type: ignore[return-value]
+
+    def record_turn(
+        self,
+        correlation_id: str,
+        role: str,
+        content: Any,
+        *,
+        agent: str = "",
+        include_content: bool = False,
+        subject: JSON | None = None,
+    ) -> ConversationEvent:
+        """Record a conversation turn into the evidence chain.
+
+        The turn is hash-chained with all other events in the same
+        correlation_id, making it part of the tamper-evident session record.
+        Set include_content=True to store the full text in the evidence payload
+        (appropriate for private/local use only).
+        """
+        import hashlib as _hashlib
+        import json as _json
+
+        serialised = _json.dumps(content, sort_keys=True, default=str)
+        content_hash = _hashlib.sha256(serialised.encode()).hexdigest()
+
+        def _word_count(text: Any) -> int:
+            if isinstance(text, str):
+                return len(text.split())
+            if isinstance(text, list):
+                return sum(_word_count(item) for item in text)
+            if isinstance(text, dict):
+                return _word_count(text.get("text", ""))
+            return 0
+
+        event = ConversationEvent(
+            event_id=new_id("conv"),
+            correlation=CorrelationContext(correlation_id=correlation_id),
+            role=role,
+            agent=agent or self.host_id,
+            content=content if include_content else None,
+            content_hash=content_hash,
+            word_count=_word_count(content),
+            subject=subject,
+        )
+        return self.store.append(event)  # type: ignore[return-value]
 
     def _resolve(self, capability_id: str, version: str | None) -> RegisteredCapability | None:
         with self._registry_lock:

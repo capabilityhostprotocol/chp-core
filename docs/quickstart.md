@@ -2,14 +2,18 @@
 
 ## 1. Install
 
-```bash
-pip install chp-core
-```
-
 From this repository:
 
 ```bash
-python -m pip install -e packages/python
+pip install -e packages/python packages/chp-host
+pip install -e packages/chp-adapter-http packages/chp-adapter-filesystem packages/chp-adapter-audit
+```
+
+Or use the bootstrap script for a full node setup:
+
+```bash
+bash scripts/bootstrap-mac.sh primary   # macOS — primary node
+bash scripts/bootstrap-linux.sh         # Linux — auto-detects arch
 ```
 
 ## 2. Declare And Invoke A Capability
@@ -24,7 +28,8 @@ host = LocalCapabilityHost("quickstart-host")
     version="1.0.0",
     description="Return a greeting.",
 )
-def greet(name: str):
+def greet(ctx, name: str):
+    ctx.emit("greeted", {"name": name})
     return {"message": f"Hello {name}"}
 
 host.register(greet)
@@ -35,106 +40,98 @@ result = host.invoke(
     correlation_id="quickstart-001",
 )
 
-print(result.to_dict())
-print(host.replay_result("quickstart-001").to_dict())
+print(result.data)          # {"message": "Hello CHP"}
+print(result.evidence_ids)  # list of evidence event IDs
 ```
 
-When already inside an async event loop, use `await host.ainvoke(...)` instead
-of `host.invoke(...)`.
+Use `await host.ainvoke(...)` inside an async event loop.
 
-Evidence payloads emitted through `ctx.emit(...)` are redacted by default for
-common sensitive keys such as `token`, `secret`, `password`, `authorization`,
-and `api_key`.
-
-## 3. Run The Agent Demo
+## 3. Serve A Host Over HTTP
 
 ```bash
-python examples/agent-operations-demo/demo.py
+# Profile mode (recommended)
+chp-host serve --profile environments/profiles/mac-dev.json
+
+# Adapter list mode
+chp-host serve --adapters http,filesystem,audit --port 8803
+
+# Check the host
+curl http://localhost:8803/health
+curl http://localhost:8803/capabilities | python3 -m json.tool | head -40
 ```
 
-## 4. Serve A Capability Host
+## 4. Use With Claude Desktop (MCP)
 
-Run an end-to-end HTTP endpoint demo:
+`chp-host mcp` exposes all CHP capabilities as MCP tools. Add to
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "chp": {
+      "command": "chp-host",
+      "args": ["mcp", "--profile", "/Users/YOU/.chp/config/primary.json"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop. Every tool call is wrapped in CHP evidence.
+
+See `docs/claude-desktop-mcp.md` for the full setup guide including multi-host
+mesh mode and persistent evidence stores.
+
+## 5. Set Up A Persistent Node
 
 ```bash
-chp demo endpoint
+# One command from zero to a boot-persistent service
+chp-host init --role primary --yes
+
+# Check it started
+chp-host status
+curl http://localhost:8803/health
 ```
 
-Or serve the demo host and call it yourself:
+## 6. Mesh Multiple Nodes
 
 ```bash
-chp serve-demo --port 8765
+# On the primary — generate an invite key for a worker
+chp-host mesh invite --role worker
+
+# On the worker — run init with the key from the invite
+chp-host secrets set CHP_HOST_API_KEY    # enter the key from above
+chp-host init --role worker --yes
+
+# Back on primary — register the worker
+chp-host mesh add http://<worker-ip>:8803
+chp-host mesh list                        # ✓ OK
+chp-host gateway                          # zero-arg: reads ~/.chp/mesh.json
 ```
 
-In another terminal:
+## 7. Query Evidence
 
 ```bash
-chp host
-chp invoke demo.search_information \
-  --payload '{"query":"CHP vs MCP"}' \
-  --correlation-id corr_demo
-chp replay corr_demo
+# Via adapter (requires audit adapter)
+chp-host mcp --adapters audit
+# Then invoke: chp.adapters.audit.query {"capability_id": "chp.adapters.http.request"}
+
+# Direct SQLite
+sqlite3 ~/.chp/mac.sqlite \
+  "SELECT capability_id, outcome, started_at FROM invocations ORDER BY started_at DESC LIMIT 10;"
 ```
 
-The served endpoint is deliberately small: `GET /host`, `GET /capabilities`,
-`POST /invoke`, `POST /replay`, and `GET /replay/{correlation_id}`.
-
-## 5. Run Conformance
+## 8. Run Conformance
 
 ```bash
-python conformance/runner.py
-python conformance/runner.py --sample failing-no-evidence
+python -m pytest packages/python/tests/ packages/chp-host/tests/ -q --no-cov
 ```
 
-The first command should pass. The second command should fail several checks because the sample host does not emit evidence.
+## Read Next
 
-## 6. Record Development Evidence
-
-```bash
-chp work run \
-  --intent "Verify the Python test suite." \
-  --correlation-id chp-dev-001 \
-  --test-run unit \
-  -- python -m unittest discover -s packages/python/tests
-
-chp work summary chp-dev-001
-chp work replay chp-dev-001
-chp work explain chp-dev-001
-```
-
-`chp work` records engineering actions into the local ignored evidence store.
-When changed files are not provided explicitly, it detects them from Git status.
-
-Validate the endpoint demo as CHP evidence:
-
-```bash
-chp work validate-demo endpoint --correlation-id chp-demo-validation
-chp work replay chp-demo-validation
-```
-
-Check that the v0.1 spec, schemas, Python models, and TypeScript types still
-agree:
-
-```bash
-chp work check-alignment --correlation-id chp-alignment
-chp work replay chp-alignment
-```
-
-Check public launch messaging:
-
-```bash
-chp work check-messaging --correlation-id chp-messaging
-chp work replay chp-messaging
-```
-
-## 7. Read Next
-
-- `spec/chp-v0.1.md`
-- `examples/capability-host-endpoint-demo/README.md`
-- `docs/comparisons/chp-vs-mcp.md`
-- `docs/comparisons/chp-and-opentelemetry.md`
-- `docs/design/codex-self-observation.md`
-- `docs/design/public-v0.1-internal-legacy-boundary.md`
-- `docs/security/threat-model-v0.1.md`
-- `docs/packaging-v0.1.md`
-- `docs/release-checklist-v0.1.md`
+- `docs/claude-desktop-mcp.md` — Claude Desktop / MCP integration guide
+- `docs/wire-protocol.md` — HTTP wire protocol
+- `docs/why-chp.md` — design philosophy
+- `docs/comparisons/chp-vs-mcp.md` — CHP vs MCP
+- `docs/design/capability-adapter-layer.md` — adapter architecture
+- `docs/security/threat-model-v0.1.md` — security model
+- `spec/chp-v0.1.md` — protocol specification

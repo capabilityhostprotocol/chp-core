@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- DEPRECATED: FastContext scout now runs via vLLM (com.chp.vllm, port 8092).
+     See packages/chp-adapter-vllm/deploy/com.chp.vllm.plist.
+
+     Previously served FastContext via llama-server (CPU-only, port 8094).
+     Retired when scout was migrated to vLLM Metal GPU (2026-06-18, rad:0258fff).
+     This file is kept for reference only. Do not load it. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.chp.scout</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/true</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>KeepAlive</key>
+	<false/>
+</dict>
+</plist>

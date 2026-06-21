@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chp-adapter-sglang"
+version = "0.7.0"
+description = "CHP capability adapter — SGLang inference server (CUDA/Linux primary, CPU fallback)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Auxo" }]
+keywords = ["chp", "capability-host-protocol", "sglang", "generation", "openai", "adapter"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "chp-core>=0.7.0",
+]
+
+[project.entry-points."chp.adapters"]
+sglang = "chp_adapter_sglang:SGLangAdapter"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "strict"
+
+[tool.hatch.build.targets.wheel]
+packages = ["chp_adapter_sglang"]

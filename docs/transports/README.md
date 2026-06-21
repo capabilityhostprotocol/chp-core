@@ -8,8 +8,8 @@ Candidate bindings:
 
 - Local in-process calls: reference implementation in `packages/python/chp_core`
 - MCP bridge: prototype in `examples/mcp-bridge-demo`
-- Zenoh mesh: transport binding in `docs/transports/zenoh.md`
-- HTTP: future binding
+- Zenoh mesh: see `docs/archive/zenoh-transport-legacy.md` (legacy design note)
+- HTTP: implemented in `packages/chp-adapter-http`
 - Event streams: future evidence export binding
 
 Transport binding requirements:
