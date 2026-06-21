@@ -57,9 +57,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         return host.discover()
 
     def do_GET(self) -> None:
-        if not self._check_auth():
-            return
         path = urlparse(self.path).path
+        # /health is always public — required for mesh probes and load balancers
         if path == "/" or path == "/health":
             host_desc = self._sync_discover()
             cap_count = len(host_desc.get("capabilities", []))
@@ -70,6 +69,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 "version": "0.1",
                 "capability_count": cap_count,
             })
+            return
+        if not self._check_auth():
             return
         if path == "/host":
             self._write_json(self._sync_discover())
