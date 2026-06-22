@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated": "2026-06-21",
+  "generated": "2026-06-22",
   "categories": [
     "network",
     "filesystem",
@@ -549,6 +549,14 @@
       "description": "Report and update the CHP host runtime on a node (governed self-update)",
       "status": "certified",
       "tier": 1
+    },
+    {
+      "id": "chp-adapter-mlx",
+      "pypi": "chp-adapter-mlx",
+      "category": "ai",
+      "description": "Apple Silicon native text generation via a local mlx_lm server",
+      "status": "experimental",
+      "tier": 2
     }
   ],
   "community": []
