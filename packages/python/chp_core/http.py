@@ -278,6 +278,10 @@ class RemoteCapabilityHost:
                 detail = json.loads(body)
             except Exception:
                 detail = {"raw": body[:500]}
+            if exc.code == 401:
+                raise ConnectionError(
+                    f"auth rejected by {req.full_url} (check api_key_env config)"
+                ) from exc
             raise RuntimeError(f"CHP remote error {exc.code}: {detail}") from exc
         except URLError as exc:
             raise ConnectionError(
