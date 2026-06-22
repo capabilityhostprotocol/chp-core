@@ -220,7 +220,8 @@ class _DSMBackend:
 
     def container_list(self) -> dict[str, Any]:
         with self._client() as c:
-            return self._get(c, "SYNO.Docker.Container", "list", version=2)
+            # SYNO.Docker.Container.list requires pagination params (else DSM code 114).
+            return self._get(c, "SYNO.Docker.Container", "list", version=2, limit=-1, offset=0)
 
     def container_start(self, container_id: str) -> dict[str, Any]:
         with self._client() as c:
