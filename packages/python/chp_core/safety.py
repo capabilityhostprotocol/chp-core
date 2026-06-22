@@ -31,6 +31,8 @@ _SAFETY_EMITS = [
 
 _HIGH_RISK_CAP_PATTERNS = [
     "*bash*", "*exec*", "*shell*", "*delete*", "*drop*", "*rm*", "*destroy*",
+    # Mesh control actions: remote update/restart/stop a node's runtime.
+    "*host.update*", "*host.restart*", "*host.stop*",
 ]
 _MEDIUM_RISK_CAP_PATTERNS = [
     "*write*", "*create*", "*update*", "*post*", "*put*", "*patch*",

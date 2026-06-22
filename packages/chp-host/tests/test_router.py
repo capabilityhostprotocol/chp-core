@@ -81,6 +81,60 @@ class TestRoutingTable:
 
 
 # ---------------------------------------------------------------------------
+# Capacity-aware routing (least_loaded)
+# ---------------------------------------------------------------------------
+
+class TestCapacityRouting:
+    import time as _time
+
+    def _seed(self, router, name, **stats):
+        import time
+        router._stats_cache[name] = (time.monotonic(), stats)
+
+    @pytest.mark.asyncio
+    async def test_routes_to_least_loaded_by_cpu(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        b = LocalTransport(make_echo_host("B", "b"), name="B")
+        router = await _router(a, b, selection="least_loaded")
+        self._seed(router, "A", load_per_core=0.9)
+        self._seed(router, "B", load_per_core=0.1)
+        assert (await router.ainvoke("echo.who", {})).data == {"host": "b"}  # B less loaded
+        # Flip the load → routes to A.
+        self._seed(router, "A", load_per_core=0.1)
+        self._seed(router, "B", load_per_core=0.9)
+        assert (await router.ainvoke("echo.who", {})).data == {"host": "a"}
+
+    @pytest.mark.asyncio
+    async def test_inference_routes_by_gpu(self):
+        cap = "chp.adapters.local_llm.generate"
+        a = LocalTransport(make_echo_host("A", "a", cap_id=cap), name="A")
+        b = LocalTransport(make_echo_host("B", "b", cap_id=cap), name="B")
+        router = await _router(a, b, selection="least_loaded")
+        # A has low CPU but busy GPU; B busy CPU but free GPU. Inference → GPU wins.
+        self._seed(router, "A", load_per_core=0.1, gpu={"utilization_pct": 90})
+        self._seed(router, "B", load_per_core=0.9, gpu={"utilization_pct": 5})
+        assert (await router.ainvoke(cap, {})).data == {"host": "b"}
+
+    @pytest.mark.asyncio
+    async def test_affinity_overrides_capacity(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        b = LocalTransport(make_echo_host("B", "b"), name="B")
+        router = await _router(a, b, selection="least_loaded")
+        self._seed(router, "A", load_per_core=0.9)  # A more loaded
+        self._seed(router, "B", load_per_core=0.1)
+        # Explicit pin beats capacity.
+        assert (await router.ainvoke("echo.who", {}, prefer="A")).data == {"host": "a"}
+
+    @pytest.mark.asyncio
+    async def test_node_without_stats_sorts_last(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        b = LocalTransport(make_echo_host("B", "b"), name="B")
+        router = await _router(a, b, selection="least_loaded")
+        self._seed(router, "B", load_per_core=0.5)  # only B has stats; A unknown
+        assert (await router.ainvoke("echo.who", {})).data == {"host": "b"}
+
+
+# ---------------------------------------------------------------------------
 # Selection policy
 # ---------------------------------------------------------------------------
 

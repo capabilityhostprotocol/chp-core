@@ -34,7 +34,11 @@ from chp_core.types import (
     ReplayResult,
 )
 
-Selection = Literal["first", "round_robin"]
+Selection = Literal["first", "round_robin", "least_loaded"]
+
+# Capabilities whose load is GPU-bound — routed by GPU utilization when stats exist.
+_INFERENCE_HINTS = ("local_llm", "vllm", "tei", "huggingface", "sglang")
+_STATS_TTL = 15.0  # seconds a cached host.stats snapshot is considered fresh
 
 
 class UnknownCapabilityError(KeyError):
@@ -79,6 +83,8 @@ class MultiHostRouter:
         self._unhealthy: dict[str, float] = {}
         # capability_id -> rotation index for round-robin
         self._rr: dict[str, int] = {}
+        # transport.name -> (monotonic_ts, stats dict) for capacity-aware routing
+        self._stats_cache: dict[str, tuple[float, JSON]] = {}
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
 
@@ -142,6 +148,14 @@ class MultiHostRouter:
         # callers express it). Explicit `prefer` wins; otherwise read metadata.
         if prefer is None and metadata:
             prefer = metadata.get("prefer") or metadata.get("node") or metadata.get("affinity")
+
+        # Capacity-aware routing needs fresh per-node stats; refresh (cached, TTL)
+        # before ordering. Never let a stats failure block the actual invocation.
+        if self._selection == "least_loaded":
+            try:
+                await self._refresh_stats(owners)
+            except Exception:
+                pass
 
         corr = _normalize_correlation(correlation)
         candidates = self._ordered_candidates(capability_id, owners, prefer=prefer)
@@ -296,6 +310,47 @@ class MultiHostRouter:
         """A transport matches an affinity hint by its name or its role."""
         return tr.name == prefer or self._host_roles.get(tr.name) == prefer
 
+    async def _refresh_stats(self, owners: list[Transport]) -> None:
+        """Refresh cached host.stats for *owners* whose snapshot is stale (TTL).
+
+        Best-effort: a node without the host adapter (or unreachable) is simply
+        left without stats and sorts last in capacity routing.
+        """
+        now = time.monotonic()
+        for tr in owners:
+            if not self._is_healthy(tr):
+                continue
+            cached = self._stats_cache.get(tr.name)
+            if cached and (now - cached[0]) < _STATS_TTL:
+                continue
+            envelope = InvocationEnvelope(
+                capability_id="chp.adapters.host.stats",
+                payload={},
+                subject={"id": "router", "type": "system"},
+                metadata={"routed_via": tr.name},
+            )
+            try:
+                result = await tr.ainvoke_envelope(envelope)
+            except Exception:
+                continue
+            data = getattr(result, "data", None)
+            if isinstance(data, dict):
+                self._stats_cache[tr.name] = (now, data)
+
+    def _capacity_score(self, capability_id: str, name: str) -> float:
+        """Lower is better. GPU utilization for inference capabilities, else
+        normalized CPU load. Missing stats sort last (inf)."""
+        cached = self._stats_cache.get(name)
+        if not cached:
+            return float("inf")
+        stats = cached[1]
+        if any(h in capability_id for h in _INFERENCE_HINTS):
+            gpu = stats.get("gpu")
+            if isinstance(gpu, dict) and isinstance(gpu.get("utilization_pct"), (int, float)):
+                return float(gpu["utilization_pct"])
+        lpc = stats.get("load_per_core")
+        return float(lpc) if isinstance(lpc, (int, float)) else float("inf")
+
     def _ordered_candidates(
         self, capability_id: str, owners: list[Transport], prefer: str | None = None
     ) -> list[Transport]:
@@ -312,6 +367,11 @@ class MultiHostRouter:
             idx = self._rr.get(capability_id, 0) % len(healthy)
             self._rr[capability_id] = idx + 1
             healthy = healthy[idx:] + healthy[:idx]
+        elif self._selection == "least_loaded" and len(healthy) > 1:
+            # Route to the node with the most headroom. GPU utilization for
+            # inference capabilities, normalized CPU load otherwise; nodes with no
+            # stats sort last. Stable sort keeps insertion order among ties.
+            healthy.sort(key=lambda tr: self._capacity_score(capability_id, tr.name))
         if prefer:
             # Soft affinity: preferred owners first, the rest keep their order.
             preferred = [tr for tr in healthy if self._matches_prefer(tr, prefer)]

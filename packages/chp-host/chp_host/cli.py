@@ -1208,6 +1208,41 @@ def _cmd_mesh_update(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_mesh_restart(args: argparse.Namespace) -> int:
+    """Restart a mesh node's services via the governed chp.adapters.host.restart."""
+    from .mesh import find_remote
+
+    url = args.url.rstrip("/")
+    remote = find_remote(url)
+    key = None
+    if remote and remote.get("api_key_env"):
+        key = os.environ.get(remote["api_key_env"]) or _read_keychain(remote["api_key_env"])
+        if not key:
+            print(f"ERROR: key {remote['api_key_env']!r} for {url!r} not found.", file=sys.stderr)
+            return 1
+
+    body = json.dumps({"capability_id": "chp.adapters.host.restart", "payload": {}}).encode()
+    req = urllib.request.Request(f"{url}/invoke", data=body,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    if key:
+        req.add_header("X-CHP-Key", key)
+    try:
+        result = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
+    except urllib.error.HTTPError as exc:
+        print(f"ERROR: {url} returned {exc.code}: {exc.read().decode(errors='replace')[:200]}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"ERROR: cannot reach {url}: {exc}", file=sys.stderr)
+        return 1
+    if result.get("outcome") != "success":
+        print(f"ERROR: restart not scheduled: {result.get('error') or result.get('denial') or result}",
+              file=sys.stderr)
+        return 1
+    print(f"  Scheduled restart on {url!r} (pid {result.get('data', {}).get('pid','?')}). "
+          "Services bounce shortly.")
+    return 0
+
+
 def _cmd_mesh_stats(args: argparse.Namespace) -> int:
     """Fleet capacity view — invoke chp.adapters.host.stats on each remote.
 
@@ -1422,6 +1457,13 @@ def _cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_restart(args: argparse.Namespace) -> int:
+    """Restart this node's CHP services (used standalone or by host.restart)."""
+    units = _restart_chp_services()
+    print(f"Restarted: {', '.join(units)}" if units else "No CHP services found to restart.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chp-host", description="CHP multi-host tooling.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1520,6 +1562,11 @@ def build_parser() -> argparse.ArgumentParser:
                              help="Poll until the node restarts on a new version (verifies the push).")
     mesh_update.set_defaults(func=_cmd_mesh_update)
 
+    mesh_restart = mesh_sub.add_parser(
+        "restart", help="Restart a mesh node's services (governed chp.adapters.host.restart).")
+    mesh_restart.add_argument("url", help="URL of the node to restart.")
+    mesh_restart.set_defaults(func=_cmd_mesh_restart)
+
     mesh_stats = mesh_sub.add_parser(
         "stats", help="Fleet capacity view — CPU load, memory, GPU, disk per node.")
     mesh_stats.set_defaults(func=_cmd_mesh_stats)
@@ -1596,6 +1643,10 @@ def build_parser() -> argparse.ArgumentParser:
     update_cmd.add_argument("--no-restart", dest="restart", action="store_false",
                             help="Upgrade only; do not restart services.")
     update_cmd.set_defaults(func=_cmd_update, restart=True)
+
+    restart_cmd = sub.add_parser(
+        "restart", help="Restart this node's CHP services.")
+    restart_cmd.set_defaults(func=_cmd_restart)
 
     svc_install = sub.add_parser(
         "install-service",
