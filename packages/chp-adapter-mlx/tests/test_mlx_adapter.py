@@ -8,6 +8,7 @@ http.request) with no mlx_lm server and no HTTP library.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from chp_adapter_mlx import MLXAdapter, MLXConfig
@@ -188,6 +189,57 @@ class TestStatus:
         assert result.success  # status never fails on an unreachable server
         assert result.data["server_healthy"] is False
         assert result.data["server_error"]
+
+
+# ---------------------------------------------------------------------------
+# start_server / stop_server — process lifecycle (mocked subprocess)
+# ---------------------------------------------------------------------------
+
+class TestServerLifecycle:
+    def test_start_server_spawns_detached(self, monkeypatch, tmp_path):
+        import chp_adapter_mlx.adapter as mod
+        calls = {}
+
+        class FakeProc:
+            pid = 555
+
+        monkeypatch.setattr(mod, "_run_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(mod.subprocess, "Popen",
+                            lambda cmd, **kw: calls.update(cmd=cmd, kw=kw) or FakeProc())
+        result = _invoke(_make_host(), "chp.adapters.mlx.start_server",
+                         {"model": "mlx-community/Qwen3-4B-4bit", "port": 8081})
+        assert result.success
+        assert result.data["started"] is True
+        assert result.data["pid"] == 555
+        assert "--model" in calls["cmd"] and "mlx-community/Qwen3-4B-4bit" in calls["cmd"]
+        assert "--port" in calls["cmd"] and "8081" in calls["cmd"]
+        assert calls["kw"].get("start_new_session") is True
+        # pidfile written
+        assert (tmp_path / "mlx-server-8081.pid").exists()
+
+    def test_start_server_idempotent_when_running(self, monkeypatch, tmp_path):
+        import chp_adapter_mlx.adapter as mod
+        monkeypatch.setattr(mod, "_run_dir", lambda: str(tmp_path))
+        (tmp_path / "mlx-server-8081.pid").write_text(str(os.getpid()))  # a live pid (this test proc)
+        called = {"popen": False}
+        monkeypatch.setattr(mod.subprocess, "Popen",
+                            lambda *a, **k: called.update(popen=True))
+        result = _invoke(_make_host(), "chp.adapters.mlx.start_server", {"model": "m", "port": 8081})
+        assert result.success
+        assert result.data["already_running"] is True
+        assert called["popen"] is False  # did not spawn a second server
+
+    def test_start_server_requires_model(self):
+        result = _invoke(_make_host(default_model=""), "chp.adapters.mlx.start_server", {})
+        assert not result.success
+
+    def test_stop_server_when_not_running(self, monkeypatch, tmp_path):
+        import chp_adapter_mlx.adapter as mod
+        monkeypatch.setattr(mod, "_run_dir", lambda: str(tmp_path))
+        result = _invoke(_make_host(), "chp.adapters.mlx.stop_server", {"port": 8081})
+        assert result.success
+        assert result.data["stopped"] is False
+        assert result.data["running"] is False
 
 
 # ---------------------------------------------------------------------------
