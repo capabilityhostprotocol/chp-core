@@ -452,6 +452,27 @@ def test_read_keychain_missing_returns_none():
     assert _read_keychain(f"CHP_TEST_ABSENT_{_secrets.token_hex(4)}") is None
 
 
+def test_resolve_mesh_url_expands_from_env(monkeypatch):
+    from chp_host.cli import _resolve_mesh_url
+    monkeypatch.setenv("CHP_NAS_IP", "100.104.77.73")
+    assert _resolve_mesh_url("http://${CHP_NAS_IP}:8802") == "http://100.104.77.73:8802"
+
+
+def test_resolve_mesh_url_falls_back_to_keychain(monkeypatch):
+    import chp_host.cli as cli
+    monkeypatch.delenv("CHP_NAS_IP", raising=False)
+    monkeypatch.setattr(cli, "_read_keychain", lambda k: "10.0.0.9" if k == "CHP_NAS_IP" else None)
+    assert cli._resolve_mesh_url("http://${CHP_NAS_IP}:8802") == "http://10.0.0.9:8802"
+
+
+def test_resolve_mesh_url_leaves_unset_token_intact(monkeypatch):
+    import chp_host.cli as cli
+    monkeypatch.delenv("CHP_NOPE_XYZ", raising=False)
+    monkeypatch.setattr(cli, "_read_keychain", lambda k: None)
+    # Unresolved tokens stay literal (probe will simply fail, not crash).
+    assert cli._resolve_mesh_url("http://${CHP_NOPE_XYZ}:1") == "http://${CHP_NOPE_XYZ}:1"
+
+
 # ---------------------------------------------------------------------------
 # cli.py — adapters --registry (§2C)
 # ---------------------------------------------------------------------------
