@@ -86,6 +86,51 @@ def test_update_schedules_detached(monkeypatch):
     assert calls["kwargs"].get("env", {}).get("HOME")
 
 
+def test_install_adapter_schedules_detached(monkeypatch):
+    calls: dict = {}
+
+    class FakeProc:
+        pid = 99
+
+    def fake_popen(cmd, **kwargs):
+        calls["cmd"] = cmd
+        calls["kwargs"] = kwargs
+        return FakeProc()
+
+    monkeypatch.setattr(adapter_module.subprocess, "Popen", fake_popen)
+    # Pretend this host was started with a profile (so adapter_name → profile edit).
+    monkeypatch.setattr(adapter_module.sys, "argv",
+                        ["chp-host", "serve", "--profile", "/tmp/inference.json"])
+
+    result = _host().invoke("chp.adapters.host.install_adapter",
+                            {"package": "chp-adapter-mlx", "adapter_name": "mlx"})
+    assert result.outcome == "success"
+    assert result.data["scheduled"] is True
+    cmd = calls["cmd"]
+    assert "install-adapter" in cmd and "chp-adapter-mlx" in cmd
+    # adapter_name + discovered profile are passed through to the installer.
+    assert "--adapter-name" in cmd and "mlx" in cmd
+    assert "--profile" in cmd and "/tmp/inference.json" in cmd
+    assert calls["kwargs"].get("start_new_session") is True
+    assert calls["kwargs"].get("env", {}).get("HOME")
+
+
+def test_install_adapter_with_wheel_url(monkeypatch):
+    calls: dict = {}
+    monkeypatch.setattr(adapter_module.subprocess, "Popen",
+                        lambda cmd, **kw: calls.update(cmd=cmd) or type("P", (), {"pid": 1})())
+    result = _host().invoke("chp.adapters.host.install_adapter",
+                            {"package": "chp-adapter-mlx", "url": "https://example/chp_adapter_mlx-0.8.0.whl"})
+    assert result.outcome == "success"
+    cmd = calls["cmd"]
+    assert "--url" in cmd and "https://example/chp_adapter_mlx-0.8.0.whl" in cmd
+
+
+def test_install_adapter_requires_package():
+    result = _host().invoke("chp.adapters.host.install_adapter", {"package": ""})
+    assert result.outcome != "success"
+
+
 def test_restart_schedules_detached(monkeypatch):
     calls: dict = {}
 

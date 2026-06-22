@@ -1226,6 +1226,80 @@ def _cmd_mesh_update(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_mesh_install_adapter(args: argparse.Namespace) -> int:
+    """Ship an adapter to a mesh node via the governed chp.adapters.host.install_adapter.
+
+    The node pulls the package (from the GitHub release / a wheel URL), optionally
+    registers it in its profile, and restarts. With --wait, polls until the new
+    adapter shows up in the node's capability set (verifies the push).
+    """
+    from .mesh import find_remote
+
+    url = _resolve_mesh_url(args.url.rstrip("/"))
+    remote = find_remote(args.url.rstrip("/")) or find_remote(url)
+    key = None
+    if remote and remote.get("api_key_env"):
+        key = os.environ.get(remote["api_key_env"]) or _read_keychain(remote["api_key_env"])
+        if not key:
+            print(f"ERROR: key {remote['api_key_env']!r} for {url!r} not found.", file=sys.stderr)
+            return 1
+
+    payload: dict = {"package": args.package}
+    if getattr(args, "wheel_url", None):
+        payload["url"] = args.wheel_url
+    elif getattr(args, "version", None):
+        payload["version"] = args.version
+    if getattr(args, "adapter_name", None):
+        payload["adapter_name"] = args.adapter_name
+    if getattr(args, "restart", True) is False:
+        payload["restart"] = False
+
+    body = json.dumps({"capability_id": "chp.adapters.host.install_adapter", "payload": payload}).encode()
+    req = urllib.request.Request(f"{url}/invoke", data=body,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    if key:
+        req.add_header("X-CHP-Key", key)
+    try:
+        result = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
+    except urllib.error.HTTPError as exc:
+        print(f"ERROR: {url} returned {exc.code}: {exc.read().decode(errors='replace')[:200]}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"ERROR: cannot reach {url}: {exc}", file=sys.stderr)
+        return 1
+    if result.get("outcome") != "success":
+        print(f"ERROR: install not scheduled: {result.get('error') or result.get('denial') or result}",
+              file=sys.stderr)
+        return 1
+
+    print(f"  Scheduled install of {args.package!r} on {url!r} (pid {result.get('data', {}).get('pid','?')}).")
+    name = getattr(args, "adapter_name", None)
+    if not getattr(args, "wait", False) or not name:
+        print("  The node restarts shortly — verify with: chp-host mesh list  (or re-run with --wait + --adapter-name)")
+        return 0
+
+    print(f"  Waiting for adapter {name!r} to register on {url}...")
+    import time as _t
+    deadline = _t.time() + 180
+    want = f".{name}."
+    while _t.time() < deadline:
+        _t.sleep(6)
+        try:
+            cap_req = urllib.request.Request(f"{url}/capabilities")
+            if key:
+                cap_req.add_header("X-CHP-Key", key)
+            caps = json.loads(urllib.request.urlopen(cap_req, timeout=5).read().decode())
+            ids = [c.get("id") for c in (caps.get("capabilities") or caps)]
+            if any(want in (i or "") for i in ids):
+                print(f"  ✓ Installed: {name!r} now serving on {url}")
+                return 0
+        except Exception:
+            continue  # node may be mid-restart
+    print(f"  ⚠ {name!r} not registered after 180s — check ~/.chp/logs/host-install-adapter.log on the node.",
+          file=sys.stderr)
+    return 1
+
+
 def _cmd_mesh_restart(args: argparse.Namespace) -> int:
     """Restart a mesh node's services via the governed chp.adapters.host.restart."""
     from .mesh import find_remote
@@ -1483,6 +1557,67 @@ def _cmd_restart(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_adapter_to_profile(profile_path: str, name: str) -> bool:
+    """Add entry-point *name* to a host profile's 'adapters' list. Returns True if added."""
+    p = Path(profile_path).expanduser()
+    data = json.loads(p.read_text())
+    adapters = list(data.get("adapters") or [])
+    if name in adapters:
+        return False
+    adapters.append(name)
+    data["adapters"] = adapters
+    p.write_text(json.dumps(data, indent=2) + "\n")
+    return True
+
+
+def _cmd_install_adapter(args: argparse.Namespace) -> int:
+    """Install (pull) a CHP adapter onto this node, optionally register it in the
+    profile, and restart. Run detached by host.install_adapter, or by an operator.
+    """
+    def _log(msg: str) -> None:
+        print(msg)
+        try:
+            log_dir = Path.home() / ".chp" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            with (log_dir / "host-install-adapter.log").open("a") as fh:
+                fh.write(f"{stamp} {msg}\n")
+        except Exception:
+            pass
+
+    url = getattr(args, "url", None)
+    if url:
+        target = url
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", url]
+    else:
+        pin = getattr(args, "version", None)
+        target = f"{args.package}=={pin}" if pin else args.package
+        # CHP adapters live on the GitHub release (not PyPI) → --find-links fallback.
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade",
+               "--find-links", _GH_RELEASE_LINKS, target]
+
+    _log(f"==> Installing adapter {target}...")
+    if subprocess.run(cmd).returncode != 0:
+        _log("ERROR: pip install failed — adapter not installed.")
+        return 1
+
+    name = getattr(args, "adapter_name", None)
+    profile = getattr(args, "profile", None)
+    if name and profile:
+        try:
+            added = _add_adapter_to_profile(profile, name)
+            _log(f"==> profile {profile}: {'added' if added else 'already had'} adapter {name!r}")
+        except Exception as exc:
+            _log(f"WARNING: could not edit profile {profile}: {exc}")
+
+    if getattr(args, "restart", True):
+        units = _restart_chp_services()
+        _log(f"==> Restarted: {', '.join(units)}" if units else "==> No CHP services to restart.")
+    else:
+        _log("==> Skipped restart (--no-restart); restart the service to load the adapter.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="chp-host", description="CHP multi-host tooling.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1586,6 +1721,21 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_restart.add_argument("url", help="URL of the node to restart.")
     mesh_restart.set_defaults(func=_cmd_mesh_restart)
 
+    mesh_install = mesh_sub.add_parser(
+        "install-adapter",
+        help="Ship a CHP adapter to a mesh node (governed chp.adapters.host.install_adapter).")
+    mesh_install.add_argument("url", help="URL of the node to install onto.")
+    mesh_install.add_argument("package", help="Adapter package, e.g. chp-adapter-mlx.")
+    mesh_install.add_argument("--version", help="Pin to this version (from the release/PyPI).")
+    mesh_install.add_argument("--wheel-url", dest="wheel_url", help="Direct wheel/sdist URL to install instead.")
+    mesh_install.add_argument("--adapter-name", dest="adapter_name",
+                              help="Entry-point name to add to the node's profile, e.g. mlx.")
+    mesh_install.add_argument("--no-restart", dest="restart", action="store_false",
+                              help="Install only; do not restart the node.")
+    mesh_install.add_argument("--wait", action="store_true",
+                              help="Poll until the adapter registers on the node (verifies the push).")
+    mesh_install.set_defaults(func=_cmd_mesh_install_adapter, restart=True)
+
     mesh_stats = mesh_sub.add_parser(
         "stats", help="Fleet capacity view — CPU load, memory, GPU, disk per node.")
     mesh_stats.set_defaults(func=_cmd_mesh_stats)
@@ -1666,6 +1816,18 @@ def build_parser() -> argparse.ArgumentParser:
     restart_cmd = sub.add_parser(
         "restart", help="Restart this node's CHP services.")
     restart_cmd.set_defaults(func=_cmd_restart)
+
+    install_adapter_cmd = sub.add_parser(
+        "install-adapter", help="Install a CHP adapter on this node, optionally register it, and restart.")
+    install_adapter_cmd.add_argument("package", help="Adapter package, e.g. chp-adapter-mlx.")
+    install_adapter_cmd.add_argument("--version", help="Pin to this version.")
+    install_adapter_cmd.add_argument("--url", help="Direct wheel/sdist URL to install instead.")
+    install_adapter_cmd.add_argument("--adapter-name", dest="adapter_name",
+                                     help="Entry-point name to add to --profile, e.g. mlx.")
+    install_adapter_cmd.add_argument("--profile", help="Host profile JSON to add the adapter to.")
+    install_adapter_cmd.add_argument("--no-restart", dest="restart", action="store_false",
+                                     help="Install only; do not restart services.")
+    install_adapter_cmd.set_defaults(func=_cmd_install_adapter, restart=True)
 
     svc_install = sub.add_parser(
         "install-service",

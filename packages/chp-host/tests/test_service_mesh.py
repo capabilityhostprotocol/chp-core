@@ -452,6 +452,37 @@ def test_read_keychain_missing_returns_none():
     assert _read_keychain(f"CHP_TEST_ABSENT_{_secrets.token_hex(4)}") is None
 
 
+def test_add_adapter_to_profile(tmp_path):
+    import json as _json
+    from chp_host.cli import _add_adapter_to_profile
+    p = tmp_path / "inference.json"
+    p.write_text(_json.dumps({"host_id": "x", "adapters": ["host", "local_llm"]}))
+    assert _add_adapter_to_profile(str(p), "mlx") is True
+    assert _json.loads(p.read_text())["adapters"] == ["host", "local_llm", "mlx"]
+    # Idempotent — already present.
+    assert _add_adapter_to_profile(str(p), "mlx") is False
+
+
+def test_mesh_install_adapter_parses():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(
+        ["mesh", "install-adapter", "http://node:8803", "chp-adapter-mlx",
+         "--adapter-name", "mlx", "--wait"])
+    assert args.package == "chp-adapter-mlx"
+    assert args.adapter_name == "mlx"
+    assert args.wait is True
+    assert args.restart is True
+
+
+def test_install_adapter_parses():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(
+        ["install-adapter", "chp-adapter-mlx", "--adapter-name", "mlx",
+         "--profile", "/tmp/p.json", "--no-restart"])
+    assert args.package == "chp-adapter-mlx"
+    assert args.restart is False
+
+
 def test_resolve_mesh_url_expands_from_env(monkeypatch):
     from chp_host.cli import _resolve_mesh_url
     monkeypatch.setenv("CHP_NAS_IP", "100.104.77.73")
