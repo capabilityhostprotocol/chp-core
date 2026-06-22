@@ -105,6 +105,41 @@ def check_sync_integrity(repo_root: Path) -> JSON:
     }
 
 
+def check_registry_alignment(repo_root: Path) -> JSON:
+    """Every adapter package present must have a registry/adapters.json entry.
+
+    Subset-safe by design: it only asserts package -> entry, never the reverse.
+    chp-dev has all 66 adapter packages; chp-core syncs a subset but the full
+    registry — so "entry without package" is expected there and must not fail.
+    The reverse (orphan-entry) drift is validated at the source by
+    scripts/gen-registry.py --check.
+    """
+    checks: list[JSON] = []
+    registry_path = repo_root / "registry" / "adapters.json"
+    if not registry_path.exists():
+        add_check(checks, "registry_skipped", True,
+                  {"reason": "registry/adapters.json not present — skipped"})
+        return {"passed": True, "checks": checks, "skipped": True}
+
+    registry = read_json(registry_path)
+    registered = {a.get("id") for a in registry.get("official", [])}
+    pkg_ids = sorted(
+        p.name for p in (repo_root / "packages").glob("chp-adapter-*") if p.is_dir()
+    )
+    unregistered = [pid for pid in pkg_ids if pid not in registered]
+    add_check(
+        checks,
+        "registry_no_unregistered_adapters",
+        len(unregistered) == 0,
+        {
+            "unregistered": unregistered[:10],
+            "total_unregistered": len(unregistered),
+            "hint": "run: python scripts/gen-registry.py to append, then assign category/tier/status",
+        },
+    )
+    return {"passed": all(c["passed"] for c in checks), "checks": checks}
+
+
 def check_alignment(repo_root: Path) -> JSON:
     checks: list[JSON] = []
     spec = read_text(repo_root / "spec" / "chp-v0.1.md")
@@ -193,6 +228,9 @@ def check_alignment(repo_root: Path) -> JSON:
 
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
+
+    registry = check_registry_alignment(repo_root)
+    checks.extend(registry["checks"])
 
     return {
         "passed": all(check["passed"] for check in checks),
