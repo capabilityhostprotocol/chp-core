@@ -214,8 +214,86 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_adapters(_args: argparse.Namespace) -> int:
+_REGISTRY_URL = (
+    "https://raw.githubusercontent.com/capabilityhostprotocol/chp-core"
+    "/main/registry/adapters.json"
+)
+_ADAPTER_ID_PREFIX = "chp-adapter-"
+
+
+def _cmd_adapters(args: argparse.Namespace) -> int:
     names = available_adapters()
+
+    if getattr(args, "registry", False):
+        # Fetch public registry and compare against installed adapters.
+        try:
+            req = urllib.request.Request(
+                _REGISTRY_URL,
+                headers={"User-Agent": "chp-host/adapters-registry"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                registry = json.loads(resp.read().decode())
+        except urllib.error.URLError as exc:
+            print(f"ERROR: could not fetch registry: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"ERROR: unexpected error fetching registry: {exc}", file=sys.stderr)
+            return 1
+
+        official = registry.get("official", [])
+        if not official:
+            print("Registry returned no official adapters.", file=sys.stderr)
+            return 1
+
+        # Normalize hyphen/underscore: registry ids use hyphens
+        # (chp-adapter-local-llm), entry-point names use underscores (local_llm).
+        def _norm(n: str) -> str:
+            return n.replace("-", "_")
+
+        installed_set = {_norm(n) for n in names}  # short names like "http", "local_llm"
+
+        # Group by category then sort by name within each group.
+        by_category: dict[str, list[dict]] = {}
+        for entry in official:
+            cat = entry.get("category", "other")
+            by_category.setdefault(cat, []).append(entry)
+        for cat in by_category:
+            by_category[cat].sort(key=lambda e: e.get("id", ""))
+
+        name_w, cat_w, tier_w, status_w = 36, 14, 6, 14
+        header = (
+            f"{'NAME':<{name_w}} {'CATEGORY':<{cat_w}} {'TIER':<{tier_w}}"
+            f" {'STATUS':<{status_w}} INSTALLED"
+        )
+        print(header)
+        print("-" * len(header))
+
+        for cat in sorted(by_category.keys()):
+            for entry in by_category[cat]:
+                adapter_id = entry.get("id", "")
+                short_name = (
+                    adapter_id[len(_ADAPTER_ID_PREFIX):]
+                    if adapter_id.startswith(_ADAPTER_ID_PREFIX)
+                    else adapter_id
+                )
+                tier = entry.get("tier", "-")
+                status = entry.get("status", "-")
+                installed_marker = "✓" if _norm(short_name) in installed_set else ""
+                print(
+                    f"{adapter_id:<{name_w}} {cat:<{cat_w}} {tier!s:<{tier_w}}"
+                    f" {status:<{status_w}} {installed_marker}"
+                )
+
+        installed_count = sum(
+            1 for e in official
+            if _norm(e.get("id", "")[len(_ADAPTER_ID_PREFIX):]
+                     if e.get("id", "").startswith(_ADAPTER_ID_PREFIX)
+                     else e.get("id", "")) in installed_set
+        )
+        print(f"\n{installed_count}/{len(official)} registry adapters installed locally.")
+        return 0
+
+    # Default: list installed adapters.
     if not names:
         print("No chp.adapters entry points installed.")
         return 0
@@ -445,7 +523,7 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         return 1
 
     selection = (gw.selection if gw else None) or "first"
-    router = MultiHostRouter(transports, selection=selection)
+    router = MultiHostRouter(transports, selection=selection, host_id=host_id)
     print(f"CHP gateway {host_id!r} — connecting to {len(transports)} transport(s) "
           f"(selection={selection})...")
     asyncio.run(router.connect())
@@ -1160,6 +1238,11 @@ def build_parser() -> argparse.ArgumentParser:
     secrets_cmd.set_defaults(func=_cmd_secrets)
 
     adapters_cmd = sub.add_parser("adapters", help="List installed chp.adapters entry points.")
+    adapters_cmd.add_argument(
+        "--registry",
+        action="store_true",
+        help="Compare installed adapters against the public registry.",
+    )
     adapters_cmd.set_defaults(func=_cmd_adapters)
 
     envs_cmd = sub.add_parser("environments", help="List available environment manifests.")

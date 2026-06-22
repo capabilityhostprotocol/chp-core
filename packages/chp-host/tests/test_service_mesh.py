@@ -371,3 +371,123 @@ def test_read_keychain_missing_returns_none():
     from chp_host.cli import _read_keychain
     import secrets as _secrets
     assert _read_keychain(f"CHP_TEST_ABSENT_{_secrets.token_hex(4)}") is None
+
+
+# ---------------------------------------------------------------------------
+# cli.py — adapters --registry (§2C)
+# ---------------------------------------------------------------------------
+
+def test_adapters_registry_flag_parses():
+    """Parser: chp-host adapters --registry sets args.registry True and routes to _cmd_adapters."""
+    from chp_host.cli import build_parser, _cmd_adapters
+    args = build_parser().parse_args(["adapters", "--registry"])
+    assert args.registry is True
+    assert args.func is _cmd_adapters
+
+
+def test_adapters_no_registry_flag_defaults_false():
+    """Parser: chp-host adapters (no --registry) leaves args.registry False."""
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["adapters"])
+    assert args.registry is False
+
+
+_FAKE_REGISTRY = {
+    "version": "1",
+    "generated": "2026-06-21",
+    "official": [
+        {
+            "id": "chp-adapter-http",
+            "category": "network",
+            "tier": 1,
+            "status": "certified",
+            "description": "Governed HTTP client",
+        },
+        {
+            "id": "chp-adapter-filesystem",
+            "category": "filesystem",
+            "tier": 1,
+            "status": "certified",
+            "description": "Filesystem read/write",
+        },
+        {
+            "id": "chp-adapter-grpc",
+            "category": "network",
+            "tier": 2,
+            "status": "experimental",
+            "description": "gRPC invocation",
+        },
+    ],
+}
+
+
+def test_adapters_registry_prints_table_and_installed_marker(monkeypatch, capsys):
+    """--registry prints a table with INSTALLED marker for locally installed adapters."""
+    import io
+    import urllib.request as _urlrequest
+
+    fake_json = json.dumps(_FAKE_REGISTRY).encode()
+
+    class _FakeResp:
+        def read(self):
+            return fake_json
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(_urlrequest, "urlopen", lambda req, timeout=10: _FakeResp())
+
+    # Monkeypatch available_adapters to return only "http" as installed.
+    import chp_host.cli as cli_mod
+    monkeypatch.setattr(cli_mod, "available_adapters", lambda: ["http"])
+
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["adapters", "--registry"])
+    rc = args.func(args)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+
+    # Header row present
+    assert "NAME" in out
+    assert "CATEGORY" in out
+    assert "INSTALLED" in out
+
+    # Both registry adapters appear
+    assert "chp-adapter-http" in out
+    assert "chp-adapter-filesystem" in out
+    assert "chp-adapter-grpc" in out
+
+    # Only http is installed (mark present on its row)
+    lines = out.splitlines()
+    http_line = next(l for l in lines if "chp-adapter-http" in l)
+    assert "✓" in http_line, f"Expected ✓ marker for installed adapter, got: {http_line!r}"
+
+    fs_line = next(l for l in lines if "chp-adapter-filesystem" in l)
+    assert "✓" not in fs_line, f"filesystem not installed, should have no marker: {fs_line!r}"
+
+    # Summary line
+    assert "1/3 registry adapters installed locally." in out
+
+
+def test_adapters_registry_network_error_returns_1(monkeypatch, capsys):
+    """--registry returns exit code 1 and prints a clear error on network failure."""
+    import urllib.request as _urlrequest
+    import urllib.error
+
+    def _fail(req, timeout=10):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(_urlrequest, "urlopen", _fail)
+
+    import chp_host.cli as cli_mod
+    monkeypatch.setattr(cli_mod, "available_adapters", lambda: [])
+
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["adapters", "--registry"])
+    rc = args.func(args)
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "ERROR" in err

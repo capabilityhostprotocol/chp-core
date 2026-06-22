@@ -108,3 +108,32 @@ class TestGatewayHTTP:
             assert exc.code == 400
             body = json.loads(exc.read())
             assert "error" in body
+
+
+class TestGatewayHealthHostId:
+    """§1D: /health must report the gateway's own host_id, not an upstream URL."""
+
+    def setup_method(self):
+        self.server, self.base = _start_router_server(
+            make_echo_host("mac", "mac", cap_id="echo.who"),
+            make_math_host("math-host"),
+            host_id="my-custom-gateway",
+        )
+
+    def teardown_method(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def test_health_returns_gateway_host_id(self):
+        data = _get(f"{self.base}/health")
+        assert data["host_id"] == "my-custom-gateway", (
+            f"Expected gateway's own host_id, got: {data['host_id']!r}"
+        )
+
+    def test_health_host_id_not_upstream_url(self):
+        """Regression: host_id must not be an upstream URL like 'http://127.0.0.1:8803'."""
+        data = _get(f"{self.base}/health")
+        host_id = data["host_id"]
+        assert not host_id.startswith("http://"), (
+            f"host_id should not be an upstream URL, got: {host_id!r}"
+        )

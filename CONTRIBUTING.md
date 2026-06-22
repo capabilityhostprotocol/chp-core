@@ -43,4 +43,7 @@ Good first PRs:
 - add bridge adapters
 - add redaction utilities
 
+**Writing a new adapter?** See [`docs/adapter-authoring.md`](docs/adapter-authoring.md) for the
+full authoring guide — contract, conformance testing, publishing, and community listing.
+
 Avoid broad rewrites while v0.1 is stabilizing.

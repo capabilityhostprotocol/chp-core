@@ -62,10 +62,12 @@ class MultiHostRouter:
         *,
         selection: Selection = "first",
         recheck_interval: float = 30.0,
+        host_id: str = "chp-gateway",
     ) -> None:
         self._transports: list[Transport] = list(transports)
         self._selection: Selection = selection
         self._recheck_interval = recheck_interval
+        self._host_id: str = host_id
         # capability_id -> transports that serve it, in priority order
         self._routes: dict[str, list[Transport]] = {}
         # transport.name -> host descriptor (from discover)
@@ -175,6 +177,7 @@ class MultiHostRouter:
                     entry["hosts"].append(name)
         return {
             "kind": "multi-host",
+            "id": self._host_id,
             "hosts": list(self._descriptors.keys()),
             "capabilities": list(merged.values()),
             "capability_count": len(merged),
