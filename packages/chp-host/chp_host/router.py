@@ -37,7 +37,7 @@ from chp_core.types import (
 Selection = Literal["first", "round_robin", "least_loaded"]
 
 # Capabilities whose load is GPU-bound — routed by GPU utilization when stats exist.
-_INFERENCE_HINTS = ("local_llm", "vllm", "tei", "huggingface", "sglang")
+_INFERENCE_HINTS = ("local_llm", "vllm", "tei", "huggingface", "sglang", "mlx")
 _STATS_TTL = 15.0  # seconds a cached host.stats snapshot is considered fresh
 
 
