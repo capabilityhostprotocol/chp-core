@@ -130,8 +130,7 @@ class HostAdapter(BaseAdapter):
             cmd += ["--channel", str(payload["channel"])]
 
         # Detached (new session) so it survives this host being restarted by the
-        # upgrade it performs. Returns before the restart happens. The update CLI
-        # writes its own ~/.chp/logs/host-update.log, so stdout can go to DEVNULL.
+        # upgrade it performs. Returns before the restart happens.
         #
         # Critical: a launchd/systemd service runs with a minimal environment
         # (often no HOME, truncated PATH). Without HOME, the child's pip cache and
@@ -139,10 +138,20 @@ class HostAdapter(BaseAdapter):
         # (from the passwd db) and a full PATH so the detached update behaves like
         # an interactive run.
         child_env = _service_safe_env()
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True, env=child_env,
-        )
+
+        # Capture the detached child's stdout+stderr to a file so a failed remote
+        # update is diagnosable (e.g. via filesystem.read_file over the mesh) —
+        # not lost to DEVNULL. Use os.open (fd), so Popen can redirect to it.
+        log_dir = os.path.join(child_env["HOME"], ".chp", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        fd = os.open(os.path.join(log_dir, "host-update-child.log"),
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=fd, stderr=fd, start_new_session=True, env=child_env,
+            )
+        finally:
+            os.close(fd)  # Popen duplicated the fd; close our copy
 
         ctx.emit("host_update_scheduled", {"from_version": before, "pid": proc.pid})
         return {
