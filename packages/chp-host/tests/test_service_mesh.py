@@ -262,3 +262,32 @@ def test_cli_install_service_secrets():
     profile = "/tmp/fake.json"
     args = p.parse_args(["install-service", "--profile", profile, "--secrets", "KEY1", "KEY2"])
     assert args.secrets == ["KEY1", "KEY2"]
+
+
+# ---------------------------------------------------------------------------
+# cli.py — keychain helpers (§1A: init must reuse an existing key)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Keychain only on macOS")
+def test_read_keychain_roundtrip():
+    """_read_keychain returns what _store_keychain wrote (so init can reuse it)."""
+    from chp_host.cli import _store_keychain, _read_keychain
+    import secrets as _secrets
+    name = f"CHP_TEST_{_secrets.token_hex(4)}"
+    value = _secrets.token_urlsafe(16)
+    try:
+        assert _store_keychain(name, value) is True
+        assert _read_keychain(name) == value
+    finally:
+        import subprocess
+        subprocess.run(
+            ["security", "delete-generic-password", "-a", name, "-s", "com.chp.secrets"],
+            capture_output=True,
+        )
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Keychain only on macOS")
+def test_read_keychain_missing_returns_none():
+    from chp_host.cli import _read_keychain
+    import secrets as _secrets
+    assert _read_keychain(f"CHP_TEST_ABSENT_{_secrets.token_hex(4)}") is None

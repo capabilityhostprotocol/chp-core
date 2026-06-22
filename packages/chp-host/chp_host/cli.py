@@ -600,6 +600,21 @@ def _store_keychain(key: str, value: str) -> bool:
         return False
 
 
+def _read_keychain(key: str) -> str | None:
+    """Return the value stored under *key* in the CHP keychain, or None."""
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-a", key,
+             "-s", "com.chp.secrets", "-w"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 def _health_poll(url: str, retries: int = 10, delay: float = 1.0) -> bool:
     for _ in range(retries):
         try:
@@ -651,23 +666,42 @@ def _cmd_init(args: argparse.Namespace) -> int:
     profile_path.write_text(json.dumps(profile_data, indent=2) + "\n")
     print(f"  Profile: {profile_path}")
 
-    # Generate + store API key
-    api_key = _secrets_mod.token_urlsafe(32)
+    # API key: reuse an existing one if present, otherwise generate + store.
+    # The mesh invite flow has the operator pre-seed CHP_HOST_API_KEY (via
+    # `chp-host secrets set` or the env file) with the key the primary already
+    # holds as CHP_PEER_n_KEY. Regenerating here would break that match and the
+    # primary's `mesh add` would 401 — so an existing key always wins.
     if sys.platform == "darwin":
-        ok = _store_keychain("CHP_HOST_API_KEY", api_key)
-        if ok:
-            print("  API key stored in Keychain (CHP_HOST_API_KEY)")
+        existing = _read_keychain("CHP_HOST_API_KEY")
+        if existing:
+            api_key = existing
+            print("  Using existing CHP_HOST_API_KEY from Keychain")
         else:
-            print(f"  WARNING: could not store in Keychain. Set manually:")
-            print(f"    chp-host secrets set CHP_HOST_API_KEY")
+            api_key = _secrets_mod.token_urlsafe(32)
+            if _store_keychain("CHP_HOST_API_KEY", api_key):
+                print("  API key generated and stored in Keychain (CHP_HOST_API_KEY)")
+            else:
+                print("  WARNING: could not store in Keychain. Set manually:")
+                print("    chp-host secrets set CHP_HOST_API_KEY")
     else:
         env_file = chp_dir / f"{host_id}.env"
-        env_file.write_text(f"CHP_HOST_API_KEY={api_key}\n")
-        print(f"  API key written to {env_file} (mode 600)")
-        try:
-            env_file.chmod(0o600)
-        except Exception:
-            pass
+        existing = os.environ.get("CHP_HOST_API_KEY")
+        if not existing and env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("CHP_HOST_API_KEY="):
+                    existing = line.split("=", 1)[1].strip()
+                    break
+        if existing:
+            api_key = existing
+            print("  Using existing CHP_HOST_API_KEY")
+        else:
+            api_key = _secrets_mod.token_urlsafe(32)
+            env_file.write_text(f"CHP_HOST_API_KEY={api_key}\n")
+            print(f"  API key generated and written to {env_file} (mode 600)")
+            try:
+                env_file.chmod(0o600)
+            except Exception:
+                pass
 
     # Install service
     from .service import install_service
