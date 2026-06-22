@@ -22,6 +22,40 @@ def test_version_capability():
     assert "platform" in result.data
 
 
+def test_stats_capability_success():
+    result = _host().invoke("chp.adapters.host.stats", {})
+    assert result.outcome == "success"
+
+
+def test_stats_capability_has_cpu_count():
+    result = _host().invoke("chp.adapters.host.stats", {})
+    assert result.outcome == "success"
+    assert "cpu_count" in result.data
+    assert isinstance(result.data["cpu_count"], int)
+    assert result.data["cpu_count"] >= 1
+
+
+def test_stats_capability_has_load_per_core():
+    result = _host().invoke("chp.adapters.host.stats", {})
+    assert result.outcome == "success"
+    # load_per_core may be None on platforms without getloadavg, but key must exist
+    assert "load_per_core" in result.data
+
+
+def test_stats_capability_has_disk():
+    result = _host().invoke("chp.adapters.host.stats", {})
+    assert result.outcome == "success"
+    disk = result.data.get("disk")
+    assert disk is not None
+    assert disk["total_gb"] > 0
+
+
+def test_stats_capability_evidence_recorded():
+    result = _host().invoke("chp.adapters.host.stats", {})
+    assert result.outcome == "success"
+    assert result.evidence_ids
+
+
 def test_update_schedules_detached(monkeypatch):
     calls: dict = {}
 

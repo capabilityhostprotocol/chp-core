@@ -22,6 +22,7 @@ import sys
 from typing import Any
 
 from chp_core import BaseAdapter, capability
+from chp_core.stats import collect_host_stats
 
 
 def _host_version() -> str:
@@ -63,6 +64,24 @@ class HostAdapter(BaseAdapter):
         }
         ctx.emit("host_version_reported", {"host_version": info["host_version"]})
         return info
+
+    @capability(
+        id="chp.adapters.host.stats",
+        version="1.0.0",
+        description="Report CPU load, memory, disk, GPU, and platform stats for this node.",
+        category="infrastructure",
+        risk="low",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        emits=["host_stats_reported"],
+        tags=["host", "stats", "capacity"],
+    )
+    async def stats(self, ctx: Any, payload: dict) -> dict:
+        result = collect_host_stats()
+        ctx.emit("host_stats_reported", {
+            "load_per_core": result.get("load_per_core"),
+            "gpu": result.get("gpu"),
+        })
+        return result
 
     @capability(
         id="chp.adapters.host.update",
