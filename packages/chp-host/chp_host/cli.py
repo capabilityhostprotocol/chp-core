@@ -1178,6 +1178,55 @@ def _cmd_mesh_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mesh_stats(args: argparse.Namespace) -> int:
+    """Fleet capacity view — invoke chp.adapters.host.stats on each remote.
+
+    Shows normalized CPU load, memory %, GPU utilization %, and disk % per node,
+    and caches each snapshot in mesh.json (last_stats) for fast later reads.
+    """
+    from .mesh import load_mesh, mesh_path, mark_stats
+
+    remotes = (load_mesh().get("agent_remotes") or [])
+    if not remotes:
+        print(f"No remotes in {mesh_path()}. Use 'chp-host mesh add <url>' to join nodes.")
+        return 0
+
+    def _pct(d, *keys):
+        for k in keys:
+            if isinstance(d, dict) and d.get(k) is not None:
+                return f"{d[k]:.0f}%"
+        return "-"
+
+    print(f"{'URL':<32} {'Role':<10} {'Load/core':<10} {'Mem':<6} {'GPU':<6} {'Disk':<6}")
+    print("-" * 76)
+    for r in remotes:
+        url = r.get("url", "")
+        role = r.get("role", "?")
+        key_env = r.get("api_key_env")
+        key = (os.environ.get(key_env) or _read_keychain(key_env)) if key_env else None
+        load = mem = gpu = disk = "-"
+        try:
+            body = json.dumps({"capability_id": "chp.adapters.host.stats", "payload": {}}).encode()
+            req = urllib.request.Request(f"{url}/invoke", data=body,
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            if key:
+                req.add_header("X-CHP-Key", key)
+            resp = urllib.request.urlopen(req, timeout=5)
+            result = json.loads(resp.read().decode())
+            if result.get("outcome") == "success":
+                s = result.get("data", {}) or {}
+                lpc = s.get("load_per_core")
+                load = f"{lpc:.2f}" if isinstance(lpc, (int, float)) else "-"
+                mem = _pct(s.get("memory"), "percent")
+                disk = _pct(s.get("disk"), "percent")
+                gpu = _pct(s.get("gpu"), "utilization_pct")
+                mark_stats(url, s)
+        except Exception:
+            pass
+        print(f"{url:<32} {role:<10} {load:<10} {mem:<6} {gpu:<6} {disk:<6}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # chp-host update
 # ---------------------------------------------------------------------------
@@ -1383,6 +1432,10 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_update.add_argument("--version", help="Pin chp-core/chp-host to this version on the node.")
     mesh_update.add_argument("--channel", choices=["github", "pypi"], help="Install source on the node.")
     mesh_update.set_defaults(func=_cmd_mesh_update)
+
+    mesh_stats = mesh_sub.add_parser(
+        "stats", help="Fleet capacity view — CPU load, memory, GPU, disk per node.")
+    mesh_stats.set_defaults(func=_cmd_mesh_stats)
 
     gw_cmd = sub.add_parser(
         "gateway",

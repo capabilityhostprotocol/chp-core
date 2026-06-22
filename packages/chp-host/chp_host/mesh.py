@@ -119,6 +119,17 @@ def find_remote(url: str) -> dict | None:
     return None
 
 
+def mark_stats(url: str, stats: dict) -> None:
+    """Cache the latest capacity snapshot for the remote (fast stale-ok reads)."""
+    data = load_mesh()
+    for r in data.get("agent_remotes") or []:
+        if r.get("url") == url:
+            r["last_stats"] = stats
+            r["last_stats_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            save_mesh(data)
+            return
+
+
 def mark_verified(url: str) -> None:
     """Stamp ``last_verified`` (UTC now) on the remote, if present.
 
