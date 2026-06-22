@@ -1,12 +1,16 @@
 # CHP NAS host — Synology DSM + filesystem + process capabilities.
-# Deploy with: scripts/deploy-synology-host.sh
-# Required env on NAS: CHP_NAS_KEY, SYNOLOGY_USER, SYNOLOGY_PASSWORD
-# Optional env on NAS: CHP_NAS_REGISTRY (defaults to localhost:5000)
+#
+# Build the image locally on the NAS first (no registry needed):
+#   sudo docker build -f docker/Dockerfile.synology -t chp-nas:latest .
+# Then set env (CHP_NAS_KEY, SYNOLOGY_USER, SYNOLOGY_PASSWORD) and:
+#   sudo docker compose -f docker-compose.synology.yml up -d
+#
+# Uses host networking so the synology adapter can reach DSM's WebAPI on :5000.
+# Override CHP_NAS_IMAGE only if pulling from a registry instead of a local build.
 services:
   chp-nas:
-    image: ${CHP_NAS_REGISTRY:-localhost:5000}/chp-nas:latest
-    ports:
-      - "0.0.0.0:8802:8802"
+    image: ${CHP_NAS_IMAGE:-chp-nas:latest}
+    network_mode: host        # container shares the NAS network → localhost:5000 == DSM
     volumes:
       - /volume1:/volume1
       - chp-nas-data:/var/lib/chp
