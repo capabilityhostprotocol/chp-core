@@ -38,7 +38,7 @@ def test_launchd_no_secrets(tmp_path):
         svc._launchd_plist_path = orig
     plist = (tmp_path / "chp-host-myhost.plist").read_text()
     assert "REPLACE_ME" not in plist
-    assert "EnvironmentVariables" not in plist
+    assert "<key>HOME</key>" in plist  # env block holds HOME/PATH (non-secret)
     assert "--secrets-from-keychain" not in plist
     assert "chp_host.cli" in plist
     assert "serve" in plist
@@ -63,7 +63,7 @@ def test_launchd_with_secrets(tmp_path):
         svc._launchd_plist_path = orig
     plist = (tmp_path / "chp-host-sechost.plist").read_text()
     assert "REPLACE_ME" not in plist
-    assert "EnvironmentVariables" not in plist
+    assert "<key>HOME</key>" in plist  # env block holds HOME/PATH (non-secret)
     assert "--secrets-from-keychain" in plist
     assert "CHP_HOST_API_KEY" in plist
     assert "GITHUB_TOKEN" in plist
@@ -102,7 +102,7 @@ def test_build_launchd_plist_no_secrets():
         secrets=[],
     )
     assert "REPLACE_ME" not in content
-    assert "EnvironmentVariables" not in content
+    assert "<key>HOME</key>" in content  # env block holds HOME/PATH (non-secret)
     assert "--secrets-from-keychain" not in content
     assert "com.chp.chp.myhost" in content
 

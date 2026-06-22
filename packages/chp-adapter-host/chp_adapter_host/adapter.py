@@ -16,6 +16,7 @@ no dependency cycle.
 
 from __future__ import annotations
 
+import os
 import platform
 import subprocess
 import sys
@@ -36,6 +37,26 @@ def _host_version() -> str:
 def _installed_adapters() -> list[str]:
     from importlib.metadata import entry_points
     return sorted(ep.name for ep in entry_points(group="chp.adapters"))
+
+
+def _service_safe_env() -> dict[str, str]:
+    """A child environment safe for use under launchd/systemd (minimal env).
+
+    Ensures HOME (the service env often lacks it, which breaks pip's cache and
+    the ~/.chp log path) and a full PATH including /usr/sbin (where ioreg/sysctl
+    and other tools live)."""
+    import pwd
+    env = dict(os.environ)
+    home = env.get("HOME")
+    if not home:
+        try:
+            home = pwd.getpwuid(os.getuid()).pw_dir
+        except Exception:
+            home = "/tmp"
+        env["HOME"] = home
+    extra = "/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin:/opt/homebrew/bin"
+    env["PATH"] = (env.get("PATH", "") + ":" + extra).strip(":")
+    return env
 
 
 class HostAdapter(BaseAdapter):
@@ -111,9 +132,16 @@ class HostAdapter(BaseAdapter):
         # Detached (new session) so it survives this host being restarted by the
         # upgrade it performs. Returns before the restart happens. The update CLI
         # writes its own ~/.chp/logs/host-update.log, so stdout can go to DEVNULL.
+        #
+        # Critical: a launchd/systemd service runs with a minimal environment
+        # (often no HOME, truncated PATH). Without HOME, the child's pip cache and
+        # ~/.chp log path break and the update silently no-ops. Inject a sane HOME
+        # (from the passwd db) and a full PATH so the detached update behaves like
+        # an interactive run.
+        child_env = _service_safe_env()
         proc = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            start_new_session=True, env=child_env,
         )
 
         ctx.emit("host_update_scheduled", {"from_version": before, "pid": proc.pid})

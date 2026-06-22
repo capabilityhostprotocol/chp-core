@@ -146,6 +146,14 @@ _LAUNCHD_PLIST_SECRETS_ENTRY = """\
 _LAUNCHD_PLIST_TAIL = """\
   </array>
 
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>{home}</string>
+    <key>PATH</key>
+    <string>{path}</string>
+  </dict>
+
   <key>RunAtLoad</key>
   <true/>
 
@@ -182,6 +190,8 @@ def _build_launchd_plist(
     parts.append(_LAUNCHD_PLIST_TAIL.format(
         host_id=host_id,
         log_dir=log_dir,
+        home=os.path.expanduser("~"),
+        path="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin:/opt/homebrew/bin",
     ))
     return "".join(parts)
 
