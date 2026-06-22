@@ -124,9 +124,32 @@ class _DSMBackend:
     def __init__(self, config: SynologyConfig) -> None:
         self._config = config
         self._sid: str | None = None
+        self._versions: dict[str, tuple[int, int]] = {}  # api -> (minVersion, maxVersion)
 
     def _client(self) -> httpx.Client:
         return httpx.Client(base_url=self._config.resolved_url(), verify=self._config.verify_ssl, timeout=30)
+
+    def _resolve_version(self, client: httpx.Client, api: str, preferred: int) -> int:
+        """Clamp *preferred* to the version range the NAS actually exposes for *api*.
+
+        DSM versions (esp. Container Manager vs. the old Docker package) advertise
+        different API versions; requesting an unsupported one yields error code 104.
+        SYNO.API.Info (public, no SID) reports the supported min/max so we negotiate
+        instead of hardcoding. Result cached per api; falls back to *preferred*.
+        """
+        if api not in self._versions:
+            lo, hi = 1, preferred
+            try:
+                resp = client.get("/webapi/query.cgi", params={
+                    "api": "SYNO.API.Info", "version": 1, "method": "query", "query": api})
+                info = (resp.json().get("data") or {}).get(api) or {}
+                lo = int(info.get("minVersion", 1))
+                hi = int(info.get("maxVersion", preferred))
+            except Exception:
+                pass
+            self._versions[api] = (lo, hi)
+        lo, hi = self._versions[api]
+        return max(lo, min(preferred, hi))
 
     def _auth(self, client: httpx.Client) -> str:
         params = {
@@ -152,6 +175,7 @@ class _DSMBackend:
 
     def _get(self, client: httpx.Client, api: str, method: str, version: int = 1, **extra: Any) -> Any:
         sid = self._sid_or_auth(client)
+        version = self._resolve_version(client, api, version)
         params = {"api": api, "version": version, "method": method, "_sid": sid, **extra}
         resp = client.get("/webapi/entry.cgi", params=params)
         if resp.status_code == 403:
@@ -166,6 +190,7 @@ class _DSMBackend:
 
     def _post(self, client: httpx.Client, api: str, method: str, version: int = 1, **extra: Any) -> Any:
         sid = self._sid_or_auth(client)
+        version = self._resolve_version(client, api, version)
         payload = {"api": api, "version": version, "method": method, "_sid": sid, **extra}
         resp = client.post("/webapi/entry.cgi", data=payload)
         if resp.status_code == 403:
