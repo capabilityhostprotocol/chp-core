@@ -462,6 +462,9 @@ class MLXAdapter(BaseAdapter):
         model = payload.get("model") or self._config.resolved_default_model()
         if not model:
             raise ValueError("No model specified and no MLX_MODEL configured.")
+        # Remember the served model as this adapter's default, so subsequent
+        # generate/chat calls need not repeat it (for the life of this process).
+        self._config.default_model = model
         port = int(payload.get("port") or 8081)
         host = str(payload.get("host") or "127.0.0.1")
         pidfile = os.path.join(_run_dir(), f"mlx-server-{port}.pid")
