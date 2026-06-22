@@ -181,3 +181,57 @@ def test_evidence_recorded_for_all_ops():
         result = host.invoke(cap_id, payload)
         assert result.success, f"{cap_id} failed: {result.error}"
         assert result.evidence_ids, f"No evidence for {cap_id}"
+
+
+# ---------------------------------------------------------------------------
+# _DSMBackend version negotiation (the code-104 fix) — httpx mock transport
+# ---------------------------------------------------------------------------
+
+def _dsm_with_mock(handler):
+    import httpx
+    from chp_adapter_synology.adapter import _DSMBackend
+
+    backend = _DSMBackend(SynologyConfig(base_url="http://nas:5000", username="u", password="p"))
+    backend._sid = "SID"  # skip auth round-trip
+    orig_client = backend._client
+
+    def _client():
+        return httpx.Client(base_url="http://nas:5000", transport=httpx.MockTransport(handler))
+
+    backend._client = _client  # type: ignore[assignment]
+    return backend
+
+
+def test_resolve_version_clamps_to_max_supported():
+    """Container Manager advertises a lower max than we prefer → clamp down (no code 104)."""
+    import json as _json
+    import httpx
+
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "query.cgi" in request.url.path:
+            # SYNO.Docker.Container only goes up to v1 on this DSM.
+            return httpx.Response(200, json={
+                "success": True,
+                "data": {"SYNO.Docker.Container": {"minVersion": 1, "maxVersion": 1, "path": "entry.cgi"}},
+            })
+        seen["version"] = request.url.params.get("version")
+        return httpx.Response(200, json={"success": True, "data": {"containers": []}})
+
+    backend = _dsm_with_mock(handler)
+    backend.container_list()  # prefers version=2 in code
+    assert seen["version"] == "1", "should negotiate down to the max the NAS supports"
+
+
+def test_resolve_version_falls_back_when_info_unavailable():
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "query.cgi" in request.url.path:
+            return httpx.Response(500, text="boom")
+        return httpx.Response(200, json={"success": True, "data": {"total": 0, "tasks": []}})
+
+    backend = _dsm_with_mock(handler)
+    # Should not raise — falls back to the preferred version.
+    assert backend.task_list() == {"total": 0, "tasks": []}
