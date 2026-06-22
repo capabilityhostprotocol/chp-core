@@ -276,6 +276,13 @@ class MultiHostRouter:
     def _ordered_candidates(
         self, capability_id: str, owners: list[Transport]
     ) -> list[Transport]:
+        # Routing-strategy seam: this is where capability invocations are ordered
+        # across the nodes that own them. Today: "first" (priority/insertion
+        # order) and "round_robin" (load spread). Future distributed-app
+        # strategies — capacity-aware, locality-aware, or explicit node-pinning —
+        # plug in here by reordering `healthy` based on additional signals
+        # (node load, region, a pin map). The strategy name comes from the
+        # gateway's `selection` config (mesh.json → gateway.selection).
         healthy = [tr for tr in owners if self._is_healthy(tr)]
         unhealthy = [tr for tr in owners if not self._is_healthy(tr)]
         if self._selection == "round_robin" and len(healthy) > 1:
