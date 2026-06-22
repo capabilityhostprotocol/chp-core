@@ -59,6 +59,27 @@ def _service_safe_env() -> dict[str, str]:
     return env
 
 
+def _spawn_detached_cli(args: list[str], log_name: str) -> int:
+    """Spawn `python -m chp_host.cli <args>` detached, with a service-safe env,
+    capturing the child's stdout+stderr to ~/.chp/logs/<log_name> (so a failed
+    remote action is diagnosable, e.g. via filesystem.read_file over the mesh).
+    Returns the child pid. Used by update + restart, which must outlive the
+    service restart they trigger.
+    """
+    child_env = _service_safe_env()
+    log_dir = os.path.join(child_env["HOME"], ".chp", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    fd = os.open(os.path.join(log_dir, log_name), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "chp_host.cli", *args],
+            stdout=fd, stderr=fd, start_new_session=True, env=child_env,
+        )
+    finally:
+        os.close(fd)  # Popen duplicated the fd; close our copy
+    return proc.pid
+
+
 class HostAdapter(BaseAdapter):
     adapter_id = "chp.adapters.host"
     adapter_name = "Host"
@@ -123,44 +144,39 @@ class HostAdapter(BaseAdapter):
     )
     async def update(self, ctx: Any, payload: dict) -> dict:
         before = _host_version()
-        # `chp-host update` restarts by default (the flag is --no-restart); do NOT
-        # pass --restart — it isn't a valid argument and argparse would reject it,
-        # killing the detached child before it runs.
-        cmd = [sys.executable, "-m", "chp_host.cli", "update"]
+        # `chp-host update` restarts by default (the flag is --no-restart).
+        args = ["update"]
         if payload.get("version"):
-            cmd += ["--version", str(payload["version"])]
+            args += ["--version", str(payload["version"])]
         if payload.get("channel"):
-            cmd += ["--channel", str(payload["channel"])]
-
-        # Detached (new session) so it survives this host being restarted by the
-        # upgrade it performs. Returns before the restart happens.
-        #
-        # Critical: a launchd/systemd service runs with a minimal environment
-        # (often no HOME, truncated PATH). Without HOME, the child's pip cache and
-        # ~/.chp log path break and the update silently no-ops. Inject a sane HOME
-        # (from the passwd db) and a full PATH so the detached update behaves like
-        # an interactive run.
-        child_env = _service_safe_env()
-
-        # Capture the detached child's stdout+stderr to a file so a failed remote
-        # update is diagnosable (e.g. via filesystem.read_file over the mesh) —
-        # not lost to DEVNULL. Use os.open (fd), so Popen can redirect to it.
-        log_dir = os.path.join(child_env["HOME"], ".chp", "logs")
-        os.makedirs(log_dir, exist_ok=True)
-        fd = os.open(os.path.join(log_dir, "host-update-child.log"),
-                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-        try:
-            proc = subprocess.Popen(
-                cmd, stdout=fd, stderr=fd, start_new_session=True, env=child_env,
-            )
-        finally:
-            os.close(fd)  # Popen duplicated the fd; close our copy
-
-        ctx.emit("host_update_scheduled", {"from_version": before, "pid": proc.pid})
+            args += ["--channel", str(payload["channel"])]
+        pid = _spawn_detached_cli(args, "host-update-child.log")
+        ctx.emit("host_update_scheduled", {"from_version": before, "pid": pid})
         return {
             "from_version": before,
             "scheduled": True,
-            "pid": proc.pid,
+            "pid": pid,
             "note": "Update runs detached; this host will restart shortly. "
                     "Re-check /health for the new host_version.",
+        }
+
+    @capability(
+        id="chp.adapters.host.restart",
+        version="1.0.0",
+        description="Restart this node's CHP services (detached, no upgrade).",
+        category="infrastructure",
+        risk="high",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        emits=["host_restart_scheduled"],
+        tags=["host", "restart", "ops"],
+    )
+    async def restart(self, ctx: Any, payload: dict) -> dict:
+        # Detached so it survives the very services it restarts. Captures output
+        # to ~/.chp/logs/host-restart-child.log for remote diagnosis.
+        pid = _spawn_detached_cli(["restart"], "host-restart-child.log")
+        ctx.emit("host_restart_scheduled", {"pid": pid})
+        return {
+            "scheduled": True,
+            "pid": pid,
+            "note": "Restart runs detached; this node's services bounce shortly.",
         }

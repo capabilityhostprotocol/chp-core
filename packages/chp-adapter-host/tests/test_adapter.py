@@ -84,3 +84,24 @@ def test_update_schedules_detached(monkeypatch):
     assert "--channel" in calls["cmd"] and "pypi" in calls["cmd"]
     # The child env must carry HOME (services run without it) so pip + logging work.
     assert calls["kwargs"].get("env", {}).get("HOME")
+
+
+def test_restart_schedules_detached(monkeypatch):
+    calls: dict = {}
+
+    class FakeProc:
+        pid = 7
+
+    def fake_popen(cmd, **kwargs):
+        calls["cmd"] = cmd
+        calls["kwargs"] = kwargs
+        return FakeProc()
+
+    monkeypatch.setattr(adapter_module.subprocess, "Popen", fake_popen)
+    result = _host().invoke("chp.adapters.host.restart", {})
+    assert result.outcome == "success"
+    assert result.data["scheduled"] is True
+    # Spawns `chp-host restart` detached with HOME — no upgrade, no bogus flags.
+    assert "restart" in calls["cmd"] and "update" not in calls["cmd"]
+    assert calls["kwargs"].get("start_new_session") is True
+    assert calls["kwargs"].get("env", {}).get("HOME")

@@ -252,6 +252,18 @@ def test_cli_mesh_update_wait_parses():
     assert args.wait is True
 
 
+def test_cli_restart_parses():
+    from chp_host.cli import build_parser
+    assert build_parser().parse_args(["restart"]).func.__name__ == "_cmd_restart"
+
+
+def test_cli_mesh_restart_parses():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["mesh", "restart", "http://x:8803"])
+    assert args.func.__name__ == "_cmd_mesh_restart"
+    assert args.url == "http://x:8803"
+
+
 def test_mark_verified_unknown_url_noop(tmp_path, monkeypatch):
     from chp_host import mesh as mesh_mod
     monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
