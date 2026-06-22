@@ -123,7 +123,10 @@ class HostAdapter(BaseAdapter):
     )
     async def update(self, ctx: Any, payload: dict) -> dict:
         before = _host_version()
-        cmd = [sys.executable, "-m", "chp_host.cli", "update", "--restart"]
+        # `chp-host update` restarts by default (the flag is --no-restart); do NOT
+        # pass --restart — it isn't a valid argument and argparse would reject it,
+        # killing the detached child before it runs.
+        cmd = [sys.executable, "-m", "chp_host.cli", "update"]
         if payload.get("version"):
             cmd += ["--version", str(payload["version"])]
         if payload.get("channel"):

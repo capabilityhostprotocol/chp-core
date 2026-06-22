@@ -76,7 +76,11 @@ def test_update_schedules_detached(monkeypatch):
 
     # Detached so it survives the host restart it triggers.
     assert calls["kwargs"].get("start_new_session") is True
-    # Shells out to the chp-host update CLI with the right args.
-    assert "update" in calls["cmd"] and "--restart" in calls["cmd"]
+    # Shells out to `chp-host update` (restart is the default). It must NOT pass
+    # --restart — that's not a valid flag and argparse would kill the child.
+    assert "update" in calls["cmd"]
+    assert "--restart" not in calls["cmd"]
     assert "--version" in calls["cmd"] and "0.8.9" in calls["cmd"]
     assert "--channel" in calls["cmd"] and "pypi" in calls["cmd"]
+    # The child env must carry HOME (services run without it) so pip + logging work.
+    assert calls["kwargs"].get("env", {}).get("HOME")
