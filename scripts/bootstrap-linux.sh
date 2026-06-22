@@ -68,6 +68,7 @@ COMMON_ADAPTERS=(
   chp-adapter-jobs
   chp-adapter-secrets
   chp-adapter-mcp
+  chp-adapter-host
 )
 
 if [[ "$DEV_MODE" == true ]]; then

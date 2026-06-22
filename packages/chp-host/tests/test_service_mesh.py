@@ -301,6 +301,40 @@ def test_cli_mesh_remove_parses():
     assert args.url == "http://1.2.3.4:8803"
 
 
+def test_cli_update_parses():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    args = p.parse_args(["update", "--version", "0.8.8", "--channel", "pypi", "--no-restart"])
+    assert args.func.__name__ == "_cmd_update"
+    assert args.version == "0.8.8"
+    assert args.channel == "pypi"
+    assert args.restart is False
+
+
+def test_cli_update_defaults():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["update"])
+    assert args.restart is True
+    assert args.channel == "github"
+    assert args.version is None
+
+
+def test_installed_chp_packages_includes_core_and_host():
+    from chp_host.cli import _installed_chp_packages
+    pkgs = _installed_chp_packages()
+    assert "chp-core" in pkgs
+    assert "chp-host" in pkgs
+    # core + host listed first, no duplicates
+    assert pkgs[:2] == ["chp-core", "chp-host"]
+    assert len(pkgs) == len(set(pkgs))
+
+
+def test_chp_host_has_version():
+    import chp_host
+    assert isinstance(chp_host.__version__, str)
+    assert chp_host.__version__
+
+
 def test_cli_mesh_revoke_parses():
     from chp_host.cli import build_parser
     args = build_parser().parse_args(["mesh", "revoke", "http://1.2.3.4:8803"])
