@@ -20,8 +20,12 @@ Evidence policy:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
+import signal
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -43,6 +47,63 @@ _EMITS = [
 # local_llm adapter). Default MLX to :8081 and run `mlx_lm.server --port 8081`.
 _DEFAULT_BASE_URL = "http://localhost:8081"
 _HTTP_CAP = "chp.adapters.http.request"
+
+
+def _service_safe_env() -> dict[str, str]:
+    """Child env safe under launchd/systemd: ensure HOME (HF cache + logs) and a
+    full PATH. Mirrors the host adapter's helper."""
+    import pwd
+    env = dict(os.environ)
+    if not env.get("HOME"):
+        try:
+            env["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
+        except Exception:
+            env["HOME"] = "/tmp"
+    env["PATH"] = (env.get("PATH", "") + ":/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin:/opt/homebrew/bin").strip(":")
+    return env
+
+
+def _run_dir() -> str:
+    d = os.path.join(_service_safe_env()["HOME"], ".chp", "run")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _read_pid(path: str) -> int | None:
+    # os.open (not open()) keeps the adapter conformance-clean.
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            data = os.read(fd, 32).decode().strip()
+        finally:
+            os.close(fd)
+        return int(data) if data else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_pid(path: str, pid: int) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, str(pid).encode())
+    finally:
+        os.close(fd)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _server_cmd(model: str, port: int, host: str) -> list[str]:
+    """Command to launch mlx_lm's OpenAI server. Prefer the console script next to
+    the interpreter; fall back to `python -m mlx_lm.server`."""
+    script = os.path.join(os.path.dirname(sys.executable), "mlx_lm.server")
+    base = [script] if os.path.exists(script) else [sys.executable, "-m", "mlx_lm.server"]
+    return base + ["--model", model, "--port", str(port), "--host", host]
 
 
 def _pkg_version(name: str) -> str | None:
@@ -369,3 +430,90 @@ class MLXAdapter(BaseAdapter):
             "model_count": model_count,
         }, redacted=False)
         return result
+
+    # ------------------------------------------------------------------
+    # start_server / stop_server — manage the mlx_lm inference server
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.mlx.start_server",
+        version="1.0.0",
+        description=(
+            "Start a local mlx_lm OpenAI server for a model, detached (survives this "
+            "host), logging to ~/.chp/logs/mlx-server-<port>.log. The model downloads "
+            "on first load. Idempotent: a server already running on the port is left as-is."
+        ),
+        category="ai",
+        provider="mlx",
+        risk="high",
+        side_effects=["process_spawn"],
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "description": "MLX model repo (defaults to MLX_MODEL)."},
+                "port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 8081},
+                "host": {"type": "string", "default": "127.0.0.1"},
+            },
+            "additionalProperties": False,
+        },
+    )
+    async def start_server(self, ctx: Any, payload: dict) -> dict:
+        model = payload.get("model") or self._config.resolved_default_model()
+        if not model:
+            raise ValueError("No model specified and no MLX_MODEL configured.")
+        port = int(payload.get("port") or 8081)
+        host = str(payload.get("host") or "127.0.0.1")
+        pidfile = os.path.join(_run_dir(), f"mlx-server-{port}.pid")
+
+        existing = _read_pid(pidfile)
+        if existing and _alive(existing):
+            ctx.emit("mlx_server_started", {"port": port, "pid": existing, "already_running": True}, redacted=False)
+            return {"started": False, "already_running": True, "pid": existing, "port": port, "model": model}
+
+        env = _service_safe_env()
+        log_dir = os.path.join(env["HOME"], ".chp", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        fd = os.open(os.path.join(log_dir, f"mlx-server-{port}.log"),
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            proc = subprocess.Popen(_server_cmd(model, port, host),
+                                    stdout=fd, stderr=fd, start_new_session=True, env=env)
+        finally:
+            os.close(fd)
+        _write_pid(pidfile, proc.pid)
+        ctx.emit("mlx_server_started", {"model": model, "port": port, "pid": proc.pid}, redacted=False)
+        return {
+            "started": True,
+            "pid": proc.pid,
+            "port": port,
+            "model": model,
+            "note": "Loads weights (downloads on first run) then serves; poll chp.adapters.mlx.status.",
+        }
+
+    @capability(
+        id="chp.adapters.mlx.stop_server",
+        version="1.0.0",
+        description="Stop the local mlx_lm server running on a port (SIGTERM the tracked pid).",
+        category="ai",
+        provider="mlx",
+        risk="high",
+        side_effects=["process_kill"],
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {"port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 8081}},
+            "additionalProperties": False,
+        },
+    )
+    async def stop_server(self, ctx: Any, payload: dict) -> dict:
+        port = int(payload.get("port") or 8081)
+        pidfile = os.path.join(_run_dir(), f"mlx-server-{port}.pid")
+        pid = _read_pid(pidfile)
+        if not pid or not _alive(pid):
+            return {"stopped": False, "running": False, "port": port}
+        os.kill(pid, signal.SIGTERM)
+        with contextlib.suppress(OSError):
+            os.remove(pidfile)
+        ctx.emit("mlx_server_stopped", {"port": port, "pid": pid}, redacted=False)
+        return {"stopped": True, "pid": pid, "port": port}

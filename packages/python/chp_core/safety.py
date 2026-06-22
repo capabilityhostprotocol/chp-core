@@ -33,6 +33,8 @@ _HIGH_RISK_CAP_PATTERNS = [
     "*bash*", "*exec*", "*shell*", "*delete*", "*drop*", "*rm*", "*destroy*",
     # Mesh control actions: remote update/restart/stop/install on a node's runtime.
     "*host.update*", "*host.restart*", "*host.stop*", "*host.install_adapter*",
+    # Inference-server lifecycle: spawning/killing model servers.
+    "*start_server*", "*stop_server*",
 ]
 _MEDIUM_RISK_CAP_PATTERNS = [
     "*write*", "*create*", "*update*", "*post*", "*put*", "*patch*",
