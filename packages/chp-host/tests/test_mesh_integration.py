@@ -96,6 +96,9 @@ def test_health_is_public_with_auth_enabled(monkeypatch):
         assert status == 200
         assert body["status"] == "ok"
         assert body["protocol"] == "chp"
+        # host_version exposes the chp-host package version for skew detection.
+        assert "host_version" in body
+        assert body["host_version"] not in ("", None)
 
 
 # ---------------------------------------------------------------------------

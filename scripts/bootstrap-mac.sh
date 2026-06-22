@@ -61,6 +61,7 @@ COMMON_ADAPTERS=(
   chp-adapter-tailscale
   chp-adapter-secrets
   chp-adapter-mcp
+  chp-adapter-host
 )
 
 # Primary-only adapters

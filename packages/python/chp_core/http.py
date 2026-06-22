@@ -26,6 +26,19 @@ from .types import (
 )
 
 
+def _host_version() -> str:
+    """Return the installed chp-host package version (the unit `chp-host update`
+    upgrades), without importing chp_host — chp_core must not depend on it.
+    Falls back to chp-core, then "unknown"."""
+    from importlib.metadata import PackageNotFoundError, version
+    for pkg in ("chp-host", "chp-core"):
+        try:
+            return version(pkg)
+        except PackageNotFoundError:
+            continue
+    return "unknown"
+
+
 class CapabilityHostHTTPServer(ThreadingHTTPServer):
     """Threading HTTP server bound to a CHP host (LocalCapabilityHost or MultiHostRouter)."""
 
@@ -67,13 +80,16 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 "host_id": host_desc.get("id") or host_desc.get("hosts", ["unknown"])[0],
                 "protocol": "chp",
                 "version": "0.1",
+                "host_version": _host_version(),
                 "capability_count": cap_count,
             })
             return
         if not self._check_auth():
             return
         if path == "/host":
-            self._write_json(self._sync_discover())
+            desc = self._sync_discover()
+            desc.setdefault("host_version", _host_version())
+            self._write_json(desc)
             return
         if path == "/capabilities":
             self._write_json({"capabilities": self._sync_discover()["capabilities"]})

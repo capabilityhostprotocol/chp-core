@@ -1,5 +1,12 @@
 """chp-host — multi-host router and config-driven adapter host server for CHP."""
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__ = _pkg_version("chp-host")
+except PackageNotFoundError:  # not installed as a dist (e.g. raw source tree)
+    __version__ = "0.0.0+unknown"
+
 from .router import (
     MultiHostRouter,
     NoHealthyHostError,
@@ -10,6 +17,7 @@ from .profile import HostProfile
 from .environment import EnvironmentConfig, EnvironmentHostEntry, EnvironmentRemoteEntry, GatewayConfig, list_environments
 
 __all__ = [
+    "__version__",
     "MultiHostRouter",
     "UnknownCapabilityError",
     "NoHealthyHostError",

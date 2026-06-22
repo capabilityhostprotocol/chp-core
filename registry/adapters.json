@@ -1,7 +1,18 @@
 {
   "version": "1",
-  "generated": "2026-06-18",
-  "categories": ["network", "filesystem", "ai", "code", "infra", "agents", "cloud", "messaging", "data", "platform"],
+  "generated": "2026-06-21",
+  "categories": [
+    "network",
+    "filesystem",
+    "ai",
+    "code",
+    "infra",
+    "agents",
+    "cloud",
+    "messaging",
+    "data",
+    "platform"
+  ],
   "official": [
     {
       "id": "chp-adapter-http",
@@ -95,7 +106,7 @@
       "id": "chp-adapter-huggingface",
       "pypi": "chp-adapter-huggingface",
       "category": "ai",
-      "description": "Local HuggingFace artifact consumption — pull, pipeline, embed, tokenize, dataset, cache",
+      "description": "Local HuggingFace artifact consumption \u2014 pull, pipeline, embed, tokenize, dataset, cache",
       "status": "certified",
       "tier": 2
     },
@@ -530,6 +541,14 @@
       "description": "Machine-to-machine OAuth2 client credentials and JWT validation",
       "status": "experimental",
       "tier": 2
+    },
+    {
+      "id": "chp-adapter-host",
+      "pypi": "chp-adapter-host",
+      "category": "infra",
+      "description": "Report and update the CHP host runtime on a node (governed self-update)",
+      "status": "certified",
+      "tier": 1
     }
   ],
   "community": []

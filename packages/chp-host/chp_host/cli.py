@@ -625,14 +625,14 @@ _ROLE_PROFILES = {
             "git", "github", "planning", "delegation", "safety", "local_llm",
             "radicle", "secrets", "filesystem", "messages", "composition",
             "conformance", "ci", "huggingface", "http", "tei", "vllm",
-            "smolagents", "launchd", "jobs", "audit", "scout", "tailscale",
+            "smolagents", "launchd", "jobs", "audit", "scout", "tailscale", "host",
         ],
     },
     "worker": {
         "bind": "0.0.0.0",
         "port": 8803,
         "adapters": [
-            "http", "filesystem", "process", "audit", "tailscale", "local_llm", "jobs",
+            "http", "filesystem", "process", "audit", "tailscale", "local_llm", "jobs", "host",
         ],
     },
     # Specialized worker roles for distributing capabilities across the mesh:
@@ -644,28 +644,28 @@ _ROLE_PROFILES = {
         "port": 8803,
         "adapters": [
             "local_llm", "vllm", "tei", "huggingface",
-            "filesystem", "audit", "tailscale",
+            "filesystem", "audit", "tailscale", "host",
         ],
     },
     "storage": {
         "bind": "0.0.0.0",
         "port": 8803,
-        "adapters": ["filesystem", "jobs", "audit", "tailscale"],
+        "adapters": ["filesystem", "jobs", "audit", "tailscale", "host"],
     },
     "compute": {
         "bind": "0.0.0.0",
         "port": 8803,
-        "adapters": ["process", "jobs", "http", "filesystem", "audit", "tailscale"],
+        "adapters": ["process", "jobs", "http", "filesystem", "audit", "tailscale", "host"],
     },
     "raspi": {
         "bind": "0.0.0.0",
         "port": 8801,
-        "adapters": ["http", "filesystem", "process", "audit", "jobs"],
+        "adapters": ["http", "filesystem", "process", "audit", "jobs", "host"],
     },
     "linux-worker": {
         "bind": "0.0.0.0",
         "port": 8803,
-        "adapters": ["http", "filesystem", "process", "audit", "jobs"],
+        "adapters": ["http", "filesystem", "process", "audit", "jobs", "host"],
     },
 }
 
@@ -1004,6 +1004,7 @@ def _cmd_mesh_add(args: argparse.Namespace) -> int:
 
 def _cmd_mesh_list(args: argparse.Namespace) -> int:
     from .mesh import load_mesh, mesh_path, mark_verified
+    from . import __version__ as local_version
 
     data = load_mesh()
     remotes = data.get("agent_remotes") or []
@@ -1011,24 +1012,36 @@ def _cmd_mesh_list(args: argparse.Namespace) -> int:
         print(f"No remotes in {mesh_path()}. Use 'chp-host mesh add <url>' to join nodes.")
         return 0
 
-    print(f"{'URL':<36} {'Role':<10} {'Status':<8} {'Caps':<6} {'Verified'}")
-    print("-" * 80)
+    print(f"{'URL':<32} {'Role':<10} {'Status':<8} {'Caps':<6} {'Version':<12} {'Verified'}")
+    print("-" * 84)
+    skewed = False
     for r in remotes:
         url = r.get("url", "")
         role = r.get("role", "?")
         status = "?"
         caps = "-"
+        version = "-"
         try:
             resp = urllib.request.urlopen(f"{url}/health", timeout=3)
             h = json.loads(resp.read().decode())
             caps = str(h.get("capability_count", "?"))
+            version = h.get("host_version") or "?"
             status = "✓ OK"
             mark_verified(url)  # stamp last_verified so stale peers are visible
             verified = "just now"
+            # Flag nodes not on the same chp-host version as this machine.
+            if version not in ("?", local_version):
+                version = f"{version} ⚠"
+                skewed = True
         except Exception:
             status = "✗ FAIL"
             verified = (r.get("last_verified") or "never")[:10]
-        print(f"{url:<36} {role:<10} {status:<8} {caps:<6} {verified}")
+        print(f"{url:<32} {role:<10} {status:<8} {caps:<6} {version:<12} {verified}")
+
+    print(f"\nlocal chp-host {local_version}")
+    if skewed:
+        print("⚠ version skew — run 'chp-host update' on flagged nodes "
+              "(or 'chp-host mesh update <url>' to update them remotely).")
     return 0
 
 
@@ -1109,6 +1122,166 @@ def _cmd_mesh_rotate(args: argparse.Namespace) -> int:
     print("    launchctl unload ~/Library/LaunchAgents/com.chp.chp.host.*.plist && \\")
     print("    launchctl load   ~/Library/LaunchAgents/com.chp.chp.host.*.plist")
     print("\n  Then restart the local gateway to reconnect.")
+    return 0
+
+
+def _cmd_mesh_update(args: argparse.Namespace) -> int:
+    """Trigger a governed remote update on a mesh node via chp.adapters.host.update.
+
+    Routes through the node's /invoke with its pre-shared key; the node schedules
+    a detached `chp-host update` and restarts itself shortly after.
+    """
+    from .mesh import find_remote
+
+    url = args.url.rstrip("/")
+    remote = find_remote(url)
+    key = None
+    if remote and remote.get("api_key_env"):
+        key_env = remote["api_key_env"]
+        key = os.environ.get(key_env) or _read_keychain(key_env)
+        if not key:
+            print(f"ERROR: key {key_env!r} for {url!r} not found (env or Keychain).", file=sys.stderr)
+            return 1
+
+    payload: dict = {}
+    if getattr(args, "version", None):
+        payload["version"] = args.version
+    if getattr(args, "channel", None):
+        payload["channel"] = args.channel
+    body = json.dumps({"capability_id": "chp.adapters.host.update", "payload": payload}).encode()
+
+    req = urllib.request.Request(f"{url}/invoke", data=body,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    if key:
+        req.add_header("X-CHP-Key", key)
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        result = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:300]
+        print(f"ERROR: {url} returned {exc.code}: {detail}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"ERROR: cannot reach {url}: {exc}", file=sys.stderr)
+        return 1
+
+    if result.get("outcome") != "success":
+        print(f"ERROR: update not scheduled: {result.get('error') or result.get('denial') or result}",
+              file=sys.stderr)
+        return 1
+    data = result.get("data", {})
+    print(f"  Scheduled update on {url!r} (from chp-host {data.get('from_version','?')}, pid {data.get('pid','?')}).")
+    print("  The node restarts shortly — re-check with: chp-host mesh list")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# chp-host update
+# ---------------------------------------------------------------------------
+
+_GH_RELEASE_LINKS = (
+    "https://github.com/capabilityhostprotocol/chp-core/releases/expanded_assets/v0.8.0"
+)
+
+
+def _installed_chp_packages() -> list[str]:
+    """chp-core + chp-host + every installed chp-adapter-* distribution name."""
+    import importlib.metadata as im
+    pkgs = ["chp-core", "chp-host"]
+    for dist in im.distributions():
+        name = dist.name or ""
+        if name.startswith("chp-adapter-"):
+            pkgs.append(name)
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in pkgs:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _query_version(pkg: str = "chp-host") -> str:
+    """Version of *pkg* as seen by a fresh interpreter (accurate post-upgrade —
+    the running process still holds the pre-upgrade module in memory)."""
+    r = subprocess.run(
+        [sys.executable, "-c", f"import importlib.metadata as m;print(m.version('{pkg}'))"],
+        capture_output=True, text=True,
+    )
+    return r.stdout.strip() or "unknown"
+
+
+def _restart_chp_services() -> list[str]:
+    """Restart this node's CHP services; return the units restarted."""
+    if sys.platform == "darwin":
+        r = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
+        labels = sorted({
+            parts[-1]
+            for line in r.stdout.splitlines()
+            if (parts := line.split()) and parts[-1].startswith("com.chp.")
+        })
+        uid = os.getuid()
+        for label in labels:
+            subprocess.run(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
+                           capture_output=True, text=True)
+        return labels
+    # Linux / systemd user services
+    r = subprocess.run(
+        ["systemctl", "--user", "--no-legend", "list-units", "chp-*.service"],
+        capture_output=True, text=True,
+    )
+    units = [parts[0] for line in r.stdout.splitlines() if (parts := line.split())]
+    for u in units:
+        subprocess.run(["systemctl", "--user", "restart", u], capture_output=True, text=True)
+    return units
+
+
+def _cmd_update(args: argparse.Namespace) -> int:
+    """Upgrade the CHP packages on this node and restart its services.
+
+    Mirrors the bootstrap install (PyPI preferred, GitHub-release fallback via
+    --find-links). Run by the operator as a separate process, so restarting the
+    host service does not kill this command.
+    """
+    def _log(msg: str) -> None:
+        # Append to a durable log so a detached (remote-triggered) update is
+        # debuggable even when its stdout is discarded.
+        print(msg)
+        try:
+            log_dir = Path.home() / ".chp" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            with (log_dir / "host-update.log").open("a") as fh:
+                fh.write(f"{stamp} {msg}\n")
+        except Exception:
+            pass
+
+    before = _query_version("chp-host")
+    pkgs = _installed_chp_packages()
+    pin = getattr(args, "version", None)
+    # Only pin core+host to an explicit version; adapters aren't lock-stepped.
+    targets = [f"{p}=={pin}" if (pin and p in ("chp-core", "chp-host")) else p for p in pkgs]
+
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade"]
+    if getattr(args, "channel", "github") != "pypi":
+        cmd += ["--find-links", _GH_RELEASE_LINKS]
+    cmd += targets
+
+    _log(f"==> Updating {len(targets)} CHP packages (from chp-host {before})"
+         f"{f' → pin {pin}' if pin else ''}...")
+    if subprocess.run(cmd).returncode != 0:
+        _log("ERROR: pip upgrade failed — node left on the previous version.")
+        return 1
+
+    after = _query_version("chp-host")
+    _log(f"==> chp-host {before} → {after}")
+
+    if getattr(args, "restart", True):
+        units = _restart_chp_services()
+        _log(f"==> Restarted: {', '.join(units)}" if units
+             else "==> No CHP services found to restart.")
+    else:
+        _log("==> Skipped restart (--no-restart); restart the service to load the new version.")
     return 0
 
 
@@ -1201,6 +1374,13 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_rotate.add_argument("url", help="URL whose key to rotate.")
     mesh_rotate.set_defaults(func=_cmd_mesh_rotate)
 
+    mesh_update = mesh_sub.add_parser(
+        "update", help="Trigger a governed remote update on a mesh node (it self-updates + restarts).")
+    mesh_update.add_argument("url", help="URL of the node to update.")
+    mesh_update.add_argument("--version", help="Pin chp-core/chp-host to this version on the node.")
+    mesh_update.add_argument("--channel", choices=["github", "pypi"], help="Install source on the node.")
+    mesh_update.set_defaults(func=_cmd_mesh_update)
+
     gw_cmd = sub.add_parser(
         "gateway",
         help="Serve a CHP HTTP gateway routing across all agent_remotes in an environment.",
@@ -1254,6 +1434,15 @@ def build_parser() -> argparse.ArgumentParser:
     status_cmd.add_argument("--env-dir", help="Base directory for environments/ and .chp/ lookup.")
     status_cmd.add_argument("--mesh", action="store_true", help="Also show mesh remotes from ~/.chp/mesh.json.")
     status_cmd.set_defaults(func=_cmd_status)
+
+    update_cmd = sub.add_parser(
+        "update", help="Upgrade CHP packages on this node and restart its services.")
+    update_cmd.add_argument("--version", help="Pin chp-core/chp-host to this version (enables rollback).")
+    update_cmd.add_argument("--channel", choices=["github", "pypi"], default="github",
+                            help="Install source (default: github release + PyPI fallback).")
+    update_cmd.add_argument("--no-restart", dest="restart", action="store_false",
+                            help="Upgrade only; do not restart services.")
+    update_cmd.set_defaults(func=_cmd_update, restart=True)
 
     svc_install = sub.add_parser(
         "install-service",
