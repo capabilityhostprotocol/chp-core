@@ -3,5 +3,5 @@
   "bind": "0.0.0.0",
   "port": 8802,
   "store": "/var/lib/chp/nas.sqlite",
-  "adapters": ["synology", "filesystem", "process"]
+  "adapters": ["host", "synology", "filesystem", "process"]
 }
