@@ -219,6 +219,22 @@ def test_mark_verified_stamps_timestamp(tmp_path, monkeypatch):
     assert stamped["last_verified"].endswith("Z")
 
 
+def test_mark_stats_caches_snapshot(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    mesh_mod.add_remote("http://10.0.0.1:8803", api_key_env="CHP_PEER_0_KEY")
+    mesh_mod.mark_stats("http://10.0.0.1:8803", {"load_per_core": 0.5, "gpu": {"utilization_pct": 12}})
+    r = mesh_mod.find_remote("http://10.0.0.1:8803")
+    assert r["last_stats"]["load_per_core"] == 0.5
+    assert r["last_stats_at"].endswith("Z")
+
+
+def test_cli_mesh_stats_parses():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["mesh", "stats"])
+    assert args.func.__name__ == "_cmd_mesh_stats"
+
+
 def test_mark_verified_unknown_url_noop(tmp_path, monkeypatch):
     from chp_host import mesh as mesh_mod
     monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
