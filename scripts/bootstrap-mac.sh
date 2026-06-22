@@ -86,6 +86,14 @@ PRIMARY_ADAPTERS=(
   chp-adapter-registry
 )
 
+# Inference-role adapters (model serving). Heavy deps, so only on inference nodes.
+INFERENCE_ADAPTERS=(
+  chp-adapter-local-llm
+  chp-adapter-vllm
+  chp-adapter-tei
+  chp-adapter-huggingface
+)
+
 if [[ "$DEV_MODE" == true ]]; then
   # Editable installs from local repo (for contributors)
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
@@ -96,6 +104,10 @@ if [[ "$DEV_MODE" == true ]]; then
   done
   if [[ "${ROLE}" == "primary" ]]; then
     for pkg in "${PRIMARY_ADAPTERS[@]}"; do
+      "$PYTHON" -m pip install -e "${REPO_ROOT}/packages/${pkg}"
+    done
+  elif [[ "${ROLE}" == "inference" ]]; then
+    for pkg in "${INFERENCE_ADAPTERS[@]}"; do
       "$PYTHON" -m pip install -e "${REPO_ROOT}/packages/${pkg}"
     done
   fi
@@ -116,6 +128,9 @@ else
   if [[ "${ROLE}" == "primary" ]]; then
     echo "==> Installing primary-role adapters..."
     ${PIP_INSTALL} "${PRIMARY_ADAPTERS[@]}"
+  elif [[ "${ROLE}" == "inference" ]]; then
+    echo "==> Installing inference-role adapters (model serving)..."
+    ${PIP_INSTALL} "${INFERENCE_ADAPTERS[@]}"
   fi
 fi
 
