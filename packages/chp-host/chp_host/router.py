@@ -63,11 +63,14 @@ class MultiHostRouter:
         selection: Selection = "first",
         recheck_interval: float = 30.0,
         host_id: str = "chp-gateway",
+        host_roles: dict[str, str] | None = None,
     ) -> None:
         self._transports: list[Transport] = list(transports)
         self._selection: Selection = selection
         self._recheck_interval = recheck_interval
         self._host_id: str = host_id
+        # transport.name -> role (worker/inference/nas/...), for affinity routing
+        self._host_roles: dict[str, str] = dict(host_roles or {})
         # capability_id -> transports that serve it, in priority order
         self._routes: dict[str, list[Transport]] = {}
         # transport.name -> host descriptor (from discover)
@@ -119,19 +122,29 @@ class MultiHostRouter:
         subject: JSON | None = None,
         mode: str = "sync",
         metadata: JSON | None = None,
+        prefer: str | None = None,
     ) -> InvocationResult:
         """Route an invocation to a host that owns *capability_id*.
 
         Tries healthy owners in priority (or round-robin) order, failing over on
         ``ConnectionError``. The same correlation is propagated to whichever host
         runs, so :meth:`replay` can stitch the cross-host timeline.
+
+        *prefer* (optional) expresses node affinity: a transport name or role.
+        A matching owner is tried first; if it is down, routing still falls back
+        to the other owners (soft pin — availability beats affinity).
         """
         owners = self._routes.get(capability_id)
         if not owners:
             raise UnknownCapabilityError(capability_id)
 
+        # Affinity may also ride in metadata (how composition steps and HTTP
+        # callers express it). Explicit `prefer` wins; otherwise read metadata.
+        if prefer is None and metadata:
+            prefer = metadata.get("prefer") or metadata.get("node") or metadata.get("affinity")
+
         corr = _normalize_correlation(correlation)
-        candidates = self._ordered_candidates(capability_id, owners)
+        candidates = self._ordered_candidates(capability_id, owners, prefer=prefer)
 
         last_error: Exception | None = None
         for tr in candidates:
@@ -224,6 +237,9 @@ class MultiHostRouter:
         """
         if isinstance(envelope, dict):
             envelope = InvocationEnvelope.from_mapping(envelope)
+        # Affinity travels in metadata ({"prefer": "<name|role>"}) so callers can
+        # pin a node over plain HTTP without a wire-protocol change; ainvoke()
+        # reads it from metadata.
         return await self.ainvoke(
             envelope.capability_id,
             envelope.payload,
@@ -276,15 +292,19 @@ class MultiHostRouter:
 
     # ── health bookkeeping ──────────────────────────────────────────────────────
 
+    def _matches_prefer(self, tr: Transport, prefer: str) -> bool:
+        """A transport matches an affinity hint by its name or its role."""
+        return tr.name == prefer or self._host_roles.get(tr.name) == prefer
+
     def _ordered_candidates(
-        self, capability_id: str, owners: list[Transport]
+        self, capability_id: str, owners: list[Transport], prefer: str | None = None
     ) -> list[Transport]:
         # Routing-strategy seam: this is where capability invocations are ordered
-        # across the nodes that own them. Today: "first" (priority/insertion
-        # order) and "round_robin" (load spread). Future distributed-app
-        # strategies — capacity-aware, locality-aware, or explicit node-pinning —
-        # plug in here by reordering `healthy` based on additional signals
-        # (node load, region, a pin map). The strategy name comes from the
+        # across the nodes that own them. "first" (priority/insertion order) and
+        # "round_robin" (load spread) set the base order; *prefer* (node affinity
+        # by name or role) then floats a matching owner to the front. Future
+        # capacity/locality-aware strategies plug in here by reordering `healthy`
+        # on additional signals (node load, region). Base strategy comes from the
         # gateway's `selection` config (mesh.json → gateway.selection).
         healthy = [tr for tr in owners if self._is_healthy(tr)]
         unhealthy = [tr for tr in owners if not self._is_healthy(tr)]
@@ -292,6 +312,11 @@ class MultiHostRouter:
             idx = self._rr.get(capability_id, 0) % len(healthy)
             self._rr[capability_id] = idx + 1
             healthy = healthy[idx:] + healthy[:idx]
+        if prefer:
+            # Soft affinity: preferred owners first, the rest keep their order.
+            preferred = [tr for tr in healthy if self._matches_prefer(tr, prefer)]
+            others = [tr for tr in healthy if not self._matches_prefer(tr, prefer)]
+            healthy = preferred + others
         # Healthy owners first; unhealthy kept as a last resort (they may have recovered).
         return healthy + unhealthy
 

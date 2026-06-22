@@ -312,6 +312,30 @@ class TestRun:
         result = await real_host.ainvoke("chp.adapters.composition.run", {"name": wf_def["name"]})
         return result, fake
 
+    async def test_step_node_passes_affinity_metadata(self):
+        """A step's `node` becomes prefer-metadata so the router can pin it."""
+        captured: list = []
+
+        class CapturingHost:
+            async def ainvoke(self, capability_id, payload, **kw):
+                captured.append((capability_id, kw.get("metadata")))
+                return FakeResult(success=True, data={}, outcome="success")
+
+        adapter = CompositionAdapter()
+        real_host = LocalCapabilityHost(store=SQLiteEvidenceStore(":memory:"))
+        register_adapter(real_host, adapter)
+        await real_host.ainvoke("chp.adapters.composition.define", {
+            "name": "pinned",
+            "steps": [
+                {"capability_id": "embed", "node": "inference"},
+                {"capability_id": "store"},  # unpinned
+            ],
+        })
+        adapter._host = CapturingHost()
+        await real_host.ainvoke("chp.adapters.composition.run", {"name": "pinned"})
+        assert captured[0] == ("embed", {"prefer": "inference"})
+        assert captured[1] == ("store", None)
+
     async def test_run_all_steps_succeed(self):
         wf = {
             "name": "happy_path",

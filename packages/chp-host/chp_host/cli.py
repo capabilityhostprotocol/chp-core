@@ -501,6 +501,7 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
     host_id = getattr(args, "host_id", None) or (gw.host_id if gw else "chp-gateway")
 
     transports: list = []
+    host_roles: dict[str, str] = {}  # transport name -> role, for affinity routing
 
     # Local hosts defined in the manifest (start_local=True).
     for profile, _ in env.host_profiles_with_entries(base_dir=base_dir):
@@ -514,6 +515,8 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         transports.append(HttpTransport(
             remote.url, name=remote.url, api_key=remote.api_key,
         ))
+        if remote.role:
+            host_roles[remote.url] = remote.role
 
     if not transports:
         print(
@@ -523,7 +526,7 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         return 1
 
     selection = (gw.selection if gw else None) or "first"
-    router = MultiHostRouter(transports, selection=selection, host_id=host_id)
+    router = MultiHostRouter(transports, selection=selection, host_id=host_id, host_roles=host_roles)
     print(f"CHP gateway {host_id!r} — connecting to {len(transports)} transport(s) "
           f"(selection={selection})...")
     asyncio.run(router.connect())

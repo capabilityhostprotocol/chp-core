@@ -37,6 +37,7 @@ class WorkflowStep:
     capability_id: str
     payload: dict
     skip_on_failure: bool = False
+    node: str | None = None  # affinity: prefer this node (name or role) for the step
 
 
 @dataclass
@@ -100,6 +101,8 @@ class CompositionAdapter(BaseAdapter):
                             "capability_id": {"type": "string", "minLength": 1},
                             "payload": {"type": "object"},
                             "skip_on_failure": {"type": "boolean"},
+                            "node": {"type": "string",
+                                     "description": "Affinity: prefer this node (name or role) for the step."},
                         },
                         "required": ["capability_id"],
                         "additionalProperties": False,
@@ -124,6 +127,7 @@ class CompositionAdapter(BaseAdapter):
                 capability_id=s["capability_id"],
                 payload=s.get("payload") or {},
                 skip_on_failure=bool(s.get("skip_on_failure", False)),
+                node=s.get("node") or None,
             ))
 
         self._workflows[name] = WorkflowDefinition(
@@ -183,16 +187,20 @@ class CompositionAdapter(BaseAdapter):
                 "workflow_id": workflow_id,
                 "step_id": step.step_id,
                 "capability_id": step.capability_id,
+                "node": step.node,  # affinity target (None if unpinned)
                 # payload intentionally not recorded
             })
             t0 = time.perf_counter()
             step_error: str | None = None
             success = False
             try:
+                # Affinity rides in metadata; the router honors it (a single-host
+                # backend simply ignores it).
                 result = await self._host.ainvoke(
                     step.capability_id,
                     step.payload,
                     correlation={"correlation_id": ctx.correlation_id},
+                    metadata={"prefer": step.node} if step.node else None,
                 )
                 dur = round((time.perf_counter() - t0) * 1000, 2)
                 success = result.success
