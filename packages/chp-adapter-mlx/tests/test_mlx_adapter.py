@@ -233,6 +233,25 @@ class TestServerLifecycle:
         result = _invoke(_make_host(default_model=""), "chp.adapters.mlx.start_server", {})
         assert not result.success
 
+    def test_start_server_remembers_model_as_default(self, monkeypatch, tmp_path):
+        import chp_adapter_mlx.adapter as mod
+
+        class FakeProc:
+            pid = 7
+        monkeypatch.setattr(mod, "_run_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(mod.subprocess, "Popen", lambda cmd, **kw: FakeProc())
+        # Adapter with no default model; chat would fail before start_server.
+        adapter = MLXAdapter(MLXConfig(default_model=""))
+        host = LocalCapabilityHost(store=SQLiteEvidenceStore(":memory:"))
+        register_adapter(host, FakeHttpAdapter())
+        register_adapter(host, adapter)
+        _invoke(host, "chp.adapters.mlx.start_server",
+                {"model": "mlx-community/Qwen3-4B-4bit", "port": 8099})
+        # Now chat needs no explicit model — the started model is the default.
+        assert adapter._config.resolved_default_model() == "mlx-community/Qwen3-4B-4bit"
+        r = _invoke(host, "chp.adapters.mlx.chat", {"messages": [{"role": "user", "content": "hi"}]})
+        assert r.success
+
     def test_stop_server_when_not_running(self, monkeypatch, tmp_path):
         import chp_adapter_mlx.adapter as mod
         monkeypatch.setattr(mod, "_run_dir", lambda: str(tmp_path))
