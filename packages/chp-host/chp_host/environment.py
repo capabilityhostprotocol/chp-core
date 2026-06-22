@@ -63,6 +63,10 @@ class GatewayConfig:
     port: int = 8800
     bind: str = "0.0.0.0"
     host_id: str = "chp-gateway"
+    # Routing strategy when several nodes own the same capability. "first"
+    # (priority order, first-healthy-wins) or "round_robin" (spread load). The
+    # extension seam for future capacity/locality/pinning strategies.
+    selection: str = "first"
 
 
 @dataclass
@@ -118,6 +122,7 @@ class EnvironmentConfig:
                 port=int(gateway_raw.get("port", 8800)),
                 bind=str(gateway_raw.get("bind", "0.0.0.0")),
                 host_id=str(gateway_raw.get("host_id", "chp-gateway")),
+                selection=str(gateway_raw.get("selection", "first")),
             )
             if isinstance(gateway_raw, dict)
             else None

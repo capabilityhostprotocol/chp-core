@@ -444,8 +444,10 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         )
         return 1
 
-    router = MultiHostRouter(transports)
-    print(f"CHP gateway {host_id!r} — connecting to {len(transports)} transport(s)...")
+    selection = (gw.selection if gw else None) or "first"
+    router = MultiHostRouter(transports, selection=selection)
+    print(f"CHP gateway {host_id!r} — connecting to {len(transports)} transport(s) "
+          f"(selection={selection})...")
     asyncio.run(router.connect())
 
     cap_count = len(router.capability_ids)
@@ -555,6 +557,28 @@ _ROLE_PROFILES = {
             "http", "filesystem", "process", "audit", "tailscale", "local_llm", "jobs",
         ],
     },
+    # Specialized worker roles for distributing capabilities across the mesh:
+    # an inference node runs models, a storage node holds data, a compute node
+    # runs jobs/processes. Each still carries audit + tailscale for evidence and
+    # mesh reachability.
+    "inference": {
+        "bind": "0.0.0.0",
+        "port": 8803,
+        "adapters": [
+            "local_llm", "vllm", "tei", "huggingface",
+            "filesystem", "audit", "tailscale",
+        ],
+    },
+    "storage": {
+        "bind": "0.0.0.0",
+        "port": 8803,
+        "adapters": ["filesystem", "jobs", "audit", "tailscale"],
+    },
+    "compute": {
+        "bind": "0.0.0.0",
+        "port": 8803,
+        "adapters": ["process", "jobs", "http", "filesystem", "audit", "tailscale"],
+    },
     "raspi": {
         "bind": "0.0.0.0",
         "port": 8801,
@@ -613,6 +637,18 @@ def _read_keychain(key: str) -> str | None:
     except Exception:
         pass
     return None
+
+
+def _delete_keychain(key: str) -> bool:
+    """Delete *key* from the CHP keychain. Returns True if it was removed."""
+    try:
+        r = subprocess.run(
+            ["security", "delete-generic-password", "-a", key, "-s", "com.chp.secrets"],
+            capture_output=True, text=True,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
 
 
 def _health_poll(url: str, retries: int = 10, delay: float = 1.0) -> bool:
@@ -889,7 +925,7 @@ def _cmd_mesh_add(args: argparse.Namespace) -> int:
 
 
 def _cmd_mesh_list(args: argparse.Namespace) -> int:
-    from .mesh import load_mesh, mesh_path
+    from .mesh import load_mesh, mesh_path, mark_verified
 
     data = load_mesh()
     remotes = data.get("agent_remotes") or []
@@ -897,12 +933,11 @@ def _cmd_mesh_list(args: argparse.Namespace) -> int:
         print(f"No remotes in {mesh_path()}. Use 'chp-host mesh add <url>' to join nodes.")
         return 0
 
-    print(f"{'URL':<36} {'Role':<10} {'Status':<8} {'Caps':<6} {'Added'}")
-    print("-" * 76)
+    print(f"{'URL':<36} {'Role':<10} {'Status':<8} {'Caps':<6} {'Verified'}")
+    print("-" * 80)
     for r in remotes:
         url = r.get("url", "")
         role = r.get("role", "?")
-        added = (r.get("added") or "")[:10]
         status = "?"
         caps = "-"
         try:
@@ -910,9 +945,12 @@ def _cmd_mesh_list(args: argparse.Namespace) -> int:
             h = json.loads(resp.read().decode())
             caps = str(h.get("capability_count", "?"))
             status = "✓ OK"
+            mark_verified(url)  # stamp last_verified so stale peers are visible
+            verified = "just now"
         except Exception:
             status = "✗ FAIL"
-        print(f"{url:<36} {role:<10} {status:<8} {caps:<6} {added}")
+            verified = (r.get("last_verified") or "never")[:10]
+        print(f"{url:<36} {role:<10} {status:<8} {caps:<6} {verified}")
     return 0
 
 
@@ -929,6 +967,70 @@ def _cmd_mesh_remove(args: argparse.Namespace) -> int:
     print(f"Removed {url!r} from {mesh_path()}")
     if freed_key:
         print(f"Freed api_key_env: {freed_key!r}")
+    return 0
+
+
+def _cmd_mesh_revoke(args: argparse.Namespace) -> int:
+    """Remove a remote AND delete its pre-shared key from the keychain.
+
+    Use when a node is lost or decommissioned — `remove` only forgets the
+    manifest entry; `revoke` also destroys the key so it can never re-auth.
+    """
+    from .mesh import remove_remote, mesh_path
+
+    url = args.url.rstrip("/")
+    try:
+        key_env = remove_remote(url)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Revoked {url!r} from {mesh_path()}")
+    if key_env:
+        if sys.platform == "darwin" and _delete_keychain(key_env):
+            print(f"  Deleted key {key_env!r} from Keychain")
+        else:
+            print(f"  Remove the key manually: chp-host secrets delete {key_env}")
+    print("  Restart the gateway to drop the revoked node.")
+    return 0
+
+
+def _cmd_mesh_rotate(args: argparse.Namespace) -> int:
+    """Generate a fresh pre-shared key for a remote and store it locally.
+
+    Prints the new key once so the operator can set it on the peer
+    (`chp-host secrets set CHP_HOST_API_KEY` there, then restart it). The
+    manifest's api_key_env is unchanged — only the secret value rotates.
+    """
+    from .mesh import find_remote
+
+    url = args.url.rstrip("/")
+    remote = find_remote(url)
+    if remote is None:
+        print(f"ERROR: Remote {url!r} not found in mesh manifest.", file=sys.stderr)
+        return 1
+
+    key_env = remote.get("api_key_env")
+    if not key_env:
+        print(f"ERROR: Remote {url!r} has no api_key_env to rotate.", file=sys.stderr)
+        return 1
+
+    if sys.platform != "darwin":
+        print("ERROR: key rotation uses the macOS Keychain backend.", file=sys.stderr)
+        return 1
+
+    new_key = _secrets_mod.token_urlsafe(32)
+    if not _store_keychain(key_env, new_key):
+        print(f"ERROR: could not store rotated key {key_env!r} in Keychain.", file=sys.stderr)
+        return 1
+
+    print(f"Rotated {key_env!r} for {url!r}.")
+    print(f"\n  NEW KEY (set on the peer, then restart it):\n    {new_key}")
+    print("\n  On the peer:")
+    print("    chp-host secrets set CHP_HOST_API_KEY   # paste the key above")
+    print("    launchctl unload ~/Library/LaunchAgents/com.chp.chp.host.*.plist && \\")
+    print("    launchctl load   ~/Library/LaunchAgents/com.chp.chp.host.*.plist")
+    print("\n  Then restart the local gateway to reconnect.")
     return 0
 
 
@@ -1010,6 +1112,16 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_remove = mesh_sub.add_parser("remove", help="Remove a remote from the mesh manifest.")
     mesh_remove.add_argument("url", help="URL to remove.")
     mesh_remove.set_defaults(func=_cmd_mesh_remove)
+
+    mesh_revoke = mesh_sub.add_parser(
+        "revoke", help="Remove a remote and delete its pre-shared key from the keychain.")
+    mesh_revoke.add_argument("url", help="URL to revoke.")
+    mesh_revoke.set_defaults(func=_cmd_mesh_revoke)
+
+    mesh_rotate = mesh_sub.add_parser(
+        "rotate", help="Generate a fresh pre-shared key for a remote (set it on the peer).")
+    mesh_rotate.add_argument("url", help="URL whose key to rotate.")
+    mesh_rotate.set_defaults(func=_cmd_mesh_rotate)
 
     gw_cmd = sub.add_parser(
         "gateway",

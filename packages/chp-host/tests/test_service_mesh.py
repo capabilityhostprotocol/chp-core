@@ -201,6 +201,31 @@ def test_remove_remote_not_found(tmp_path, monkeypatch):
         mesh_mod.remove_remote("http://nonexistent:8803")
 
 
+def test_find_remote(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    mesh_mod.add_remote("http://10.0.0.1:8803", api_key_env="CHP_PEER_0_KEY", role="worker")
+    assert mesh_mod.find_remote("http://10.0.0.1:8803")["role"] == "worker"
+    assert mesh_mod.find_remote("http://nope:8803") is None
+
+
+def test_mark_verified_stamps_timestamp(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    mesh_mod.add_remote("http://10.0.0.1:8803", api_key_env="CHP_PEER_0_KEY")
+    assert "last_verified" not in mesh_mod.find_remote("http://10.0.0.1:8803")
+    mesh_mod.mark_verified("http://10.0.0.1:8803")
+    stamped = mesh_mod.find_remote("http://10.0.0.1:8803")
+    assert stamped["last_verified"].endswith("Z")
+
+
+def test_mark_verified_unknown_url_noop(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    mesh_mod.mark_verified("http://nope:8803")  # must not raise or create entries
+    assert mesh_mod.load_mesh()["agent_remotes"] == []
+
+
 # ---------------------------------------------------------------------------
 # cli.py — init/mesh/gateway arg parsing (no execution)
 # ---------------------------------------------------------------------------
@@ -211,6 +236,47 @@ def test_cli_init_parses():
     args = p.parse_args(["init", "--role", "worker", "--yes"])
     assert args.role == "worker"
     assert args.yes is True
+
+
+def test_specialized_role_profiles_exist():
+    from chp_host.cli import _ROLE_PROFILES
+    for role in ("inference", "storage", "compute"):
+        assert role in _ROLE_PROFILES
+        assert _ROLE_PROFILES[role]["adapters"]
+    # inference is model-oriented; storage is data-oriented
+    assert "vllm" in _ROLE_PROFILES["inference"]["adapters"]
+    assert "filesystem" in _ROLE_PROFILES["storage"]["adapters"]
+
+
+def test_cli_init_accepts_specialized_roles():
+    from chp_host.cli import build_parser
+    p = build_parser()
+    for role in ("inference", "storage", "compute"):
+        assert p.parse_args(["init", "--role", role, "--yes"]).role == role
+
+
+def test_gateway_config_parses_selection(tmp_path):
+    from chp_host.environment import EnvironmentConfig
+    manifest = tmp_path / "mesh.json"
+    manifest.write_text(json.dumps({
+        "name": "mesh",
+        "agent_remotes": [{"url": "http://x:8803", "api_key_env": "K"}],
+        "gateway": {"port": 8800, "selection": "round_robin"},
+    }))
+    env = EnvironmentConfig.load(str(manifest))
+    assert env.gateway.selection == "round_robin"
+
+
+def test_gateway_config_selection_defaults_first(tmp_path):
+    from chp_host.environment import EnvironmentConfig
+    manifest = tmp_path / "mesh.json"
+    manifest.write_text(json.dumps({
+        "name": "mesh",
+        "agent_remotes": [{"url": "http://x:8803", "api_key_env": "K"}],
+        "gateway": {"port": 8800},
+    }))
+    env = EnvironmentConfig.load(str(manifest))
+    assert env.gateway.selection == "first"
 
 
 def test_cli_mesh_invite_parses():
@@ -233,6 +299,20 @@ def test_cli_mesh_remove_parses():
     p = build_parser()
     args = p.parse_args(["mesh", "remove", "http://1.2.3.4:8803"])
     assert args.url == "http://1.2.3.4:8803"
+
+
+def test_cli_mesh_revoke_parses():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["mesh", "revoke", "http://1.2.3.4:8803"])
+    assert args.url == "http://1.2.3.4:8803"
+    assert args.func.__name__ == "_cmd_mesh_revoke"
+
+
+def test_cli_mesh_rotate_parses():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["mesh", "rotate", "http://1.2.3.4:8803"])
+    assert args.url == "http://1.2.3.4:8803"
+    assert args.func.__name__ == "_cmd_mesh_rotate"
 
 
 def test_cli_gateway_no_env_parses():

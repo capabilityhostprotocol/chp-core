@@ -109,3 +109,28 @@ def remove_remote(url: str) -> str:
     data["agent_remotes"] = [r for r in remotes if r.get("url") != url]
     save_mesh(data)
     return match.get("api_key_env", "")
+
+
+def find_remote(url: str) -> dict | None:
+    """Return the remote entry for *url*, or None."""
+    for r in load_mesh().get("agent_remotes") or []:
+        if r.get("url") == url:
+            return r
+    return None
+
+
+def mark_verified(url: str) -> None:
+    """Stamp ``last_verified`` (UTC now) on the remote, if present.
+
+    Called after a successful health probe so the mesh list can show which
+    peers are actually reachable and when they were last seen.
+    """
+    data = load_mesh()
+    changed = False
+    for r in data.get("agent_remotes") or []:
+        if r.get("url") == url:
+            r["last_verified"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            changed = True
+            break
+    if changed:
+        save_mesh(data)
