@@ -720,6 +720,23 @@ def _read_keychain(key: str) -> str | None:
     return None
 
 
+def _resolve_mesh_url(url: str) -> str:
+    """Expand ${VAR} tokens in a mesh URL from env or keychain.
+
+    The gateway service gets these injected via --secrets-from-keychain, so it
+    resolves templated URLs like 'http://${CHP_NAS_IP}:8802'. Interactive mesh
+    commands (list/stats/audit) must do the same or they probe the literal token
+    and report the node as unreachable.
+    """
+    import re
+
+    def _sub(m: "re.Match[str]") -> str:
+        var = m.group(1)
+        return os.environ.get(var) or _read_keychain(var) or m.group(0)
+
+    return re.sub(r"\$\{([^}]+)\}", _sub, url)
+
+
 def _delete_keychain(key: str) -> bool:
     """Delete *key* from the CHP keychain. Returns True if it was removed."""
     try:
@@ -1019,7 +1036,8 @@ def _cmd_mesh_list(args: argparse.Namespace) -> int:
     print("-" * 84)
     skewed = False
     for r in remotes:
-        url = r.get("url", "")
+        raw = r.get("url", "")
+        url = _resolve_mesh_url(raw)
         role = r.get("role", "?")
         status = "?"
         caps = "-"
@@ -1030,7 +1048,7 @@ def _cmd_mesh_list(args: argparse.Namespace) -> int:
             caps = str(h.get("capability_count", "?"))
             version = h.get("host_version") or "?"
             status = "✓ OK"
-            mark_verified(url)  # stamp last_verified so stale peers are visible
+            mark_verified(raw)  # stamp last_verified so stale peers are visible
             verified = "just now"
             # Flag nodes not on the same chp-host version as this machine.
             if version not in ("?", local_version):
@@ -1265,7 +1283,8 @@ def _cmd_mesh_stats(args: argparse.Namespace) -> int:
     print(f"{'URL':<32} {'Role':<10} {'Load/core':<10} {'Mem':<6} {'GPU':<6} {'Disk':<6}")
     print("-" * 76)
     for r in remotes:
-        url = r.get("url", "")
+        raw = r.get("url", "")
+        url = _resolve_mesh_url(raw)
         role = r.get("role", "?")
         key_env = r.get("api_key_env")
         key = (os.environ.get(key_env) or _read_keychain(key_env)) if key_env else None
@@ -1285,7 +1304,7 @@ def _cmd_mesh_stats(args: argparse.Namespace) -> int:
                 mem = _pct(s.get("memory"), "percent")
                 disk = _pct(s.get("disk"), "percent")
                 gpu = _pct(s.get("gpu"), "utilization_pct")
-                mark_stats(url, s)
+                mark_stats(raw, s)
         except Exception:
             pass
         print(f"{url:<32} {role:<10} {load:<10} {mem:<6} {gpu:<6} {disk:<6}")
@@ -1313,7 +1332,7 @@ def _cmd_mesh_audit(args: argparse.Namespace) -> int:
 
     rows: list[tuple] = []  # (timestamp, role, capability, outcome, correlation)
     for r in remotes:
-        url = r.get("url", "")
+        url = _resolve_mesh_url(r.get("url", ""))
         role = r.get("role", "?")
         key_env = r.get("api_key_env")
         key = (os.environ.get(key_env) or _read_keychain(key_env)) if key_env else None
