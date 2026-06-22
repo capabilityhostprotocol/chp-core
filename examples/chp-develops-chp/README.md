@@ -38,11 +38,46 @@ The final answer, then the **evidence trail**: each governed capability call, it
 outcome, and the node it ran on, all under one correlation id — replayable via the
 mesh evidence tooling (`router.replay(correlation_id)` / `chp-host mesh audit`).
 
+## A team of agents (coder.py, team.py)
+
+Beyond the single analyst loop, the example includes a **coding agent** and a
+**team coordinator** so multiple agents contribute to CHP together over the mesh:
+
+- **`coder.py`** — a single-file coding agent: scout (FastContext) locates the
+  file → `read_file` → the coder model (MLX) rewrites it → `safety.assess` gates
+  the write → (`--apply`) `write_file` + `conformance.check_source` verifies.
+  Propose-only by default; `--apply` writes (run on a branch); never pushes.
+
+  ```sh
+  python coder.py --file path/to/file.py "make the smallest change that does X"
+  python coder.py --apply --prefer primary "task"   # scout locates the file
+  ```
+
+- **`team.py`** — a roster of coders, each on a different model/node (Qwen3-14B on
+  the **primary**, Qwen3-4B on the **inference** node), pulling from one task
+  backlog (round-robin) and sharing **one correlation id** — the whole
+  collaborative session is a single replayable evidence trail.
+
+  ```sh
+  python team.py "task one" "src/x.py::task two"   # propose-only
+  python team.py --apply --solo primary-coder "task"
+  ```
+
+## The agent roster (who does what)
+
+| Agent | Model | Node | Role |
+|-------|-------|------|------|
+| **scout** | FastContext-1.0-4B-RL (vLLM, tool-calling) | primary :8092 | locates code (`scout.query`) |
+| **primary-coder** | Qwen3-14B-4bit (MLX) | primary :8081 | writes changes |
+| **edge-coder** | Qwen3-4B-Instruct (MLX) | inference :8081 | writes changes / analysis |
+
+scout is a *specialist* (FastContext is a repo-exploration tool-calling model); the
+coders are *generalists* (MLX). They compose: a coder calls scout to find code,
+then reasons over it — all as governed, evidenced capabilities routed by the mesh.
+
 ## Notes
 
-- The default model is a 4B local model — capable enough to drive the loop and cite
-  files, but small; it occasionally picks a non-existent path or the wrong tool and
-  recovers on the next step. Point `--model` at a larger MLX model for stronger
-  reasoning once the inference node has the disk/RAM.
-- The loop is bounded by `--steps`; the agent is asked for a final answer when the
-  budget is reached.
+- Model quality is the limiter: the 4B mangles "change nothing else"; the 14B
+  primary-coder is markedly better. Each tool/step is governed and evidenced
+  regardless of model.
+- The single analyst loop (`agent.py`) is bounded by `--steps`.
