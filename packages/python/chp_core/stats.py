@@ -20,6 +20,20 @@ import sys
 from typing import Any
 
 
+def _bin(name: str) -> str:
+    """Absolute path to a system tool, independent of $PATH.
+
+    Services (launchd/systemd) run with a minimal PATH that often omits
+    /usr/sbin, so bare names like ``ioreg``/``sysctl`` fail there. Resolve to an
+    absolute path from the standard locations; fall back to the bare name.
+    """
+    for d in ("/usr/sbin", "/usr/bin", "/sbin", "/bin", "/opt/homebrew/bin", "/usr/local/bin"):
+        p = os.path.join(d, name)
+        if os.path.exists(p):
+            return p
+    return name
+
+
 def _memory_linux() -> dict[str, Any] | None:
     """Parse /proc/meminfo and return {total_mb, used_mb, percent}."""
     try:
@@ -48,7 +62,7 @@ def _memory_macos() -> dict[str, Any] | None:
     try:
         # Total physical memory
         result = subprocess.run(
-            ["sysctl", "-n", "hw.memsize"],
+            [_bin("sysctl"), "-n", "hw.memsize"],
             capture_output=True, text=True, timeout=3,
         )
         if result.returncode != 0:
@@ -61,7 +75,7 @@ def _memory_macos() -> dict[str, Any] | None:
     try:
         # vm_stat output: parse page size and active/wired/compressor counts
         result = subprocess.run(
-            ["vm_stat"],
+            [_bin("vm_stat")],
             capture_output=True, text=True, timeout=3,
         )
         if result.returncode != 0:
@@ -106,7 +120,7 @@ def _gpu_apple_silicon() -> dict[str, Any] | None:
     """Query Apple Silicon GPU utilization via ioreg."""
     try:
         result = subprocess.run(
-            ["ioreg", "-r", "-c", "IOAccelerator", "-d", "1"],
+            [_bin("ioreg"), "-r", "-c", "IOAccelerator", "-d", "1"],
             capture_output=True, text=True, timeout=3,
         )
         if result.returncode != 0 or not result.stdout:
