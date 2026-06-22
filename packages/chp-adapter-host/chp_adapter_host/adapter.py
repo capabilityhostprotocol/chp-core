@@ -59,6 +59,19 @@ def _service_safe_env() -> dict[str, str]:
     return env
 
 
+def _profile_path_from_argv() -> str | None:
+    """The --profile path this host was started with (so install_adapter can add a
+    new adapter to the very profile this serve process is running). The host adapter
+    runs inside `chp-host serve --profile <path>`, so sys.argv carries it."""
+    argv = sys.argv
+    for i, a in enumerate(argv):
+        if a == "--profile" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--profile="):
+            return a.split("=", 1)[1]
+    return None
+
+
 def _spawn_detached_cli(args: list[str], log_name: str) -> int:
     """Spawn `python -m chp_host.cli <args>` detached, with a service-safe env,
     capturing the child's stdout+stderr to ~/.chp/logs/<log_name> (so a failed
@@ -158,6 +171,62 @@ class HostAdapter(BaseAdapter):
             "pid": pid,
             "note": "Update runs detached; this host will restart shortly. "
                     "Re-check /health for the new host_version.",
+        }
+
+    @capability(
+        id="chp.adapters.host.install_adapter",
+        version="1.0.0",
+        description=(
+            "Install (or pull) a CHP adapter package onto this node, optionally add it "
+            "to this host's profile, then restart so the new capabilities register. "
+            "Detached — this host restarts shortly after scheduling."
+        ),
+        category="infrastructure",
+        risk="high",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "package": {"type": "string", "description": "pip package name, e.g. 'chp-adapter-mlx'"},
+                "version": {"type": "string", "description": "Pin to this version (ignored if url is set)."},
+                "url": {"type": "string", "description": "Direct wheel/sdist URL (e.g. a GitHub release asset)."},
+                "adapter_name": {"type": "string", "description": "Short entry-point name to add to this host's profile, e.g. 'mlx'."},
+                "restart": {"type": "boolean", "default": True},
+            },
+            "required": ["package"],
+            "additionalProperties": False,
+        },
+        emits=["host_adapter_install_scheduled"],
+        tags=["host", "adapter", "install", "ops"],
+    )
+    async def install_adapter(self, ctx: Any, payload: dict) -> dict:
+        package = str(payload.get("package") or "").strip()
+        if not package:
+            raise ValueError("package is required")
+        args = ["install-adapter", package]
+        if payload.get("url"):
+            args += ["--url", str(payload["url"])]
+        elif payload.get("version"):
+            args += ["--version", str(payload["version"])]
+        adapter_name = payload.get("adapter_name")
+        profile = None
+        if adapter_name:
+            args += ["--adapter-name", str(adapter_name)]
+            profile = _profile_path_from_argv()
+            if profile:
+                args += ["--profile", profile]
+        if payload.get("restart") is False:
+            args += ["--no-restart"]
+        pid = _spawn_detached_cli(args, "host-install-adapter-child.log")
+        ctx.emit("host_adapter_install_scheduled",
+                 {"package": package, "adapter_name": adapter_name, "pid": pid})
+        return {
+            "scheduled": True,
+            "pid": pid,
+            "package": package,
+            "adapter_name": adapter_name,
+            "profile": profile,
+            "note": "Install runs detached; this node restarts shortly. Re-check "
+                    "/capabilities (or host.version adapters) for the new adapter.",
         }
 
     @capability(
