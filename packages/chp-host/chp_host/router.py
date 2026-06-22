@@ -20,6 +20,7 @@ Design choices (see plan):
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from typing import Iterable, Literal
 
@@ -87,7 +88,10 @@ class MultiHostRouter:
         for tr in self._transports:
             try:
                 descriptor = await tr.discover()
-            except ConnectionError:
+            except ConnectionError as exc:
+                # Surface *which* node was dropped and why — a silent skip here
+                # is how a wrong api_key or an unreachable peer goes unnoticed.
+                print(f"  WARNING: skipped {tr.name}: {exc}", file=sys.stderr)
                 self._mark_unhealthy(tr)
                 continue
             self._mark_healthy(tr)
