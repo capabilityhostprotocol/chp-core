@@ -1,0 +1,23 @@
+FROM python:3.12-slim
+WORKDIR /chp
+
+COPY packages/python                  /chp/packages/chp-core
+COPY packages/chp-host                /chp/packages/chp-host
+COPY packages/chp-adapter-synology    /chp/packages/chp-adapter-synology
+COPY packages/chp-adapter-filesystem  /chp/packages/chp-adapter-filesystem
+COPY packages/chp-adapter-process     /chp/packages/chp-adapter-process
+
+RUN pip install --no-cache-dir httpx \
+    /chp/packages/chp-core \
+    /chp/packages/chp-host \
+    /chp/packages/chp-adapter-synology \
+    /chp/packages/chp-adapter-filesystem \
+    /chp/packages/chp-adapter-process
+
+COPY environments/profiles/synology.json /chp/profile.json
+
+RUN mkdir -p /var/lib/chp
+
+EXPOSE 8802
+
+CMD ["chp-host", "serve", "--profile", "/chp/profile.json"]

@@ -19,7 +19,6 @@ Evidence policy:
 from __future__ import annotations
 
 import platform
-import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -27,6 +26,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from chp_core import BaseAdapter, capability
+from chp_core.stats import collect_host_stats
 
 _EMITS = ["raspi_event", "raspi_error"]
 
@@ -274,61 +274,39 @@ class RaspberryPiAdapter(BaseAdapter):
 
 
 # ---------------------------------------------------------------------------
-# System stats — pure stdlib, works everywhere
+# System stats — delegates to chp_core.stats, then flattens to the legacy
+# flat key shape that raspi tests and the system_stats capability expect.
 # ---------------------------------------------------------------------------
 
 def _read_system_stats() -> dict[str, Any]:
-    stats: dict[str, Any] = {}
+    """Return flat host stats dict.
 
-    # CPU temperature (Linux only)
-    temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
-    if temp_path.exists():
-        try:
-            stats["cpu_temp_c"] = round(int(temp_path.read_text().strip()) / 1000, 1)
-        except Exception:
-            stats["cpu_temp_c"] = None
-    else:
-        stats["cpu_temp_c"] = None
+    Delegates to :func:`chp_core.stats.collect_host_stats` for the shared
+    cross-platform logic, then re-exposes the nested ``memory`` and ``disk``
+    sub-dicts as the flat keys this adapter originally produced so that
+    existing callers and tests keep working unchanged.
 
-    # Memory via /proc/meminfo
-    meminfo_path = Path("/proc/meminfo")
-    if meminfo_path.exists():
-        try:
-            mem: dict[str, int] = {}
-            for line in meminfo_path.read_text().splitlines():
-                parts = line.split()
-                if len(parts) >= 2:
-                    mem[parts[0].rstrip(":")] = int(parts[1])
-            total = mem.get("MemTotal", 0)
-            available = mem.get("MemAvailable", 0)
-            used = total - available
-            stats["memory_total_mb"] = round(total / 1024)
-            stats["memory_used_mb"] = round(used / 1024)
-            stats["memory_percent"] = round(used / total * 100, 1) if total else None
-        except Exception:
-            stats["memory_total_mb"] = None
-            stats["memory_used_mb"] = None
-            stats["memory_percent"] = None
-    else:
-        stats["memory_total_mb"] = None
-        stats["memory_used_mb"] = None
-        stats["memory_percent"] = None
+    Pi-specific extras (none at present beyond what the shared collector
+    already covers) can be layered on after the delegation block.
+    """
+    shared = collect_host_stats()
 
-    # Disk (root filesystem)
-    disk = shutil.disk_usage("/")
-    stats["disk_total_gb"] = round(disk.total / 1024**3, 2)
-    stats["disk_used_gb"] = round(disk.used / 1024**3, 2)
-    stats["disk_percent"] = round(disk.used / disk.total * 100, 1)
+    stats: dict[str, Any] = {
+        "platform": shared.get("platform"),
+        "cpu_temp_c": shared.get("cpu_temp_c"),
+        "uptime_seconds": shared.get("uptime_seconds"),
+    }
 
-    # Uptime via /proc/uptime
-    uptime_path = Path("/proc/uptime")
-    if uptime_path.exists():
-        try:
-            stats["uptime_seconds"] = int(float(uptime_path.read_text().split()[0]))
-        except Exception:
-            stats["uptime_seconds"] = None
-    else:
-        stats["uptime_seconds"] = None
+    # Flatten memory sub-dict → legacy flat keys
+    mem = shared.get("memory") or {}
+    stats["memory_total_mb"] = mem.get("total_mb")
+    stats["memory_used_mb"] = mem.get("used_mb")
+    stats["memory_percent"] = mem.get("percent")
 
-    stats["platform"] = f"{sys.platform}/{platform.machine()}"
+    # Flatten disk sub-dict → legacy flat keys
+    disk = shared.get("disk") or {}
+    stats["disk_total_gb"] = disk.get("total_gb")
+    stats["disk_used_gb"] = disk.get("used_gb")
+    stats["disk_percent"] = disk.get("percent")
+
     return stats

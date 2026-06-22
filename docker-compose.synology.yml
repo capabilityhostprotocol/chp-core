@@ -1,0 +1,21 @@
+# CHP NAS host — Synology DSM + filesystem + process capabilities.
+# Deploy with: scripts/deploy-synology-host.sh
+# Required env on NAS: CHP_NAS_KEY, SYNOLOGY_USER, SYNOLOGY_PASSWORD
+# Optional env on NAS: CHP_NAS_REGISTRY (defaults to localhost:5000)
+services:
+  chp-nas:
+    image: ${CHP_NAS_REGISTRY:-localhost:5000}/chp-nas:latest
+    ports:
+      - "0.0.0.0:8802:8802"
+    volumes:
+      - /volume1:/volume1
+      - chp-nas-data:/var/lib/chp
+    environment:
+      - CHP_HOST_API_KEY=${CHP_NAS_KEY}
+      - SYNOLOGY_URL=http://localhost:5000
+      - SYNOLOGY_USER=${SYNOLOGY_USER}
+      - SYNOLOGY_PASSWORD=${SYNOLOGY_PASSWORD}
+    restart: unless-stopped
+
+volumes:
+  chp-nas-data:
