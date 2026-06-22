@@ -39,6 +39,39 @@ class TestRoutingTable:
         assert router.hosts_for("echo.who") == ["A", "B"]
 
     @pytest.mark.asyncio
+    async def test_prefer_by_name_routes_to_that_node(self):
+        # A is first in priority order, but prefer="B" must win.
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        b = LocalTransport(make_echo_host("B", "b"), name="B")
+        router = await _router(a, b)
+        assert (await router.ainvoke("echo.who", {})).data == {"host": "a"}
+        assert (await router.ainvoke("echo.who", {}, prefer="B")).data == {"host": "b"}
+
+    @pytest.mark.asyncio
+    async def test_prefer_by_role_routes_to_that_node(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        b = LocalTransport(make_echo_host("B", "b"), name="B")
+        router = await _router(a, b, host_roles={"A": "compute", "B": "inference"})
+        assert (await router.ainvoke("echo.who", {}, prefer="inference")).data == {"host": "b"}
+
+    @pytest.mark.asyncio
+    async def test_prefer_falls_back_when_preferred_owner_absent(self):
+        # prefer names a node that doesn't own the cap → still routes to an owner.
+        a = LocalTransport(make_echo_host("A", "a", cap_id="cap.a"), name="A")
+        b = LocalTransport(make_echo_host("B", "b"), name="B")
+        router = await _router(a, b)
+        assert (await router.ainvoke("echo.who", {}, prefer="A")).data == {"host": "b"}
+
+    @pytest.mark.asyncio
+    async def test_prefer_via_envelope_metadata(self):
+        from chp_core import InvocationEnvelope
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        b = LocalTransport(make_echo_host("B", "b"), name="B")
+        router = await _router(a, b)
+        env = InvocationEnvelope(capability_id="echo.who", payload={}, metadata={"prefer": "B"})
+        assert (await router.ainvoke_envelope(env)).data == {"host": "b"}
+
+    @pytest.mark.asyncio
     async def test_unreachable_host_skipped_on_connect(self):
         dead = HttpTransport("http://127.0.0.1:1", name="dead")
         live = LocalTransport(make_echo_host("B", "b"), name="B")

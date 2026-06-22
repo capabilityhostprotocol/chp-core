@@ -77,6 +77,7 @@ class EnvironmentRemoteEntry:
     optional: bool = False
     api_key_env: str | None = None  # name of env var holding the auth key (never stored as value)
     api_key: str | None = None      # resolved value — populated by resolve_remotes(), never in JSON
+    role: str | None = None         # node role (worker/inference/nas/...) — enables affinity routing
 
 
 @dataclass
@@ -115,6 +116,7 @@ class EnvironmentConfig:
                     url=str(r["url"]),
                     optional=bool(r.get("optional", False)),
                     api_key_env=r.get("api_key_env") or None,
+                    role=r.get("role") or None,
                 ))
         gateway_raw = data.get("gateway")
         gateway = (
@@ -169,6 +171,7 @@ class EnvironmentConfig:
                 optional=entry.optional,
                 api_key_env=entry.api_key_env,
                 api_key=api_key,
+                role=entry.role,
             ))
         return resolved
 
