@@ -1146,6 +1146,14 @@ def _cmd_mesh_update(args: argparse.Namespace) -> int:
             print(f"ERROR: key {key_env!r} for {url!r} not found (env or Keychain).", file=sys.stderr)
             return 1
 
+    # Capture the version before the update so --wait can confirm it actually changed.
+    before_version = None
+    try:
+        h = json.loads(urllib.request.urlopen(f"{url}/health", timeout=5).read().decode())
+        before_version = h.get("host_version")
+    except Exception:
+        pass
+
     payload: dict = {}
     if getattr(args, "version", None):
         payload["version"] = args.version
@@ -1173,9 +1181,31 @@ def _cmd_mesh_update(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
     data = result.get("data", {})
-    print(f"  Scheduled update on {url!r} (from chp-host {data.get('from_version','?')}, pid {data.get('pid','?')}).")
-    print("  The node restarts shortly — re-check with: chp-host mesh list")
-    return 0
+    print(f"  Scheduled update on {url!r} (from chp-host {data.get('from_version', before_version or '?')}, "
+          f"pid {data.get('pid','?')}).")
+
+    if not getattr(args, "wait", False):
+        print("  The node restarts shortly — verify with: chp-host mesh list  (or re-run with --wait)")
+        return 0
+
+    # Verifiable push: poll /health until host_version changes (the node restarts
+    # after its detached pip upgrade), or time out and report a likely failure.
+    print(f"  Waiting for {url} to come back on a new version (was {before_version})...")
+    import time as _t
+    deadline = _t.time() + 180
+    while _t.time() < deadline:
+        _t.sleep(6)
+        try:
+            h = json.loads(urllib.request.urlopen(f"{url}/health", timeout=5).read().decode())
+            now = h.get("host_version")
+            if now and before_version and now != before_version:
+                print(f"  ✓ Updated: chp-host {before_version} → {now}")
+                return 0
+        except Exception:
+            continue  # node may be mid-restart
+    print(f"  ⚠ Still on {before_version} after 180s — the upgrade likely failed.", file=sys.stderr)
+    print(f"    Check ~/.chp/logs/host-update.log on the node ({url}).", file=sys.stderr)
+    return 1
 
 
 def _cmd_mesh_stats(args: argparse.Namespace) -> int:
@@ -1224,6 +1254,61 @@ def _cmd_mesh_stats(args: argparse.Namespace) -> int:
         except Exception:
             pass
         print(f"{url:<32} {role:<10} {load:<10} {mem:<6} {gpu:<6} {disk:<6}")
+    return 0
+
+
+def _cmd_mesh_audit(args: argparse.Namespace) -> int:
+    """Query evidence across the whole mesh — fan out audit.query_invocations.
+
+    Mirrors `mesh stats`/`replay`: invokes the audit query on each node with the
+    given filters and merges the records, each tagged with the node it came from.
+    """
+    from .mesh import load_mesh, mesh_path
+
+    remotes = (load_mesh().get("agent_remotes") or [])
+    if not remotes:
+        print(f"No remotes in {mesh_path()}. Use 'chp-host mesh add <url>' to join nodes.")
+        return 0
+
+    payload: dict = {"limit": getattr(args, "limit", 20)}
+    for k in ("capability_id", "outcome", "since", "until"):
+        v = getattr(args, k, None)
+        if v:
+            payload[k] = v
+
+    rows: list[tuple] = []  # (timestamp, role, capability, outcome, correlation)
+    for r in remotes:
+        url = r.get("url", "")
+        role = r.get("role", "?")
+        key_env = r.get("api_key_env")
+        key = (os.environ.get(key_env) or _read_keychain(key_env)) if key_env else None
+        try:
+            body = json.dumps({"capability_id": "chp.adapters.audit.query_invocations",
+                               "payload": payload}).encode()
+            req = urllib.request.Request(f"{url}/invoke", data=body,
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            if key:
+                req.add_header("X-CHP-Key", key)
+            resp = urllib.request.urlopen(req, timeout=8)
+            result = json.loads(resp.read().decode())
+            if result.get("outcome") == "success":
+                for inv in (result.get("data", {}) or {}).get("invocations", []):
+                    ts = inv.get("timestamp") or inv.get("started_at") or inv.get("completed_at") or ""
+                    rows.append((ts, role, inv.get("capability_id", "?"),
+                                 inv.get("outcome", "?"), inv.get("correlation_id", "")))
+        except Exception:
+            pass
+
+    if not rows:
+        print("No matching evidence across the mesh.")
+        return 0
+    rows.sort(key=lambda x: x[0], reverse=True)  # most recent first
+
+    print(f"{'Time':<21} {'Node':<10} {'Capability':<34} {'Outcome':<8} Correlation")
+    print("-" * 96)
+    for ts, role, cap, outcome, corr in rows[:payload["limit"]]:
+        print(f"{str(ts)[:20]:<21} {role:<10} {cap[:33]:<34} {outcome:<8} {(corr or '')[:24]}")
+    print(f"\n{len(rows)} record(s) across {len(remotes)} node(s).")
     return 0
 
 
@@ -1431,11 +1516,23 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_update.add_argument("url", help="URL of the node to update.")
     mesh_update.add_argument("--version", help="Pin chp-core/chp-host to this version on the node.")
     mesh_update.add_argument("--channel", choices=["github", "pypi"], help="Install source on the node.")
+    mesh_update.add_argument("--wait", action="store_true",
+                             help="Poll until the node restarts on a new version (verifies the push).")
     mesh_update.set_defaults(func=_cmd_mesh_update)
 
     mesh_stats = mesh_sub.add_parser(
         "stats", help="Fleet capacity view — CPU load, memory, GPU, disk per node.")
     mesh_stats.set_defaults(func=_cmd_mesh_stats)
+
+    mesh_audit = mesh_sub.add_parser(
+        "audit", help="Query evidence across the mesh (fan out audit.query_invocations).")
+    mesh_audit.add_argument("--capability", dest="capability_id", help="Filter by capability id.")
+    mesh_audit.add_argument("--outcome", choices=["success", "failure", "denied", "skipped"],
+                            help="Filter by outcome.")
+    mesh_audit.add_argument("--since", help="ISO-8601 lower bound.")
+    mesh_audit.add_argument("--until", help="ISO-8601 upper bound.")
+    mesh_audit.add_argument("--limit", type=int, default=20, help="Max records (default 20).")
+    mesh_audit.set_defaults(func=_cmd_mesh_audit)
 
     gw_cmd = sub.add_parser(
         "gateway",

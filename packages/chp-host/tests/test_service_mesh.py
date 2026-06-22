@@ -235,6 +235,23 @@ def test_cli_mesh_stats_parses():
     assert args.func.__name__ == "_cmd_mesh_stats"
 
 
+def test_cli_mesh_audit_parses():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(
+        ["mesh", "audit", "--capability", "chp.adapters.host.stats", "--outcome", "denied", "--limit", "5"])
+    assert args.func.__name__ == "_cmd_mesh_audit"
+    assert args.capability_id == "chp.adapters.host.stats"
+    assert args.outcome == "denied"
+    assert args.limit == 5
+
+
+def test_cli_mesh_update_wait_parses():
+    from chp_host.cli import build_parser
+    args = build_parser().parse_args(["mesh", "update", "http://x:8803", "--wait"])
+    assert args.func.__name__ == "_cmd_mesh_update"
+    assert args.wait is True
+
+
 def test_mark_verified_unknown_url_noop(tmp_path, monkeypatch):
     from chp_host import mesh as mesh_mod
     monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
