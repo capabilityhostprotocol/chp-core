@@ -183,7 +183,11 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 
         router = MultiHostRouter(transports)
         print(f"chp-host mcp: environment {env_name!r} — {len(transports)} transport(s)", file=sys.stderr)
-        asyncio.run(run_mcp_server(router, server_name=args.host_id, min_status=args.min_status))
+        asyncio.run(run_mcp_server(router, server_name=args.host_id, min_status=args.min_status,
+                                   transport=("http" if getattr(args, "http", False) else "stdio"),
+                                   http_host=getattr(args, "bind", "127.0.0.1"),
+                                   http_port=getattr(args, "port", 8810),
+                                   api_key=os.environ.get("CHP_HOST_API_KEY")))
         return 0
 
     if args.profile:
@@ -210,7 +214,11 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
         for name, reason in result.skipped.items():
             print(f"  skipped {name}: {reason}", file=sys.stderr)
 
-    asyncio.run(run_mcp_server(host, server_name=host_id, min_status=args.min_status))
+    asyncio.run(run_mcp_server(host, server_name=host_id, min_status=args.min_status,
+                               transport=("http" if getattr(args, "http", False) else "stdio"),
+                               http_host=getattr(args, "bind", "127.0.0.1"),
+                               http_port=getattr(args, "port", 8810),
+                               api_key=os.environ.get("CHP_HOST_API_KEY")))
     return 0
 
 
@@ -1639,7 +1647,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.set_defaults(func=_cmd_serve)
 
-    mcp_cmd = sub.add_parser("mcp", help="Serve adapters as MCP tools over stdio (for Claude Code).")
+    mcp_cmd = sub.add_parser("mcp", help="Serve adapters as MCP tools over stdio (default) or HTTP/SSE.")
+    mcp_cmd.add_argument("--http", action="store_true",
+                         help="Serve over HTTP/SSE instead of stdio (for the cockpit / remote clients).")
+    mcp_cmd.add_argument("--bind", default="127.0.0.1",
+                         help="HTTP bind address (default 127.0.0.1; use the Tailscale IP, not 0.0.0.0).")
+    mcp_cmd.add_argument("--port", type=int, default=8810, help="HTTP port (default 8810).")
     mcp_cmd.add_argument("--adapters", help="Comma-separated adapter names (e.g. git,github,planning).")
     mcp_cmd.add_argument("--profile", help="Path to a host profile JSON file.")
     mcp_cmd.add_argument(
