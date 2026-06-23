@@ -1,0 +1,23 @@
+{
+  "name": "chp-harness",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "OpenHarness agents over the CHP mesh (capabilities as MCP tools).",
+  "scripts": {
+    "agent": "tsx src/agent.ts",
+    "list-tools": "tsx src/list-tools.ts"
+  },
+  "dependencies": {
+    "@openharness/core": "^0.7.0",
+    "@ai-sdk/mcp": "^1.0.21",
+    "@ai-sdk/openai-compatible": "^1.0.0",
+    "ai": "^6.0.97",
+    "chalk": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
