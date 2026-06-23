@@ -156,7 +156,10 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 # OpenAI-compatible shim → routes chat through chp.adapters.mlx.chat
                 # (capacity-routed + evidenced). Lets any OpenAI client use mesh
                 # inference as a governed capability; tool-calling flows through too.
-                self._write_json(self._openai_chat(body))
+                if body.get("stream"):
+                    self._openai_chat_stream(body)
+                else:
+                    self._write_json(self._openai_chat(body))
                 return
             if path == "/replay":
                 query = ReplayQuery.from_mapping(body)
@@ -184,9 +187,9 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         result = asyncio.run(self.server.chp_host.ainvoke_envelope(envelope))
         return result.to_dict()
 
-    def _openai_chat(self, body: JSON) -> JSON:
-        """Translate an OpenAI /v1/chat/completions request to chp.adapters.mlx.chat
-        (routed by the host/router — capacity-aware + evidenced) and back."""
+    def _mlx_chat_call(self, body: JSON) -> JSON:
+        """Route an OpenAI chat body through chp.adapters.mlx.chat (capacity-routed +
+        evidenced); returns the raw invocation result dict."""
         payload: JSON = {
             "model": body.get("model"),
             "messages": body.get("messages") or [],
@@ -201,21 +204,59 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             "payload": payload,
             "metadata": {"prefer": body.get("chp_prefer", "inference")},
         })
-        result = asyncio.run(self.server.chp_host.ainvoke_envelope(env))
-        d = result.to_dict()
+        return asyncio.run(self.server.chp_host.ainvoke_envelope(env)).to_dict()
+
+    def _openai_chat(self, body: JSON) -> JSON:
+        """Non-streaming OpenAI /v1/chat/completions over the mesh."""
+        d = self._mlx_chat_call(body)
         if d.get("outcome") != "success":
             return {"error": {"message": str(d.get("error") or d.get("denial") or "mlx.chat failed"),
                               "type": "chp_mesh_error"}}
         data = d.get("data") or {}
+        import time as _time
         pt, ct = data.get("prompt_tokens", 0), data.get("completion_tokens", 0)
         return {
             "id": d.get("invocation_id") or "chatcmpl-chp",
             "object": "chat.completion",
-            "model": data.get("model") or payload["model"],
+            "created": int(_time.time()),
+            "model": data.get("model") or body.get("model"),
             "choices": [{"index": 0, "message": data.get("message") or {},
                          "finish_reason": data.get("finish_reason") or "stop"}],
             "usage": {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct},
         }
+
+    def _openai_chat_stream(self, body: JSON) -> None:
+        """Streaming OpenAI shim: mlx.chat is non-streaming, so we compute the full
+        completion and emit it as a single SSE chunk sequence (the AI SDK / OpenAI
+        clients require SSE when stream=true)."""
+        import time as _time
+        d = self._mlx_chat_call(body)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def sse(obj: JSON) -> None:
+            self.wfile.write(f"data: {json.dumps(obj)}\n\n".encode())
+            self.wfile.flush()
+
+        if d.get("outcome") != "success":
+            sse({"error": {"message": str(d.get("error") or d.get("denial") or "mlx.chat failed")}})
+            self.wfile.write(b"data: [DONE]\n\n")
+            return
+        data = d.get("data") or {}
+        msg = data.get("message") or {}
+        base = {"id": d.get("invocation_id") or "chatcmpl-chp", "object": "chat.completion.chunk",
+                "created": int(_time.time()), "model": data.get("model") or body.get("model")}
+        sse({**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
+        if msg.get("content"):
+            sse({**base, "choices": [{"index": 0, "delta": {"content": msg["content"]}, "finish_reason": None}]})
+        if msg.get("tool_calls"):
+            tcs = [{"index": i, **tc} for i, tc in enumerate(msg["tool_calls"])]
+            sse({**base, "choices": [{"index": 0, "delta": {"tool_calls": tcs}, "finish_reason": None}]})
+        sse({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": data.get("finish_reason") or "stop"}]})
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
 
     def _read_json(self) -> JSON:
         length = int(self.headers.get("Content-Length", "0"))
