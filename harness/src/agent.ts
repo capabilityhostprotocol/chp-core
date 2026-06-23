@@ -104,6 +104,42 @@ async function approve(toolCall: ToolCallInfo): Promise<boolean> {
   return true;
 }
 
+// A1 — small models misread structured tool output (scout returned `files`, the 4B
+// still said "not found"). Flatten the common shapes into explicit text before the
+// model sees them, and wrap each tool's execute to apply it.
+function summarizeToolResult(raw: any): any {
+  let data: any = raw;
+  if (typeof raw === "string") { try { data = JSON.parse(raw); } catch { return raw; } }
+  // MCP results often wrap the payload in a content array of {type:'text', text}.
+  if (data && Array.isArray(data.content)) {
+    const t = data.content.find((c: any) => c?.type === "text")?.text;
+    if (t) { try { data = JSON.parse(t); } catch { return t; } }
+  }
+  const obj = data && typeof data === "object" ? data : {};
+  const files = obj.files ?? obj.citations;
+  if (Array.isArray(files) && files.length) {
+    const lines = files.map((f: any) =>
+      typeof f === "string" ? f : `${f.path}${f.line_range ? ":" + f.line_range : ""}`);
+    return `Found ${files.length} file(s):\n${lines.map((l: string) => "- " + l).join("\n")}\n` +
+      "(Report these path(s)/line-range(s) as the answer — do NOT say 'not found'.)";
+  }
+  if (Array.isArray(obj.violations)) {
+    return obj.violations.length
+      ? `Conformance: ${obj.violations.length} violation(s):\n` +
+        obj.violations.map((v: any) => "- " + JSON.stringify(v)).join("\n")
+      : "Conformance: clean (no violations).";
+  }
+  return raw;
+}
+
+function wrapToolResults(tools: Record<string, any>): Record<string, any> {
+  return Object.fromEntries(Object.entries(tools).map(([n, t]) => {
+    const orig = t?.execute;
+    if (typeof orig !== "function") return [n, t];
+    return [n, { ...t, execute: async (args: any, opts: any) => summarizeToolResult(await orig(args, opts)) }];
+  }));
+}
+
 async function main() {
   const task = process.argv.slice(2).join(" ").trim();
   if (!task) {
@@ -126,9 +162,10 @@ async function main() {
   // comma-separated substrings; empty = all).
   const filter = (process.env.CHP_TOOLS ?? "filesystem,conformance,host_stats,host_version,scout")
     .split(",").map((s) => s.trim()).filter(Boolean);
-  const tools = filter.length
+  const curated = filter.length
     ? Object.fromEntries(Object.entries(allTools).filter(([n]) => filter.some((f) => n.includes(f))))
     : allTools;
+  const tools = wrapToolResults(curated); // A1: format structured results for small models
   console.log(chalk.dim(`mesh tools: ${Object.keys(allTools).length} available → ${Object.keys(tools).length} enabled`));
 
   // P1 governance: build the tool→capability map so every tool call can be assessed.
