@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -121,10 +122,18 @@ _CITATION_RE = re.compile(
 
 @dataclass
 class ScoutConfig:
-    base_url: str = "http://localhost:8092"
-    model: str = "fastcontext"
+    base_url: str = ""
+    model: str = ""
     max_turns: int = 6
     timeout: float = 30.0
+
+    def resolved_base_url(self) -> str:
+        # FastContext (tool-calling) server. Override SCOUT_BASE_URL to host it on
+        # another node, e.g. http://<worker-tailscale-ip>:8092.
+        return self.base_url or os.environ.get("SCOUT_BASE_URL", "http://localhost:8092")
+
+    def resolved_model(self) -> str:
+        return self.model or os.environ.get("SCOUT_MODEL", "fastcontext")
 
 
 class ScoutAdapter(BaseAdapter):
@@ -204,9 +213,9 @@ class ScoutAdapter(BaseAdapter):
                 # Call FastContext via the http transport
                 http_result = await ctx.ainvoke(_HTTP_CAP, {
                     "method": "POST",
-                    "url": f"{self._config.base_url}/v1/chat/completions",
+                    "url": f"{self._config.resolved_base_url()}/v1/chat/completions",
                     "json_body": {
-                        "model": self._config.model,
+                        "model": self._config.resolved_model(),
                         "messages": messages,
                         "tools": _TOOLS,
                         "tool_choice": "auto",
