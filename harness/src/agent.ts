@@ -137,13 +137,35 @@ async function main() {
 
   const model = createOpenAICompatible({ name: "mlx", baseURL: MODEL_BASE_URL }).chatModel(MODEL_ID);
 
+  // P3 — a read-only `explore` subagent (mesh read tools). The main agent delegates
+  // exploration to it via the auto-injected `task` tool; it keeps repo-spelunking
+  // out of the main context (OpenHarness runs subagents with their own window).
+  const readOnly = Object.fromEntries(
+    Object.entries(tools).filter(([n]) => /read_file|list_directory|glob|grep|scout|stat_path/.test(n)),
+  );
+  const explore = new Agent({
+    name: "explore",
+    description: "Read-only mesh exploration — search and read repo files across the fleet.",
+    systemPrompt: "You explore the CHP repo over the mesh (read-only). Return concise file:line findings.",
+    model,
+    tools: readOnly,
+    maxSteps: 12,
+  });
+  console.log(chalk.dim(`subagent: explore (${Object.keys(readOnly).length} read-only tools)`));
+
   const agent = new Agent({
     name: "chp-agent",
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt: SYSTEM_PROMPT +
+      " For read-only exploration (finding/reading code), delegate to the `explore` subagent via the task tool.",
     model,
     tools,
     maxSteps: 12,
     approve,
+    subagents: [explore],
+    onSubagentEvent: (path: string[], ev: any) => {
+      if (ev.type === "tool.done") console.log(chalk.magenta(`    ⌁ ${path.join(">")}: ${ev.toolName}`));
+      if (ev.type === "done") console.log(chalk.magenta(`    ⌁ ${path.join(">")} done`));
+    },
   });
 
   const runner = apply(toRunner(agent), withTurnTracking(), withRetry());
