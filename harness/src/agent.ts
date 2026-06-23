@@ -146,7 +146,10 @@ async function main() {
   const explore = new Agent({
     name: "explore",
     description: "Read-only mesh exploration — search and read repo files across the fleet.",
-    systemPrompt: "You explore the CHP repo over the mesh (read-only). Return concise file:line findings.",
+    systemPrompt:
+      "You explore the CHP repo over the mesh (read-only). Call scout_query (or grep) to locate code. " +
+      "Scout returns a `files` list of {path, line_range} — report each one VERBATIM as your finding. " +
+      "NEVER answer 'not found' if scout returned any files; pass the paths/line ranges through.",
     model,
     tools: readOnly,
     maxSteps: 12,
