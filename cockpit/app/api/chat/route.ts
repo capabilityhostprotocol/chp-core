@@ -20,13 +20,16 @@ import {
 const MCP_SSE_URL = process.env.CHP_MCP_SSE_URL ?? "http://127.0.0.1:8810/sse";
 const KEY = process.env.CHP_GATEWAY_KEY ?? process.env.CHP_HOST_API_KEY ?? "";
 const SAFETY_URL = process.env.CHP_SAFETY_URL ?? "http://127.0.0.1:8803";
-const MODEL_BASE_URL = process.env.CHP_MODEL_BASE_URL ?? "http://127.0.0.1:8081/v1";
+// Default to the gateway's OpenAI shim → mesh-routed, evidenced inference (mlx.chat).
+const MODEL_BASE_URL = process.env.CHP_MODEL_BASE_URL ?? "http://127.0.0.1:8800/v1";
 const MODEL_ID = process.env.CHP_MODEL_ID ?? "mlx-community/Qwen3-4B-Instruct-2507-4bit";
 const TOOL_FILTER = (process.env.CHP_TOOLS ?? "filesystem,conformance,host_stats,host_version,scout,git")
   .split(",").map((s) => s.trim()).filter(Boolean);
 const AUTO_APPROVE = process.env.CHP_AUTO_APPROVE === "1";
 
-const model = createOpenAICompatible({ name: "mlx", baseURL: MODEL_BASE_URL }).chatModel(MODEL_ID);
+const model = createOpenAICompatible({
+  name: "mlx", baseURL: MODEL_BASE_URL, headers: { "X-CHP-Key": KEY },
+}).chatModel(MODEL_ID);
 
 // ── Governance: assess every tool call via chp.adapters.safety.assess ──
 const capMap = new Map<string, string>(); // MCP tool name → CHP capability id
