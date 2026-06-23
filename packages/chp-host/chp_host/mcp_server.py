@@ -234,12 +234,20 @@ async def run_mcp_server(
     host: Any,
     server_name: str = "chp",
     min_status: str = "draft",
+    transport: str = "stdio",
+    http_host: str = "127.0.0.1",
+    http_port: int = 8810,
+    api_key: str | None = None,
 ) -> None:
-    """Run *host* as an MCP stdio server until stdin closes.
+    """Run *host* as an MCP server (stdio by default, or HTTP/SSE).
 
     *host* may be a ``LocalCapabilityHost`` (in-process) or a
     ``MultiHostRouter`` (routes to remote HTTP CHP hosts). The router case
     connects to all configured transports before snapshotting capabilities.
+
+    ``transport="http"`` serves MCP over SSE (for browser/remote clients such as
+    the cockpit and remote OpenHarness), authenticated with the ``X-CHP-Key``
+    header against *api_key*. Bind to a trusted interface (Tailscale), not 0.0.0.0.
     """
     server = Server(server_name)
 
@@ -442,6 +450,47 @@ async def run_mcp_server(
     # Run
     # -----------------------------------------------------------------------
 
+    if transport == "http":
+        await _run_http(server, http_host, http_port, api_key)
+        return
+
     async with stdio_server() as (read_stream, write_stream):
         init_opts = server.create_initialization_options()
         await server.run(read_stream, write_stream, init_opts)
+
+
+async def _run_http(server: "Server", host: str, port: int, api_key: str | None) -> None:
+    """Serve the MCP *server* over SSE with X-CHP-Key auth (for cockpit/remote clients)."""
+    import uvicorn
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.responses import Response
+    from starlette.routing import Mount, Route
+
+    sse = SseServerTransport("/messages/")
+
+    def _key_ok(headers: dict) -> bool:
+        return not api_key or headers.get("x-chp-key") == api_key
+
+    async def handle_sse(request):
+        if not _key_ok({k.decode(): v.decode() for k, v in request.headers.raw}):
+            return Response("unauthorized", status_code=401)
+        async with sse.connect_sse(request.scope, request.receive, request._send) as (r, w):
+            await server.run(r, w, server.create_initialization_options())
+        return Response()
+
+    async def handle_messages(scope, receive, send):
+        hdrs = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
+        if not _key_ok(hdrs):
+            await Response("unauthorized", status_code=401)(scope, receive, send)
+            return
+        await sse.handle_post_message(scope, receive, send)
+
+    app = Starlette(routes=[
+        Route("/sse", endpoint=handle_sse),
+        Mount("/messages/", app=handle_messages),
+    ])
+    logger.info("chp-host mcp: SSE server on http://%s:%d/sse (auth: %s)",
+                host, port, "X-CHP-Key" if api_key else "none")
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    await uvicorn.Server(config).serve()
