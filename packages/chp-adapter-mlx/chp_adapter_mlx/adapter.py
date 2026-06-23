@@ -98,12 +98,29 @@ def _alive(pid: int) -> bool:
         return False
 
 
-def _server_cmd(model: str, port: int, host: str) -> list[str]:
+def _server_cmd(model: str, port: int, host: str, adapter_path: str | None = None) -> list[str]:
     """Command to launch mlx_lm's OpenAI server. Prefer the console script next to
-    the interpreter; fall back to `python -m mlx_lm.server`."""
+    the interpreter; fall back to `python -m mlx_lm.server`. --adapter-path serves a
+    LoRA on top of the base model (the flywheel's tuned variant)."""
     script = os.path.join(os.path.dirname(sys.executable), "mlx_lm.server")
     base = [script] if os.path.exists(script) else [sys.executable, "-m", "mlx_lm.server"]
-    return base + ["--model", model, "--port", str(port), "--host", host]
+    cmd = base + ["--model", model, "--port", str(port), "--host", host]
+    if adapter_path:
+        cmd += ["--adapter-path", adapter_path]
+    return cmd
+
+
+def _lora_cmd(model: str, data: str, adapter_path: str, iters: int,
+              batch_size: int, num_layers: int | None) -> list[str]:
+    """`mlx_lm.lora --train` command — LoRA fine-tune on-fleet (the flywheel's C3).
+    *data* is a dir with train.jsonl / valid.jsonl (chat or completions format)."""
+    script = os.path.join(os.path.dirname(sys.executable), "mlx_lm.lora")
+    base = [script] if os.path.exists(script) else [sys.executable, "-m", "mlx_lm.lora"]
+    cmd = base + ["--model", model, "--train", "--data", data, "--adapter-path", adapter_path,
+                  "--iters", str(iters), "--batch-size", str(batch_size)]
+    if num_layers:
+        cmd += ["--num-layers", str(num_layers)]
+    return cmd
 
 
 def _pkg_version(name: str) -> str | None:
@@ -468,6 +485,7 @@ class MLXAdapter(BaseAdapter):
                 "model": {"type": "string", "description": "MLX model repo (defaults to MLX_MODEL)."},
                 "port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 8081},
                 "host": {"type": "string", "default": "127.0.0.1"},
+                "adapter_path": {"type": "string", "description": "Serve a LoRA adapter on top of the base model (the flywheel's tuned variant)."},
             },
             "additionalProperties": False,
         },
@@ -481,6 +499,7 @@ class MLXAdapter(BaseAdapter):
         self._config.default_model = model
         port = int(payload.get("port") or 8081)
         host = str(payload.get("host") or "127.0.0.1")
+        adapter_path = payload.get("adapter_path") or None
         pidfile = os.path.join(_run_dir(), f"mlx-server-{port}.pid")
 
         existing = _read_pid(pidfile)
@@ -494,7 +513,7 @@ class MLXAdapter(BaseAdapter):
         fd = os.open(os.path.join(log_dir, f"mlx-server-{port}.log"),
                      os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         try:
-            proc = subprocess.Popen(_server_cmd(model, port, host),
+            proc = subprocess.Popen(_server_cmd(model, port, host, adapter_path),
                                     stdout=fd, stderr=fd, start_new_session=True, env=env)
         finally:
             os.close(fd)
@@ -534,3 +553,73 @@ class MLXAdapter(BaseAdapter):
             os.remove(pidfile)
         ctx.emit("mlx_server_stopped", {"port": port, "pid": pid}, redacted=False)
         return {"stopped": True, "pid": pid, "port": port}
+
+    # ------------------------------------------------------------------
+    # finetune — on-fleet LoRA (the recursive flywheel's training step)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.mlx.finetune",
+        version="1.0.0",
+        description=(
+            "LoRA fine-tune a model on-fleet via mlx_lm.lora, detached (logs to "
+            "~/.chp/logs/mlx-finetune-<name>.log). *data* is a directory with "
+            "train.jsonl / valid.jsonl (chat or completions format). Produces a LoRA "
+            "at adapter_path that mlx.start_server can serve via --adapter-path. The "
+            "training step of the evidence→tune→serve flywheel."
+        ),
+        category="ai",
+        provider="mlx",
+        risk="high",
+        side_effects=["process_spawn", "model_training"],
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "description": "Base model to fine-tune (defaults to MLX_MODEL)."},
+                "data": {"type": "string", "description": "Directory with train.jsonl / valid.jsonl."},
+                "adapter_path": {"type": "string", "description": "Output directory for the LoRA adapter."},
+                "iters": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 300},
+                "batch_size": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4},
+                "num_layers": {"type": "integer", "minimum": 1, "description": "LoRA layers (default: mlx_lm default)."},
+            },
+            "required": ["data", "adapter_path"],
+            "additionalProperties": False,
+        },
+    )
+    async def finetune(self, ctx: Any, payload: dict) -> dict:
+        model = payload.get("model") or self._config.resolved_default_model()
+        if not model:
+            raise ValueError("No model specified and no MLX_MODEL configured.")
+        data = str(payload["data"])
+        adapter_path = str(payload["adapter_path"])
+        iters = int(payload.get("iters") or 300)
+        batch_size = int(payload.get("batch_size") or 4)
+        num_layers = payload.get("num_layers")
+        name = os.path.basename(adapter_path.rstrip("/")) or "lora"
+
+        env = _service_safe_env()
+        log_dir = os.path.join(env["HOME"], ".chp", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(adapter_path, exist_ok=True)
+        pidfile = os.path.join(_run_dir(), f"mlx-finetune-{name}.pid")
+        fd = os.open(os.path.join(log_dir, f"mlx-finetune-{name}.log"),
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            proc = subprocess.Popen(
+                _lora_cmd(model, data, adapter_path, iters, batch_size, num_layers),
+                stdout=fd, stderr=fd, start_new_session=True, env=env)
+        finally:
+            os.close(fd)
+        _write_pid(pidfile, proc.pid)
+        ctx.emit("mlx_finetune_started",
+                 {"model": model, "iters": iters, "adapter_path": adapter_path, "pid": proc.pid}, redacted=False)
+        return {
+            "started": True,
+            "pid": proc.pid,
+            "model": model,
+            "adapter_path": adapter_path,
+            "iters": iters,
+            "note": "LoRA training runs detached; tail ~/.chp/logs/mlx-finetune-"
+                    f"{name}.log. When done, serve with mlx.start_server adapter_path=" + adapter_path,
+        }

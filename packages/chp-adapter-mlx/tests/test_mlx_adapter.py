@@ -252,6 +252,35 @@ class TestServerLifecycle:
         r = _invoke(host, "chp.adapters.mlx.chat", {"messages": [{"role": "user", "content": "hi"}]})
         assert r.success
 
+    def test_finetune_spawns_lora_detached(self, monkeypatch, tmp_path):
+        import chp_adapter_mlx.adapter as mod
+
+        class FakeProc:
+            pid = 888
+        calls = {}
+        monkeypatch.setattr(mod, "_run_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(mod.subprocess, "Popen",
+                            lambda cmd, **kw: calls.update(cmd=cmd, kw=kw) or FakeProc())
+        result = _invoke(_make_host(), "chp.adapters.mlx.finetune",
+                         {"model": "m", "data": str(tmp_path), "adapter_path": str(tmp_path / "lora"),
+                          "iters": 50, "batch_size": 2})
+        assert result.success
+        assert result.data["started"] is True and result.data["pid"] == 888
+        cmd = calls["cmd"]
+        assert "--train" in cmd and "--data" in cmd and "--adapter-path" in cmd
+        assert "--iters" in cmd and "50" in cmd
+        assert calls["kw"].get("start_new_session") is True
+
+    def test_start_server_adapter_path_serves_lora(self, monkeypatch, tmp_path):
+        import chp_adapter_mlx.adapter as mod
+        calls = {}
+        monkeypatch.setattr(mod, "_run_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(mod.subprocess, "Popen",
+                            lambda cmd, **kw: calls.update(cmd=cmd) or type("P", (), {"pid": 5})())
+        _invoke(_make_host(), "chp.adapters.mlx.start_server",
+                {"model": "m", "port": 8087, "adapter_path": "/x/lora"})
+        assert "--adapter-path" in calls["cmd"] and "/x/lora" in calls["cmd"]
+
     def test_stop_server_when_not_running(self, monkeypatch, tmp_path):
         import chp_adapter_mlx.adapter as mod
         monkeypatch.setattr(mod, "_run_dir", lambda: str(tmp_path))
