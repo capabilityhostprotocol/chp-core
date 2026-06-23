@@ -294,6 +294,9 @@ class MLXAdapter(BaseAdapter):
                 "max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 256},
                 "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0, "default": 0.7},
                 "top_p": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "tools": {"type": "array", "items": {"type": "object"},
+                          "description": "OpenAI-format tool definitions to forward to the server (enables tool-calling through the mesh; never recorded in evidence)."},
+                "tool_choice": {"description": "OpenAI tool_choice: 'auto' | 'none' | 'required' | {type, function}."},
             },
             "required": ["messages"],
             "additionalProperties": False,
@@ -310,8 +313,15 @@ class MLXAdapter(BaseAdapter):
         }
         if "top_p" in payload:
             body["top_p"] = payload["top_p"]
+        if payload.get("tools"):
+            body["tools"] = payload["tools"]
+        if payload.get("tool_choice") is not None:
+            body["tool_choice"] = payload["tool_choice"]
 
-        ctx.emit("mlx_chat_started", {"model": model, "message_count": len(messages)}, redacted=False)
+        ctx.emit("mlx_chat_started", {
+            "model": model, "message_count": len(messages),
+            "tool_count": len(payload.get("tools") or []),
+        }, redacted=False)
 
         t0 = time.monotonic()
         try:

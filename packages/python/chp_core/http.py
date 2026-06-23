@@ -152,6 +152,12 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             if path == "/invoke":
                 self._write_json(self._invoke(body))
                 return
+            if path == "/v1/chat/completions":
+                # OpenAI-compatible shim → routes chat through chp.adapters.mlx.chat
+                # (capacity-routed + evidenced). Lets any OpenAI client use mesh
+                # inference as a governed capability; tool-calling flows through too.
+                self._write_json(self._openai_chat(body))
+                return
             if path == "/replay":
                 query = ReplayQuery.from_mapping(body)
                 result = self.server.chp_host.replay_result(query)
@@ -177,6 +183,39 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         envelope = InvocationEnvelope.from_mapping(envelope_body)
         result = asyncio.run(self.server.chp_host.ainvoke_envelope(envelope))
         return result.to_dict()
+
+    def _openai_chat(self, body: JSON) -> JSON:
+        """Translate an OpenAI /v1/chat/completions request to chp.adapters.mlx.chat
+        (routed by the host/router — capacity-aware + evidenced) and back."""
+        payload: JSON = {
+            "model": body.get("model"),
+            "messages": body.get("messages") or [],
+            "max_tokens": body.get("max_tokens", 512),
+            "temperature": body.get("temperature", 0.7),
+        }
+        for k in ("top_p", "tools", "tool_choice"):
+            if body.get(k) is not None:
+                payload[k] = body[k]
+        env = InvocationEnvelope.from_mapping({
+            "capability_id": "chp.adapters.mlx.chat",
+            "payload": payload,
+            "metadata": {"prefer": body.get("chp_prefer", "inference")},
+        })
+        result = asyncio.run(self.server.chp_host.ainvoke_envelope(env))
+        d = result.to_dict()
+        if d.get("outcome") != "success":
+            return {"error": {"message": str(d.get("error") or d.get("denial") or "mlx.chat failed"),
+                              "type": "chp_mesh_error"}}
+        data = d.get("data") or {}
+        pt, ct = data.get("prompt_tokens", 0), data.get("completion_tokens", 0)
+        return {
+            "id": d.get("invocation_id") or "chatcmpl-chp",
+            "object": "chat.completion",
+            "model": data.get("model") or payload["model"],
+            "choices": [{"index": 0, "message": data.get("message") or {},
+                         "finish_reason": data.get("finish_reason") or "stop"}],
+            "usage": {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct},
+        }
 
     def _read_json(self) -> JSON:
         length = int(self.headers.get("Content-Length", "0"))
