@@ -32,8 +32,10 @@ import {
 
 // ── Config ──────────────────────────────────────────────────────────────
 const MESH = process.env.CHP_MESH ?? `${homedir()}/.chp/mesh.json`;
-const MODEL_BASE_URL = process.env.CHP_MODEL_BASE_URL ?? "http://localhost:8081/v1";
-const MODEL_ID = process.env.CHP_MODEL_ID ?? "mlx-community/Qwen3-14B-4bit";
+// Default to the gateway's OpenAI shim → inference runs as a capacity-routed,
+// evidenced mesh capability (chp.adapters.mlx.chat). Override to hit a node directly.
+const MODEL_BASE_URL = process.env.CHP_MODEL_BASE_URL ?? "http://127.0.0.1:8800/v1";
+const MODEL_ID = process.env.CHP_MODEL_ID ?? "mlx-community/Qwen3-4B-Instruct-2507-4bit";
 const GATEWAY = process.env.CHP_GATEWAY ?? "http://127.0.0.1:8800";
 const GATEWAY_KEY = process.env.CHP_GATEWAY_KEY ?? process.env.CHP_HOST_API_KEY ?? "";
 // The safety adapter lives on the primary host (the gateway doesn't surface it).
@@ -172,7 +174,10 @@ async function main() {
   await buildCapMap();
   console.log(chalk.dim(`governance: every tool call assessed via chp.adapters.safety.assess`));
 
-  const model = createOpenAICompatible({ name: "mlx", baseURL: MODEL_BASE_URL }).chatModel(MODEL_ID);
+  // X-CHP-Key authenticates the gateway shim; harmless when pointing at a node directly.
+  const model = createOpenAICompatible({
+    name: "mlx", baseURL: MODEL_BASE_URL, headers: { "X-CHP-Key": GATEWAY_KEY },
+  }).chatModel(MODEL_ID);
 
   // P3 — a read-only `explore` subagent (mesh read tools). The main agent delegates
   // exploration to it via the auto-injected `task` tool; it keeps repo-spelunking

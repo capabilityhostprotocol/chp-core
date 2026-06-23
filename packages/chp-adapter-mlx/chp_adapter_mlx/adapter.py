@@ -282,12 +282,16 @@ class MLXAdapter(BaseAdapter):
                 "messages": {
                     "type": "array",
                     "items": {
+                        # Permissive to support OpenAI tool-calling turns: 'tool' role
+                        # (tool results), assistant messages with tool_calls (content
+                        # null), tool_call_id/name. Forwarded verbatim to the server.
                         "type": "object",
                         "properties": {
-                            "role": {"type": "string", "enum": ["system", "user", "assistant"]},
-                            "content": {"type": "string"},
+                            "role": {"type": "string", "enum": ["system", "user", "assistant", "tool"]},
+                            "content": {"type": ["string", "null"]},
                         },
-                        "required": ["role", "content"],
+                        "required": ["role"],
+                        "additionalProperties": True,
                     },
                     "minItems": 1,
                 },
