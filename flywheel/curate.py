@@ -22,13 +22,23 @@ import os
 import random
 
 
+def _content_text(m: dict) -> str:
+    """AI SDK message content may be a string or a list of content parts."""
+    c = m.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(p.get("text", "") for p in c if isinstance(p, dict))
+    return ""
+
+
 def _is_good(rec: dict) -> bool:
     msgs = rec.get("messages") or []
     if not msgs:
         return False
     # last assistant turn has real content
     last_assistant = next((m for m in reversed(msgs)
-                           if m.get("role") == "assistant" and (m.get("content") or "").strip()), None)
+                           if m.get("role") == "assistant" and _content_text(m).strip()), None)
     if not last_assistant:
         return False
     # no tool error surfaced in any message

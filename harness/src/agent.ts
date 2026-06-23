@@ -17,7 +17,6 @@
 
 import { homedir } from "node:os";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import chalk from "chalk";
@@ -28,11 +27,9 @@ import {
   apply,
   withTurnTracking,
   withRetry,
-  withPersistence,
   connectMCPServers,
   closeMCPClients,
   type ToolCallInfo,
-  type SessionStore,
 } from "@openharness/core";
 
 // ── Config ──────────────────────────────────────────────────────────────
@@ -218,16 +215,8 @@ async function main() {
     },
   });
 
-  // C1 — opt-in transcript capture (CHP_CAPTURE_TRACES) feeds the flywheel corpus.
-  const sessionId = randomUUID();
-  const messageStore = new Map<string, any[]>();
-  const store: SessionStore = {
-    async load(id) { return messageStore.get(id); },
-    async save(id, m) { messageStore.set(id, m); },
-  };
-  const runner = apply(toRunner(agent), withTurnTracking(), withRetry(),
-                       withPersistence({ store, sessionId }));
-  const chat = new Conversation({ runner, sessionId, store });
+  const runner = apply(toRunner(agent), withTurnTracking(), withRetry());
+  const chat = new Conversation({ runner }); // exposes .messages (updated from done events)
 
   console.log(chalk.dim(`task: ${task}\n`));
   let streaming = false;
@@ -258,7 +247,7 @@ async function main() {
   // C1 — append the full transcript to the flywheel corpus (opt-in).
   const capturePath = process.env.CHP_CAPTURE_TRACES;
   if (capturePath) {
-    const msgs = (await store.load(sessionId)) ?? [];
+    const msgs = (chat as any).messages ?? [];
     mkdirSync(dirname(capturePath), { recursive: true });
     appendFileSync(capturePath, JSON.stringify({ messages: msgs, meta: { task, ts: Date.now() } }) + "\n");
     console.log(chalk.dim(`\ncaptured transcript (${msgs.length} messages) → ${capturePath}`));
