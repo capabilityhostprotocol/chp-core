@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-mlx"
-version = "0.8.2"
+version = "0.8.3"
 description = "CHP capability adapter — Apple Silicon native text generation via a local mlx_lm server"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,6 +30,10 @@ mlx = "chp_adapter_mlx:MLXAdapter"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# Runtime needed to actually SERVE a model (mlx.start_server). Heavy + Apple-Silicon
+# only, so it's an extra: install with `chp-adapter-mlx[serve]` (the install_adapter
+# `extras` param does this when pushing the adapter to a node).
+serve = ["mlx-lm>=0.20"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
