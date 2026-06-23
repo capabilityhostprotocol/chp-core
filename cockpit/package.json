@@ -1,0 +1,27 @@
+{
+  "name": "chp-cockpit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal, non-public agent cockpit for driving the CHP mesh (forked from OpenHarness nextjs-demo).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^1.0.0",
+    "@ai-sdk/react": "^3.0.0",
+    "@openharness/core": "^0.7.0",
+    "@openharness/react": "^2.0.1",
+    "ai": "^6.0.97",
+    "zod": "^4.3.6",
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.9.3"
+  }
+}
