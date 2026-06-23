@@ -43,6 +43,26 @@ npm run agent -- "read X and summarize"  # run an agent task over the mesh
 | `CHP_SAFETY_URL` | `http://127.0.0.1:8803` | host exposing `safety.assess` |
 | `CHP_AUTO_APPROVE` | unset | allow `require_approval` verdicts |
 
+## Cloud-spill (local-first, cloud-burst)
+
+The gateway's `/v1/chat/completions` shim is **cloud-spill aware**. Configure a cloud
+OpenAI-compatible endpoint on the **gateway** process and it will burst to it:
+
+```sh
+# on the gateway host's env (or its launchd plist / --secrets-from-keychain):
+CHP_SPILL_BASE_URL=https://router.huggingface.co/v1   # any OpenAI-compatible endpoint
+CHP_SPILL_API_KEY=<key>                               # e.g. an HF token
+CHP_SPILL_MODELS=<cloud-model-id>,<another>           # model ids that route to cloud
+```
+
+- **Explicit spill**: request `model` ∈ `CHP_SPILL_MODELS` (or body `chp_spill: true`) →
+  the call goes to the cloud endpoint. Lets the agent send *hard* steps to a frontier
+  model while keeping the rest local.
+- **Burst on failure**: if local `mlx.chat` fails and a cloud endpoint is set, the call
+  falls back to cloud automatically.
+- With no `CHP_SPILL_*` set, everything stays local (default). Spills are logged on the
+  gateway.
+
 ## Operational notes
 
 - **Models off the primary.** The 24 GB control-plane host OOM'd twice loading large
