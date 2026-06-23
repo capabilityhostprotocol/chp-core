@@ -1259,6 +1259,8 @@ def _cmd_mesh_install_adapter(args: argparse.Namespace) -> int:
         payload["version"] = args.version
     if getattr(args, "adapter_name", None):
         payload["adapter_name"] = args.adapter_name
+    if getattr(args, "extras", None):
+        payload["extras"] = args.extras
     if getattr(args, "restart", True) is False:
         payload["restart"] = False
 
@@ -1593,18 +1595,22 @@ def _cmd_install_adapter(args: argparse.Namespace) -> int:
         except Exception:
             pass
 
+    extras = getattr(args, "extras", None)
+    # --break-system-packages: nodes often run an externally-managed (Homebrew)
+    # Python; harmless on venvs. Lets adapter pushes provision runtime deps on any host.
+    base = [sys.executable, "-m", "pip", "install", "--upgrade", "--break-system-packages"]
     url = getattr(args, "url", None)
     if url:
-        target = url
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", url]
+        target = f"{url}[{extras}]" if extras else url
+        cmd = base + [target]
     else:
         pin = getattr(args, "version", None)
-        target = f"{args.package}=={pin}" if pin else args.package
+        spec = f"{args.package}=={pin}" if pin else args.package
+        target = f"{spec}[{extras}]" if extras else spec
         # CHP adapters live on the GitHub release (not PyPI) → --find-links fallback.
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade",
-               "--find-links", _GH_RELEASE_LINKS, target]
+        cmd = base + ["--find-links", _GH_RELEASE_LINKS, target]
 
-    _log(f"==> Installing adapter {target}...")
+    _log(f"==> Installing adapter {target}{f' (+extras: {extras})' if extras else ''}...")
     if subprocess.run(cmd).returncode != 0:
         _log("ERROR: pip install failed — adapter not installed.")
         return 1
@@ -1743,6 +1749,8 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_install.add_argument("--wheel-url", dest="wheel_url", help="Direct wheel/sdist URL to install instead.")
     mesh_install.add_argument("--adapter-name", dest="adapter_name",
                               help="Entry-point name to add to the node's profile, e.g. mlx.")
+    mesh_install.add_argument("--extras",
+                              help="Install an optional-dependency extra too, e.g. 'serve' for chp-adapter-mlx[serve] (pulls the adapter's runtime tooling onto the node).")
     mesh_install.add_argument("--no-restart", dest="restart", action="store_false",
                               help="Install only; do not restart the node.")
     mesh_install.add_argument("--wait", action="store_true",
@@ -1837,6 +1845,7 @@ def build_parser() -> argparse.ArgumentParser:
     install_adapter_cmd.add_argument("--url", help="Direct wheel/sdist URL to install instead.")
     install_adapter_cmd.add_argument("--adapter-name", dest="adapter_name",
                                      help="Entry-point name to add to --profile, e.g. mlx.")
+    install_adapter_cmd.add_argument("--extras", help="Optional-dependency extra to also install, e.g. 'serve'.")
     install_adapter_cmd.add_argument("--profile", help="Host profile JSON to add the adapter to.")
     install_adapter_cmd.add_argument("--no-restart", dest="restart", action="store_false",
                                      help="Install only; do not restart services.")

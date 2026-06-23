@@ -190,6 +190,7 @@ class HostAdapter(BaseAdapter):
                 "version": {"type": "string", "description": "Pin to this version (ignored if url is set)."},
                 "url": {"type": "string", "description": "Direct wheel/sdist URL (e.g. a GitHub release asset)."},
                 "adapter_name": {"type": "string", "description": "Short entry-point name to add to this host's profile, e.g. 'mlx'."},
+                "extras": {"type": "string", "description": "Optional-dependency extra to also install, e.g. 'serve' → chp-adapter-mlx[serve] (pulls the adapter's runtime tooling)."},
                 "restart": {"type": "boolean", "default": True},
             },
             "required": ["package"],
@@ -207,6 +208,8 @@ class HostAdapter(BaseAdapter):
             args += ["--url", str(payload["url"])]
         elif payload.get("version"):
             args += ["--version", str(payload["version"])]
+        if payload.get("extras"):
+            args += ["--extras", str(payload["extras"])]
         adapter_name = payload.get("adapter_name")
         profile = None
         if adapter_name:

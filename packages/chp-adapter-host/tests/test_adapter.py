@@ -115,6 +115,17 @@ def test_install_adapter_schedules_detached(monkeypatch):
     assert calls["kwargs"].get("env", {}).get("HOME")
 
 
+def test_install_adapter_with_extras(monkeypatch):
+    calls: dict = {}
+    monkeypatch.setattr(adapter_module.subprocess, "Popen",
+                        lambda cmd, **kw: calls.update(cmd=cmd) or type("P", (), {"pid": 1})())
+    result = _host().invoke("chp.adapters.host.install_adapter",
+                            {"package": "chp-adapter-mlx", "adapter_name": "mlx", "extras": "serve"})
+    assert result.outcome == "success"
+    cmd = calls["cmd"]
+    assert "--extras" in cmd and "serve" in cmd
+
+
 def test_install_adapter_with_wheel_url(monkeypatch):
     calls: dict = {}
     monkeypatch.setattr(adapter_module.subprocess, "Popen",
