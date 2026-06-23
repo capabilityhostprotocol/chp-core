@@ -16,13 +16,22 @@ capture ──▶ curate ──▶ finetune (LoRA) ──▶ serve ──▶ bet
 
 ## Run the loop
 
+The **NAS is the shared corpus store** — the harness writes one transcript file per
+run to it over the mesh (governed + evidenced), so any node can assemble the dataset
+before training (no local-only data, no manual copying).
+
 ```sh
-# C1 — capture transcripts while the agent works (opt-in):
-export CHP_CAPTURE_TRACES=~/.chp/traces/harness.jsonl
-cd ../harness && npm run agent -- "some task"      # repeat to build a corpus
+# C1 — capture transcripts to the NAS while the agent works (opt-in):
+export CHP_CAPTURE_NAS_DIR=/volume1/flywheel/traces      # shared corpus on the NAS
+cd ../harness && npm run agent -- "some task"            # repeat to build a corpus
+#   (CHP_CAPTURE_TRACES=<local path> also works for a local-only corpus)
+
+# C1.5 — pull the shared corpus off the NAS (on whichever node will train):
+export CHP_GATEWAY_KEY=$(chp-host secrets get CHP_HOST_API_KEY)
+python pull-nas.py /volume1/flywheel/traces ./corpus.jsonl
 
 # C2 — curate good runs into an mlx_lm dataset (train.jsonl / valid.jsonl):
-python curate.py ~/.chp/traces/harness.jsonl ./data --valid-frac 0.15
+python curate.py ./corpus.jsonl ./data --valid-frac 0.15
 
 # C3 — LoRA fine-tune on a RAM-headroom node (detached, governed, evidenced):
 #   chp.adapters.mlx.finetune  data=<.../data>  adapter_path=<.../lora>  iters=300

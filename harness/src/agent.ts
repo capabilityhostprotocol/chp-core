@@ -144,6 +144,24 @@ function wrapToolResults(tools: Record<string, any>): Record<string, any> {
   }));
 }
 
+// C1 (NAS) — write a captured transcript to the shared NAS corpus over the mesh
+// (governed + evidenced), one file per run so concurrent agents don't collide.
+async function meshWriteNAS(path: string, content: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${GATEWAY}/invoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CHP-Key": GATEWAY_KEY },
+      body: JSON.stringify({
+        capability_id: "chp.adapters.filesystem.write_file",
+        payload: { path, content }, metadata: { prefer: "nas" },
+      }),
+    }).then((x) => x.json());
+    return r?.outcome === "success";
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const task = process.argv.slice(2).join(" ").trim();
   if (!task) {
@@ -245,12 +263,20 @@ async function main() {
   }
 
   // C1 — append the full transcript to the flywheel corpus (opt-in).
+  const msgs = (chat as any).messages ?? [];
+  const record = JSON.stringify({ messages: msgs, meta: { task, ts: Date.now() } });
   const capturePath = process.env.CHP_CAPTURE_TRACES;
   if (capturePath) {
-    const msgs = (chat as any).messages ?? [];
     mkdirSync(dirname(capturePath), { recursive: true });
-    appendFileSync(capturePath, JSON.stringify({ messages: msgs, meta: { task, ts: Date.now() } }) + "\n");
+    appendFileSync(capturePath, record + "\n");
     console.log(chalk.dim(`\ncaptured transcript (${msgs.length} messages) → ${capturePath}`));
+  }
+  // C1 (NAS) — the shared flywheel corpus (one file per run).
+  const nasDir = process.env.CHP_CAPTURE_NAS_DIR;
+  if (nasDir && msgs.length) {
+    const name = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jsonl`;
+    const ok = await meshWriteNAS(`${nasDir}/${name}`, record + "\n");
+    console.log(chalk.dim(ok ? `captured → NAS ${nasDir}/${name}` : `NAS capture failed (${nasDir})`));
   }
 
   await agent.close();
