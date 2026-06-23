@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,8 @@ from .types import (
     JSON,
     ReplayQuery,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _host_version() -> str:
@@ -187,6 +190,49 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         result = asyncio.run(self.server.chp_host.ainvoke_envelope(envelope))
         return result.to_dict()
 
+    # ── Cloud-spill: local-first, cloud-burst ──────────────────────────────
+    def _cloud_endpoint(self) -> tuple[str, str] | None:
+        """(base_url, api_key) for a cloud OpenAI-compatible endpoint, or None.
+        Configured on the gateway via CHP_SPILL_BASE_URL / CHP_SPILL_API_KEY."""
+        base = os.environ.get("CHP_SPILL_BASE_URL")
+        return (base.rstrip("/"), os.environ.get("CHP_SPILL_API_KEY", "")) if base else None
+
+    def _wants_cloud(self, body: JSON) -> bool:
+        """Spill when the caller asks (chp_spill) or the model id is a configured cloud
+        model (CHP_SPILL_MODELS) — lets the agent send hard steps to a frontier model."""
+        models = {m.strip() for m in (os.environ.get("CHP_SPILL_MODELS") or "").split(",") if m.strip()}
+        return bool(body.get("chp_spill") or (models and body.get("model") in models))
+
+    def _proxy_body(self, body: JSON) -> bytes:
+        clean = {k: v for k, v in body.items() if not k.startswith("chp_")}
+        return json.dumps(clean).encode()
+
+    def _proxy_json(self, body: JSON, cloud: tuple[str, str]) -> JSON:
+        base, key = cloud
+        logger.info("cloud-spill (non-stream) → %s model=%s", base, body.get("model"))
+        req = Request(f"{base}/chat/completions", data=self._proxy_body(body),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                      method="POST")
+        with urlopen(req, timeout=180) as resp:
+            return json.loads(resp.read().decode())
+
+    def _proxy_stream(self, body: JSON, cloud: tuple[str, str]) -> None:
+        base, key = cloud
+        logger.info("cloud-spill (stream) → %s model=%s", base, body.get("model"))
+        stream_body = {k: v for k, v in body.items() if not k.startswith("chp_")}
+        stream_body["stream"] = True
+        req = Request(f"{base}/chat/completions", data=json.dumps(stream_body).encode(),
+                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                      method="POST")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        with urlopen(req, timeout=180) as resp:
+            for line in resp:  # pass the cloud SSE through verbatim
+                self.wfile.write(line)
+                self.wfile.flush()
+
     def _mlx_chat_call(self, body: JSON) -> JSON:
         """Route an OpenAI chat body through chp.adapters.mlx.chat (capacity-routed +
         evidenced); returns the raw invocation result dict."""
@@ -207,9 +253,14 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         return asyncio.run(self.server.chp_host.ainvoke_envelope(env)).to_dict()
 
     def _openai_chat(self, body: JSON) -> JSON:
-        """Non-streaming OpenAI /v1/chat/completions over the mesh."""
+        """Non-streaming OpenAI /v1/chat/completions over the mesh (cloud-spill aware)."""
+        cloud = self._cloud_endpoint()
+        if cloud and self._wants_cloud(body):
+            return self._proxy_json(body, cloud)  # explicit spill
         d = self._mlx_chat_call(body)
         if d.get("outcome") != "success":
+            if cloud:  # local failed → burst to cloud
+                return self._proxy_json(body, cloud)
             return {"error": {"message": str(d.get("error") or d.get("denial") or "mlx.chat failed"),
                               "type": "chp_mesh_error"}}
         data = d.get("data") or {}
@@ -230,7 +281,14 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         completion and emit it as a single SSE chunk sequence (the AI SDK / OpenAI
         clients require SSE when stream=true)."""
         import time as _time
+        cloud = self._cloud_endpoint()
+        if cloud and self._wants_cloud(body):
+            self._proxy_stream(body, cloud)  # explicit spill
+            return
         d = self._mlx_chat_call(body)
+        if d.get("outcome") != "success" and cloud:  # local failed → burst to cloud
+            self._proxy_stream(body, cloud)
+            return
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
