@@ -9,7 +9,7 @@ description = "CHP capability adapter — Apple Silicon native text generation v
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Auxo" }]
+authors = [{ name = "Project Auxo, Inc." }]
 keywords = ["chp", "capability-host-protocol", "vllm", "generation", "metal", "openai", "adapter"]
 classifiers = [
     "Development Status :: 3 - Alpha",

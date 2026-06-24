@@ -9,7 +9,7 @@ description = "CHP capability adapter — governed work handoff and delegation l
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Auxo" }]
+authors = [{ name = "Project Auxo, Inc." }]
 keywords = ["chp", "capability-host-protocol", "delegation", "governance", "adapter"]
 classifiers = [
     "Development Status :: 3 - Alpha",
