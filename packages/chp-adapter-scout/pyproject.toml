@@ -8,7 +8,7 @@ version = "0.8.1"
 description = "CHP capability adapter — FastContext repo scout subagent"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Auxo" }]
+authors = [{ name = "Project Auxo, Inc." }]
 keywords = ["chp", "capability-host-protocol", "scout", "fastcontext", "agent", "adapter"]
 classifiers = [
     "Development Status :: 3 - Alpha",

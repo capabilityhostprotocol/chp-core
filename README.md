@@ -162,4 +162,12 @@ Guiding rule:
 
 ## License
 
-MIT. See `LICENSE`.
+CHP is dual-licensed by asset:
+
+- **Code** (`packages/`, `conformance/`, `examples/`, `scripts/`): Apache License 2.0 — see [`LICENSE`](LICENSE).
+- **Specification, schemas & docs** (`spec/`, `schemas/`, `docs/`): Creative Commons Attribution 4.0 (CC BY 4.0) — see [`LICENSE-DOCS`](LICENSE-DOCS). Implementing the specification is additionally covered by a royalty-free patent grant — see [`PATENTS`](PATENTS).
+- **Trademarks**: "CHP" and "CHP-Certified" — see [`TRADEMARK.md`](TRADEMARK.md).
+
+Contributions are accepted under the [Contributor License Agreement](CLA.md); see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+Copyright © 2026 Project Auxo, Inc. See [`NOTICE`](NOTICE).

@@ -9,7 +9,7 @@ description = "Capability Host Protocol — local execution evidence for agents,
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Auxo" }]
+authors = [{ name = "Project Auxo, Inc." }]
 keywords = ["chp", "capability-host-protocol", "agents", "observability", "governance", "evidence", "replay"]
 classifiers = [
     "Development Status :: 3 - Alpha",

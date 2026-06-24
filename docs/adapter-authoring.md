@@ -256,7 +256,7 @@ style or feature completeness. Your adapter remains fully under your control.
 
 | Scope | Package name | Entry-point key |
 |-------|-------------|-----------------|
-| Official (maintained by Auxo) | `chp-adapter-<name>` | `<name>` (e.g. `http`) |
+| Official (maintained by Project Auxo, Inc.) | `chp-adapter-<name>` | `<name>` (e.g. `http`) |
 | Community | `chp-adapter-<name>` (preferred) | `<org>.<name>` (e.g. `myorg.obsidian`) |
 
 ## See also

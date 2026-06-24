@@ -9,7 +9,7 @@ description = "CHP capability adapter — governed HTTP client with URL allowlis
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Auxo" }]
+authors = [{ name = "Project Auxo, Inc." }]
 keywords = ["chp", "capability-host-protocol", "http", "client", "adapter"]
 classifiers = [
     "Development Status :: 3 - Alpha",

@@ -1,0 +1,55 @@
+CHP Specification — Royalty-Free Patent Grant
+
+  DRAFT — pending legal review. This grant is adapted from common royalty-free
+  standards patent policies (e.g., the Open Web Foundation / W3C style). It has
+  not yet been reviewed by counsel and is not final.
+
+Purpose
+
+  The CHP specification, schemas, and documentation are licensed for copyright
+  purposes under CC BY 4.0 (see LICENSE-DOCS). Copyright permission alone does
+  not assure implementers that they may build conforming implementations free of
+  patent claims. This document adds that assurance. The intent is simple: anyone
+  may implement the CHP specification, for free, forever.
+
+Definitions
+
+  "Specification" means the version(s) of the Capability Host Protocol
+  specification and schemas published in this repository under spec/ and
+  schemas/ to which this grant is attached.
+
+  "Covered Claims" means those patent claims, owned or controlled by Project
+  Auxo, Inc., that are necessarily infringed by implementing the required
+  portions of the Specification, where "necessarily infringed" means there is no
+  commercially reasonable, non-infringing way to implement those required
+  portions. Covered Claims do NOT include claims that would be infringed only by:
+  (a) enabling technologies not required to implement the Specification;
+  (b) implementing optional portions; or
+  (c) implementation techniques, optimizations, or services not described as
+      required in the Specification (for example, a hosted evidence service,
+      anchoring/timestamping methods, or compliance products).
+
+Grant
+
+  Project Auxo, Inc. grants to every implementer a perpetual, worldwide,
+  non-exclusive, no-charge, royalty-free, irrevocable (except as stated in
+  "Defensive Termination") license under the Covered Claims to make, have made,
+  use, sell, offer for sale, import, and distribute implementations of the
+  Specification.
+
+Defensive Termination
+
+  The license granted above terminates automatically as to any person or entity
+  that initiates patent litigation (including a cross-claim or counterclaim)
+  alleging that the Specification, or any conforming implementation of it,
+  infringes a patent.
+
+Scope and reservation of rights
+
+  This grant is limited to the Covered Claims and to the published version(s) of
+  the Specification. Future versions may be accompanied by their own grants.
+  Except for the license expressly granted here, Project Auxo, Inc. reserves all
+  patent rights — including all rights in inventions that are not required to
+  implement the Specification. Contributions to the Specification are governed by
+  the patent license in CLA.md, which is intended to be consistent with this
+  grant.
