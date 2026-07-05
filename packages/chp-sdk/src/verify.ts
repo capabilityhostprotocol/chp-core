@@ -9,8 +9,9 @@ import { verify as edVerify } from 'node:crypto';
 import { canon, type JsonValue } from './canon.js';
 import { rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
-import { bundleHeader, publicKeyFromB64 } from './signing.js';
+import { bundleHeader, computeTaskRootHash, publicKeyFromB64 } from './signing.js';
 import { didKeyToRaw, verifySshsig } from './sshsig.js';
+import { orderEvents } from './ordering.js';
 
 export interface BundleVerification {
   valid: boolean;
@@ -212,4 +213,98 @@ export async function verifyBundleResolved(
       anchoredDomain: null,
     };
   }
+}
+
+// ── Task bundles — cross-host verification unit (chp-v0.2.md §8) ────────────
+
+export interface TaskBundleVerification {
+  valid: boolean;
+  assurance: string;
+  checks: Record<string, boolean>;
+  correlationId: string;
+  taskRootHash: string | null;
+  hosts: Array<Record<string, JsonValue>>;
+  reason?: string;
+}
+
+const taskMemberKey = (b: Record<string, JsonValue>): string =>
+  `${String(b.host_id ?? '')} ${String(b.root_hash ?? '')}`;
+
+/**
+ * Verify a task's evidence spanning N hosts as a unit. Proves integrity of
+ * every part, identity of every contributor, and CAUSAL CLOSURE — it does NOT
+ * prove absence of evidence (a leaf contributor can be omitted undetectably;
+ * a causal ancestor cannot — its children's causation_ids would dangle).
+ */
+export function verifyTaskBundle(task: Record<string, JsonValue>): TaskBundleVerification {
+  const checks: Record<string, boolean> = {};
+  const correlationId = String(task.correlation_id ?? '');
+  const members = (task.bundles as Record<string, JsonValue>[] | undefined) ?? [];
+
+  checks.structure = task.kind === 'task-bundle' && !!correlationId && members.length > 0;
+  const keys = members.map(taskMemberKey);
+  checks.member_order = keys.every((k, i) => i === 0 || keys[i - 1] <= k);
+  checks.task_root_hash = task.task_root_hash === computeTaskRootHash(members);
+
+  const hosts: Array<Record<string, JsonValue>> = [];
+  let membersValid = true;
+  const allEvents: EvidenceEvent[] = [];
+  for (const b of members) {
+    const v = verifyBundle(b);
+    membersValid = membersValid && v.valid;
+    const events = (b.events as EvidenceEvent[] | undefined) ?? [];
+    allEvents.push(...events);
+    hosts.push({
+      host_id: (b.host_id ?? null) as JsonValue,
+      key_id: ((b.signature as Record<string, JsonValue> | undefined)?.key_id ?? null) as JsonValue,
+      assurance: v.assurance,
+      anchored_did: v.anchoredDid ?? null,
+      valid: v.valid,
+      event_count: events.length,
+    });
+  }
+  checks.members_valid = membersValid;
+
+  checks.correlation = allEvents.every(
+    (e) => (e.correlation as { correlation_id?: string } | undefined)?.correlation_id === correlationId,
+  );
+  const hostIds = members.map((b) => String(b.host_id ?? ''));
+  checks.distinct_hosts = new Set(hostIds).size === hostIds.length;
+
+  const invocationIds = new Set(allEvents.map((e) => e.invocation_id));
+  const dangling = new Set<string>();
+  for (const e of allEvents) {
+    const c = (e.correlation as { causation_id?: string | null } | undefined)?.causation_id;
+    if (c && !invocationIds.has(c)) dangling.add(c);
+  }
+  checks.causal_closure = dangling.size === 0;
+
+  // Acyclicity via the topological property of the ordered union.
+  const ordered = orderEvents(allEvents);
+  const firstPos = new Map<string, number>();
+  ordered.forEach((e, i) => {
+    if (e.invocation_id && !firstPos.has(e.invocation_id)) firstPos.set(e.invocation_id, i);
+  });
+  let acyclic = true;
+  ordered.forEach((e, i) => {
+    const c = (e.correlation as { causation_id?: string | null } | undefined)?.causation_id;
+    const p = c ? firstPos.get(c) : undefined;
+    if (c && p !== undefined && p > i) acyclic = false;
+  });
+  checks.causal_acyclic = acyclic;
+
+  const valid = Object.values(checks).every(Boolean);
+  return {
+    valid,
+    assurance: String(task.assurance ?? 'none'),
+    checks,
+    correlationId,
+    taskRootHash: (task.task_root_hash as string | undefined) ?? null,
+    hosts,
+    reason: valid
+      ? undefined
+      : 'task-bundle checks failed: '
+        + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', ')
+        + (dangling.size ? ` (dangling: ${[...dangling].slice(0, 3).join(',')})` : ''),
+  };
 }

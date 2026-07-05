@@ -250,3 +250,96 @@ v0.2 adds these checks to the runner (gated by declared tier):
 `signed evidence bundle`, `strict verify rejects unhashed`,
 `retention preserves chain`. A host declaring a tier MUST pass the checks for
 that tier and below.
+
+## 7. Cross-host ordering — `chp-causal-order-v1`
+
+A task's evidence may span multiple hosts sharing one `correlation_id` (the
+gateway forwards the caller's correlation unchanged). v0.1 §10 left cross-host
+ordering undefined; this section defines it. Given the events of ONE
+correlation gathered from N hosts, a conforming implementation MUST produce
+this total order:
+
+- **Sort key** `K(e) = (timestamp, host_id, sequence, event_id)` — string
+  components compared **byte-wise over UTF-8** (case-sensitive; a locale or
+  case-folding comparator is non-conforming), missing strings as `""`, missing
+  `sequence` as `0`.
+- **Happens-before edges:** (1) events with equal `host_id` are ordered by
+  `sequence`; (2) an event whose `correlation.causation_id` names invocation
+  `C` is ordered after the K-minimal event carrying `invocation_id == C`
+  (the *causal spawn* edge), when that event is present in the set.
+- **Algorithm:** Kahn's topological sort whose ready set is ordered by K
+  (pop-minimum). Because `(host_id, sequence)` is unique per event, K is a
+  total order and the output is **deterministic** — independent of input
+  order and identical across implementations. On cyclic input (possible only
+  with tampered or malformed data) the remainder MUST be emitted in K order;
+  the function is total, and cycle *detection* is a verification concern
+  (task-bundle verification).
+
+The K tiebreak orders **causally-unrelated** (concurrent) events only; it is
+arbitrary-but-deterministic, not a claim about real time — wall clocks skew,
+and a causal edge always overrides timestamps (a child spawned cross-host is
+ordered after its cause even when the child host's clock reads earlier).
+Known limit: only the spawn edge is causal; a synchronous parent's terminal
+event is placed by K, not by an edge.
+
+`spec/test-vectors/ordering.json` pins a shuffled 3-host input (with a skewed
+clock and a byte-order tiebreak trap) and its exact expected order; both
+reference implementations reproduce it (`chp_core/ordering.py`,
+`chp-sdk/src/ordering.ts`).
+
+Correlation-context notes: `trace_id` is OPTIONAL/reserved — when present, a
+W3C trace-context trace id (the OTel exporter uses it and falls back to
+`correlation_id`); `baggage` is reserved for forward compatibility;
+`parent_correlation_id` is informative session-threading linking a spawned
+task's correlation to its spawning session — it is NOT part of
+chp-causal-order-v1, which operates within one `correlation_id`.
+
+## 8. Task Bundles — cross-host verification
+
+A **task bundle** makes a task spanning N hosts verifiable **as a unit**. It
+aggregates one correlation's per-host bundles, byte-untouched:
+
+```json
+{
+  "kind": "task-bundle",
+  "correlation_id": "…", "created_at": "…",
+  "protocol_version": "0.2", "canonicalization": "chp-stable-v1",
+  "assurance": "signed",
+  "bundles": [ { …signed per-host bundle… }, … ],
+  "task_root_hash": "hex64"
+}
+```
+
+- **Members are byte-untouched** signed bundles (§3) — their signatures remain
+  independently verifiable. Members MUST be sorted by `(host_id, root_hash)`,
+  byte-wise, so assembly order is irrelevant: two aggregators assembling the
+  same members produce identical bytes.
+- **`task_root_hash`** = SHA-256 over each member's `root_hash` in array order,
+  each followed by `\n` — the §2 root-hash pattern one level up. It is the
+  task's single tamper-evident fingerprint: swapping, adding, or dropping any
+  member changes it.
+- **`assurance`** MUST be the MINIMUM member tier — degradation is surfaced,
+  never hidden. There is no aggregator signature at this tier (member
+  signatures prove each part's origin); the format admits one later via the
+  omit-when-empty pattern.
+
+**Verification** (all MUST pass): structure; canonical member order;
+`task_root_hash` recompute; every member verifies fully under §3 (chain, root,
+header signature, attestation, anchors); every event carries the task's
+`correlation_id`; member `host_id`s are pairwise distinct; **causal closure** —
+every non-null `causation_id` in any member resolves to an `invocation_id`
+present in the union of members (no dangling causal references); and the
+chp-causal-order-v1 edge set over the union is **acyclic**. The verifier MUST
+surface per-member identity (host_id, key_id, assurance, anchors) — who
+contributed what, under which trust root.
+
+**Completeness limit (normative):** task-bundle verification proves the
+integrity of every included part, the cryptographic identity of every
+contributor, and causal closure. It does NOT prove the absence of evidence: a
+causal *ancestor* cannot be silently dropped (its children's `causation_id`s
+would dangle), but a *leaf* contributor — a host whose invocations nothing else
+references — can be omitted undetectably. Participation manifests /
+absence-proofs are out of scope at this tier.
+
+`spec/test-vectors/task-bundle.json` is the fixture (two fixed-seed hosts with
+cross-host causation); `verify.mjs` verifies it from these rules alone.

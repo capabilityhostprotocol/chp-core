@@ -18,6 +18,18 @@ export interface InvocationResult {
   [k: string]: JsonValue | undefined;
 }
 
+/**
+ * Correlation for work CAUSED BY an invocation: same correlation_id,
+ * causation_id = the parent invocation's id. Pass to any remote `invoke` to
+ * extend the causal tree across hosts (chp-causal-order-v1 orders by it).
+ */
+export function childCorrelation(
+  correlation: Record<string, JsonValue>,
+  parentInvocationId: string,
+): Record<string, JsonValue> {
+  return { ...correlation, causation_id: parentInvocationId };
+}
+
 export class RemoteCapabilityHost {
   private readonly base: string;
   private readonly apiKey?: string;

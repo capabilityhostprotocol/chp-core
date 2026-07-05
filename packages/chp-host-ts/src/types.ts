@@ -76,6 +76,8 @@ export interface InvocationResult {
 export interface Ctx {
   envelope: InvocationEnvelope;
   emit(eventType: string, payload: JsonValue, outcome?: string | null): EvidenceEvent;
+  /** Correlation for work caused by this invocation (causal edge across hosts). */
+  childCorrelation(): Correlation;
 }
 
 export type Handler = (ctx: Ctx, payload: JsonValue) => JsonValue | Promise<JsonValue>;

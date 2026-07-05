@@ -155,7 +155,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 "status": "ok",
                 "host_id": host_desc.get("id") or host_desc.get("hosts", ["unknown"])[0],
                 "protocol": "chp",
-                "version": "0.1",
+                # Same rule as /host: v0.2 surface (hash-chain/signed) → "0.2".
+                "version": "0.2" if _host_assurance().get("assurance") in ("hash-chain", "signed") else "0.1",
                 "host_version": _host_version(),
             })
             return
@@ -176,6 +177,10 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             host_id = desc.get("id") or (desc.get("hosts") or [None])[0]
             for k, v in _host_assurance(host_id).items():
                 desc.setdefault(k, v)
+            # v0.2 is an additive superset (spec/README.md): a host serving the
+            # v0.2 surface (hash-chain/signed tier) advertises 0.2.
+            if desc.get("assurance") in ("hash-chain", "signed"):
+                desc["protocol_version"] = "0.2"
             self._write_json(desc)
             return
         if path == "/capabilities":
@@ -189,6 +194,26 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/verify/"):
             correlation_id = unquote(path.removeprefix("/verify/"))
             if not hasattr(self.server.chp_host, "store"):
+                # Gateway: FEDERATED verification (chp-v0.2.md §8) — assemble the
+                # task bundle from member exports and verify it as a unit. Falls
+                # back to the honest note when members can't export.
+                if hasattr(self.server.chp_host, "export_task_bundle"):
+                    try:
+                        task = asyncio.run(
+                            self.server.chp_host.export_task_bundle(correlation_id))
+                        from .signing import verify_task_bundle
+                        tv = verify_task_bundle(task)
+                        self._write_json({
+                            "mode": "federated", "valid": tv.valid,
+                            "assurance": tv.assurance, "checks": tv.checks,
+                            "hosts": tv.hosts, "correlation_id": correlation_id,
+                            "task_root_hash": tv.task_root_hash, "reason": tv.reason,
+                        })
+                        return
+                    except Exception as exc:
+                        self._write_error(HTTPStatus.SERVICE_UNAVAILABLE,
+                                          "federated_verify_unavailable", str(exc))
+                        return
                 self._write_json({
                     "note": "Verification not available in gateway mode — evidence is distributed.",
                     "correlation_id": correlation_id,
@@ -197,6 +222,34 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 return
             result = self.server.chp_host.store.verify_chain(correlation_id)
             self._write_json(asdict(result))
+            return
+        if path.startswith("/export/"):
+            correlation_id = unquote(path.removeprefix("/export/"))
+            # Gateway: the assembled cross-host task bundle (503 on partial).
+            if hasattr(self.server.chp_host, "export_task_bundle"):
+                try:
+                    task = asyncio.run(self.server.chp_host.export_task_bundle(correlation_id))
+                except Exception as exc:
+                    self._write_error(HTTPStatus.SERVICE_UNAVAILABLE,
+                                      "export_incomplete", str(exc))
+                    return
+                self._write_json(task)
+                return
+            # Single host: this host's (signed when keyed) bundle.
+            if not hasattr(self.server.chp_host, "store"):
+                self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
+                return
+            from . import signing
+            from .types import utc_now
+            events = self.server.chp_host.store.export_correlation(correlation_id)
+            host_id = getattr(self.server.chp_host, "host_id", "unknown")
+            bundle = signing.build_bundle(host_id, events, created_at=utc_now())
+            key = signing.load_host_key()
+            if key is not None and key.can_sign:
+                from .signing import load_configured_anchors
+                bundle = signing.sign_bundle(bundle, key,
+                                             anchors=load_configured_anchors() or None)
+            self._write_json(bundle)
             return
         if path == "/metrics":
             self._write_metrics()
@@ -655,6 +708,10 @@ class RemoteCapabilityHost:
     def identity(self) -> JSON:
         """The host's public identity document (spec §3.1 — unauthenticated)."""
         return self._get("/.well-known/chp-identity")
+
+    def export_bundle(self, correlation_id: str) -> JSON:
+        """The host's (signed when keyed) evidence bundle for a correlation."""
+        return self._get(f"/export/{correlation_id}")
 
     def verify(self, correlation_id: str) -> JSON:
         """Return the SHA256 chain verification result for *correlation_id*.

@@ -23,7 +23,11 @@
     },
     "protocol_version": {
       "type": "string",
-      "const": "0.1"
+      "enum": [
+        "0.1",
+        "0.2"
+      ],
+      "description": "Protocol version lineage the host serves. v0.2 is an additive superset of v0.1 (spec/README.md); a host serving the v0.2 surface (hash-chain/signed tiers, governance vocabulary) advertises 0.2."
     },
     "kind": {
       "type": "string",

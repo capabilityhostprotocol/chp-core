@@ -106,9 +106,12 @@ The host emits `execution_started` and `execution_completed` evidence for the in
 
 ## Repository Map
 
-- `spec/chp-v0.1.md`: minimal CHP v0.1 specification
+- `spec/README.md`: **the specification index** — core (v0.1), governance
+  vocabulary, invocation pipeline, HTTP binding, evidence integrity + anchors
+  (v0.2), reserved names, test vectors, changelog, proposal process
 - `schemas/`: JSON Schemas for protocol objects
-- `packages/python/chp_core/`: reference local host
+- `packages/python/chp_core/`: reference host (Python)
+- `packages/chp-sdk/` + `packages/chp-host-ts/`: the second implementation (TypeScript)
 - `examples/capability-host-endpoint-demo/`: HTTP-served host demo
 - `examples/agent-operations-demo/`: agent/tool observability demo
 - `examples/codex-self-observation-demo/`: Codex dogfooding demo

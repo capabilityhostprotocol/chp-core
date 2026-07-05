@@ -2,6 +2,10 @@
 
 Status: draft for open-source launch
 
+Key words MUST, MUST NOT, SHOULD, MAY are to be interpreted as described in
+RFC 2119. See [README.md](README.md) for the full specification index and
+reading order.
+
 CHP v0.1 defines the smallest interoperable surface for governed execution at a capability boundary. It is language-agnostic, transport-agnostic, local-first, embeddable, and useful with one host.
 
 ## 1. Purpose
@@ -215,7 +219,7 @@ A replay result contains:
 - `event_count`
 - `replayed_at`
 
-Replay ordering is by local evidence sequence. v0.1 does not define cross-host total ordering.
+Replay ordering is by local evidence sequence. Cross-host ordering is defined by `chp-causal-order-v1` ([chp-v0.2.md](chp-v0.2.md) §7).
 
 Schemas:
 

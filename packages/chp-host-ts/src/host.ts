@@ -89,7 +89,8 @@ export class LocalCapabilityHost {
     return {
       id: this.hostId,
       version: '0.1.0',
-      protocol_version: '0.1',
+      // This host always hash-chains (and signs when keyed) — the v0.2 surface.
+      protocol_version: '0.2',
       kind: 'local',
       capabilities: [...this.caps.values()].map((c) => ({
         id: c.descriptor.id,
@@ -216,6 +217,9 @@ export class LocalCapabilityHost {
     const ctx: Ctx = {
       envelope: env,
       emit: (t, p, o = null) => this.emit(t, env, p, o),
+      // Causal edge for work caused by this invocation — pass to remote calls
+      // to extend the causal tree across hosts (chp-causal-order-v1).
+      childCorrelation: () => ({ ...env.correlation!, causation_id: env.invocation_id! }),
     };
     try {
       const data = await entry.handler(ctx, env.payload ?? {});

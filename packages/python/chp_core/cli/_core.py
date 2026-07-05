@@ -228,6 +228,18 @@ def cmd_verify_evidence(args: argparse.Namespace) -> int:
 
         with open(args.bundle) as fh:
             bundle = json.load(fh)
+        # Task bundles (cross-host, chp-v0.2.md §8) dispatch on kind.
+        if bundle.get("kind") == "task-bundle":
+            tv = signing.verify_task_bundle(bundle)
+            print(json.dumps({
+                "kind": "task-bundle",
+                "assurance": tv.assurance,
+                "valid": tv.valid,
+                "checks": tv.checks,
+                "hosts": tv.hosts,
+                "reason": tv.reason,
+            }, indent=2))
+            return 0 if tv.valid else 1
         v = signing.verify_bundle(bundle, expected_key_id=getattr(args, "expect_key", None))
         print(json.dumps({
             "assurance": v.assurance,

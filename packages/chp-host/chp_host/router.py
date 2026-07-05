@@ -20,6 +20,7 @@ Design choices (see plan):
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import time
 from typing import Iterable, Literal
@@ -39,6 +40,11 @@ Selection = Literal["first", "round_robin", "least_loaded"]
 # Capabilities whose load is GPU-bound — routed by GPU utilization when stats exist.
 _INFERENCE_HINTS = ("local_llm", "vllm", "tei", "huggingface", "sglang", "mlx")
 _STATS_TTL = 15.0  # seconds a cached host.stats snapshot is considered fresh
+# Seconds before the routing catalog (routes + per-host descriptors/schemas) is
+# re-discovered on the next invoke, so a node restart/upgrade (new capabilities or
+# changed input schemas) propagates WITHOUT a manual gateway reload. Override via
+# CHP_ROUTER_CATALOG_TTL; set <=0 to disable auto-refresh.
+_CATALOG_TTL = float(os.environ.get("CHP_ROUTER_CATALOG_TTL", "60") or 60)
 
 
 class UnknownCapabilityError(KeyError):
@@ -85,6 +91,8 @@ class MultiHostRouter:
         self._rr: dict[str, int] = {}
         # transport.name -> (monotonic_ts, stats dict) for capacity-aware routing
         self._stats_cache: dict[str, tuple[float, JSON]] = {}
+        # monotonic time of the last full catalog discovery (for TTL auto-refresh)
+        self._last_discover: float = 0.0
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
 
@@ -114,7 +122,40 @@ class MultiHostRouter:
                 owners = self._routes.setdefault(cid, [])
                 if tr not in owners:
                     owners.append(tr)
+        self._last_discover = time.monotonic()
         return self
+
+    async def _maybe_refresh_catalog(self) -> None:
+        """Re-discover hosts' catalogs when the cached routing table is older than
+        ``_CATALOG_TTL``, so a node restart/upgrade (new capabilities or changed
+        input schemas — e.g. mlx.chat gaining ``tools``) propagates automatically
+        instead of needing a manual gateway reload. Best-effort: a host that's
+        momentarily unreachable keeps its last-known catalog (we don't drop routes).
+        Preserves transport (priority) order by iterating ``self._transports``."""
+        if _CATALOG_TTL <= 0:
+            return
+        now = time.monotonic()
+        if now - self._last_discover < _CATALOG_TTL:
+            return
+        self._last_discover = now  # set first so concurrent invokes don't all refresh
+        routes: dict[str, list[Transport]] = {}
+        descriptors: dict[str, JSON] = {}
+        for tr in self._transports:
+            try:
+                descriptor = await tr.discover()
+                self._mark_healthy(tr)
+            except Exception:  # noqa: BLE001 — keep last-known catalog on any failure
+                descriptor = self._descriptors.get(tr.name)
+                if not descriptor:
+                    continue
+            descriptors[tr.name] = descriptor
+            for cap in descriptor.get("capabilities", []):
+                cid = cap.get("id")
+                if cid:
+                    routes.setdefault(cid, []).append(tr)
+        if routes:  # never blank the table on a total-failure refresh
+            self._routes = routes
+            self._descriptors = descriptors
 
     # ── invocation ─────────────────────────────────────────────────────────────
 
@@ -140,6 +181,10 @@ class MultiHostRouter:
         A matching owner is tried first; if it is down, routing still falls back
         to the other owners (soft pin — availability beats affinity).
         """
+        # Keep the catalog fresh so a restarted/upgraded node's new capabilities and
+        # schemas route without a manual gateway reload (TTL-gated; best-effort).
+        await self._maybe_refresh_catalog()
+
         owners = self._routes.get(capability_id)
         if not owners:
             raise UnknownCapabilityError(capability_id)
@@ -226,8 +271,14 @@ class MultiHostRouter:
 
         Evidence is never centralized — each host keeps its own append-only,
         hash-chained store. Each returned event is tagged with ``_host`` so the
-        stitched view stays attributable.
+        stitched view stays attributable. Ordering is **chp-causal-order-v1**
+        (chp-v0.2.md): causally consistent (per-host sequence + causation
+        edges), deterministic tiebreak for concurrent events — not the previous
+        wall-clock-only sort, which could order a child before its cross-host
+        cause under clock skew.
         """
+        from chp_core.ordering import order_events
+
         events: list[JSON] = []
         for tr in self._transports:
             if not self._is_healthy(tr):
@@ -239,8 +290,38 @@ class MultiHostRouter:
                 continue
             for event in result.get("events", []):
                 events.append({**event, "_host": tr.name})
-        events.sort(key=lambda e: (e.get("timestamp", ""), e.get("sequence", 0)))
-        return events
+        return order_events(events)
+
+    async def export_task_bundle(self, correlation_id: str) -> JSON:
+        """Assemble the cross-host task bundle (chp-v0.2.md §8) at request time.
+
+        Fans out ``export_bundle`` to every member, keeps members with ≥1 event,
+        and aggregates. An UNREACHABLE member raises — a silently-partial
+        evidence bundle is the failure mode task bundles exist to prevent; the
+        caller retries. Evidence is never centralized: members export their own
+        signed bundles; the gateway only assembles."""
+        from chp_core.signing import build_task_bundle
+        from chp_core.types import utc_now
+
+        members: list[JSON] = []
+        unreachable: list[str] = []
+        for tr in self._transports:
+            exporter = getattr(tr, "export_bundle", None)
+            if exporter is None:
+                continue
+            try:
+                bundle = await exporter(correlation_id)
+            except Exception:
+                unreachable.append(tr.name)
+                continue
+            if bundle.get("events"):
+                members.append(bundle)
+        if unreachable:
+            raise ConnectionError(
+                f"task bundle incomplete — unreachable hosts: {', '.join(unreachable)}")
+        if not members:
+            raise LookupError(f"no evidence for correlation {correlation_id!r} on any host")
+        return build_task_bundle(correlation_id, members, created_at=utc_now())
 
     async def ainvoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
         """Route a pre-built envelope through the routing table.

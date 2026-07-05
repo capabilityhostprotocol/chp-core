@@ -157,7 +157,8 @@ async def build_passing_host() -> LocalCapabilityHost:
 async def check_declaration(host: Any) -> None:
     descriptor = host.discover()
     caps = descriptor.get("capabilities") or []
-    assert descriptor["protocol_version"] == "0.1"
+    # v0.2 is an additive superset of v0.1 (spec/README.md) — either is conformant.
+    assert descriptor["protocol_version"] in ("0.1", "0.2")
     assert any(cap["id"] == "conformance.echo" for cap in caps)
 
 

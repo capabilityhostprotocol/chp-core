@@ -60,7 +60,9 @@ function contentHash(ev, prevHash) {
   return sha256hex(canon(stable));
 }
 
-const bundle = JSON.parse(readFileSync(process.argv[2] || "signed-bundle.json", "utf8"));
+const input = JSON.parse(readFileSync(process.argv[2] || "signed-bundle.json", "utf8"));
+
+function verifyOne(bundle) {
 let prev = null, ok = true;
 const h = createHash("sha256");
 for (const ev of bundle.events) {
@@ -107,6 +109,33 @@ if (bundle.assurance === "signed") {
     if (!bound) { console.error("host_identity attestation INVALID"); ok = false; }
   }
 }
+return ok;
+}
 
-console.log(ok ? `VALID (${bundle.assurance}, ${bundle.events.length} events)` : "INVALID");
+let ok;
+if (input.kind === "task-bundle") {
+  // Task bundle (chp-v0.2.md §8): every member verifies; canonical member order
+  // (host_id, root_hash); task_root_hash = SHA256 over member root_hashes + "\n";
+  // causal closure — every causation_id resolves inside the union.
+  ok = input.bundles.length > 0;
+  const keys = input.bundles.map(b => `${b.host_id} ${b.root_hash}`);
+  if (!keys.every((k, i) => i === 0 || keys[i - 1] <= k)) { console.error("member order INVALID"); ok = false; }
+  const th = createHash("sha256");
+  for (const b of input.bundles) th.update((b.root_hash ?? "") + "\n");
+  if (th.digest("hex") !== input.task_root_hash) { console.error("task_root_hash mismatch"); ok = false; }
+  const allEvents = input.bundles.flatMap(b => b.events);
+  const invocations = new Set(allEvents.map(e => e.invocation_id));
+  for (const e of allEvents) {
+    const c = e.correlation?.causation_id;
+    if (c && !invocations.has(c)) { console.error(`dangling causation_id ${c}`); ok = false; }
+    if (e.correlation?.correlation_id !== input.correlation_id) { console.error("correlation mismatch"); ok = false; }
+  }
+  for (const b of input.bundles) { if (!verifyOne(b)) ok = false; }
+  console.log(ok
+    ? `VALID (task-bundle, ${input.bundles.length} hosts, ${allEvents.length} events)`
+    : "INVALID");
+} else {
+  ok = verifyOne(input);
+  console.log(ok ? `VALID (${input.assurance}, ${input.events.length} events)` : "INVALID");
+}
 process.exit(ok ? 0 : 1);

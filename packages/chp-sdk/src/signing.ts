@@ -132,3 +132,43 @@ export function signBundle(
   };
   return signed;
 }
+
+// ── Task bundles — cross-host verification unit (chp-v0.2.md §8) ────────────
+
+/** SHA256 over member root_hashes joined by "\n" — the task's fingerprint. */
+export function computeTaskRootHash(bundles: Record<string, JsonValue>[]): string {
+  const h = createHash('sha256');
+  for (const b of bundles) h.update(String(b.root_hash ?? '') + '\n');
+  return h.digest('hex');
+}
+
+const memberKey = (b: Record<string, JsonValue>): [string, string] =>
+  [String(b.host_id ?? ''), String(b.root_hash ?? '')];
+
+const cmpMember = (a: Record<string, JsonValue>, b: Record<string, JsonValue>): number => {
+  const [ah, ar] = memberKey(a);
+  const [bh, br] = memberKey(b);
+  return ah < bh ? -1 : ah > bh ? 1 : ar < br ? -1 : ar > br ? 1 : 0;
+};
+
+/** Aggregate one correlation's per-host signed bundles (members byte-untouched,
+ * canonically sorted; assurance = MIN member tier — degradation surfaced). */
+export function buildTaskBundle(
+  correlationId: string,
+  bundles: Record<string, JsonValue>[],
+  createdAt: string,
+): Record<string, JsonValue> {
+  const members = [...bundles].sort(cmpMember);
+  const tiers = new Set(members.map((b) => String(b.assurance ?? 'none')));
+  const assurance = tiers.has('none') ? 'none' : tiers.has('hash-chain') ? 'hash-chain' : 'signed';
+  return {
+    kind: 'task-bundle',
+    correlation_id: correlationId,
+    created_at: createdAt,
+    protocol_version: '0.2',
+    canonicalization: CANONICALIZATION,
+    assurance,
+    bundles: members as unknown as JsonValue,
+    task_root_hash: computeTaskRootHash(members),
+  };
+}

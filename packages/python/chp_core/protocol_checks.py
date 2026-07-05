@@ -341,6 +341,43 @@ def check_alignment(repo_root: Path) -> JSON:
             {"path": "spec/chp-v0.2.md"},
         )
 
+    # The language-neutral reserved-names registry must match source — every
+    # reserved denial code and evidence-type member appears in the generated doc.
+    reserved_md = repo_root / "spec" / "reserved-names.md"
+    if reserved_md.exists():
+        doc = read_text(reserved_md)
+        from . import types as _types
+
+        missing: list[str] = [c for c in reserved if f"`{c}`" not in doc]
+        for fam_name in dir(_types):
+            if fam_name.endswith("_EVIDENCE_TYPES"):
+                fam = getattr(_types, fam_name)
+                if isinstance(fam, (set, frozenset)):
+                    missing += [m for m in fam if f"`{m}`" not in doc]
+        add_check(
+            checks,
+            "reserved_names_registry_current",
+            not missing,
+            {"missing": sorted(set(missing))[:10],
+             "hint": "run: python scripts/gen-reserved-names.py"},
+        )
+
+    # Task-bundle vector must verify (guards the cross-host verification unit).
+    task_vec = repo_root / "spec" / "test-vectors" / "task-bundle.json"
+    if task_vec.exists():
+        try:
+            from .signing import verify_task_bundle
+
+            tv = verify_task_bundle(read_json(task_vec))
+            add_check(
+                checks,
+                "task_bundle_vector_verifies",
+                tv.valid,
+                {"checks": tv.checks, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "task_bundle_vector_verifies", False, {"error": str(exc)})
+
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
 

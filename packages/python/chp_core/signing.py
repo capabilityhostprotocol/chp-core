@@ -704,3 +704,145 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None,
     return BundleVerification(valid=valid, assurance=assurance, checks=checks,
                               reason=reason, anchored_domain=anchored_domain,
                               anchored_did=anchored_did)
+
+
+# --------------------------------------------------------------------------
+# Task bundles — cross-host verification unit (chp-v0.2.md §8)
+# --------------------------------------------------------------------------
+
+def compute_task_root_hash(bundles: list[dict]) -> str:
+    """SHA256 over member root_hashes joined by "\\n" (compute_root_hash, one
+    level up) — a single tamper-evident fingerprint for the whole task: swap,
+    add, or drop any member and it changes."""
+    h = hashlib.sha256()
+    for b in bundles:
+        h.update((b.get("root_hash") or "").encode())
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+def _member_sort_key(bundle: dict) -> tuple[str, str]:
+    return (str(bundle.get("host_id") or ""), str(bundle.get("root_hash") or ""))
+
+
+def build_task_bundle(correlation_id: str, bundles: list[dict], *,
+                      created_at: str) -> dict:
+    """Aggregate one correlation's per-host SIGNED bundles into a task bundle.
+
+    Members are byte-untouched and sorted canonically by (host_id, root_hash)
+    so assembly order is irrelevant — two gateways assembling the same members
+    produce identical bytes. `assurance` = the MINIMUM member tier (degradation
+    surfaced, never hidden). No aggregator signature in v1 — member signatures
+    prove each part's origin; the format admits one later (omit-when-empty)."""
+    members = sorted(bundles, key=_member_sort_key)
+    tiers = {b.get("assurance", "none") for b in members}
+    assurance = ("none" if "none" in tiers
+                 else "hash-chain" if "hash-chain" in tiers
+                 else "signed")
+    return {
+        "kind": "task-bundle",
+        "correlation_id": correlation_id,
+        "created_at": created_at,
+        "protocol_version": "0.2",
+        "canonicalization": CANONICALIZATION,
+        "assurance": assurance,
+        "bundles": members,
+        "task_root_hash": compute_task_root_hash(members),
+    }
+
+
+@dataclass
+class TaskBundleVerification:
+    valid: bool
+    assurance: str
+    checks: dict[str, bool]
+    correlation_id: str
+    task_root_hash: str | None
+    # Per member: who contributed what, under which trust root.
+    hosts: list[dict] = field(default_factory=list)
+    reason: str | None = None
+
+
+def verify_task_bundle(task: dict, *, resolve: bool = False) -> TaskBundleVerification:
+    """Verify a task's evidence spanning N hosts as a unit (chp-v0.2.md §8).
+
+    Proves: integrity of every included part (full per-member verify_bundle,
+    incl. signatures + attestations + anchors), cryptographic identity of every
+    contributor, and CAUSAL CLOSURE — no included event references work that is
+    missing. It does NOT prove absence of evidence: a causal *ancestor* cannot
+    be silently dropped (its children's causation_ids would dangle), but a
+    *leaf* contributor can be omitted undetectably. Absence-proofs are out of
+    scope at this tier."""
+    from .ordering import order_events  # noqa: PLC0415
+
+    checks: dict[str, bool] = {}
+    correlation_id = str(task.get("correlation_id") or "")
+    members = task.get("bundles") or []
+
+    checks["structure"] = (task.get("kind") == "task-bundle"
+                           and bool(correlation_id) and bool(members))
+    checks["member_order"] = [_member_sort_key(b) for b in members] == sorted(
+        _member_sort_key(b) for b in members)
+    checks["task_root_hash"] = task.get("task_root_hash") == compute_task_root_hash(members)
+
+    hosts: list[dict] = []
+    members_valid = True
+    all_events: list[dict] = []
+    for b in members:
+        v = verify_bundle(b, resolve=resolve)
+        members_valid = members_valid and v.valid
+        events = b.get("events") or []
+        all_events.extend(events)
+        hosts.append({
+            "host_id": b.get("host_id"),
+            "key_id": (b.get("signature") or {}).get("key_id"),
+            "assurance": v.assurance,
+            "anchored_domain": v.anchored_domain,
+            "anchored_did": v.anchored_did,
+            "valid": v.valid,
+            "event_count": len(events),
+        })
+    checks["members_valid"] = members_valid
+
+    checks["correlation"] = all(
+        (e.get("correlation") or {}).get("correlation_id") == correlation_id
+        for e in all_events)
+    host_ids = [b.get("host_id") for b in members]
+    checks["distinct_hosts"] = len(host_ids) == len(set(host_ids))
+
+    # Causal closure: every referenced causation resolves inside the union.
+    invocation_ids = {e.get("invocation_id") for e in all_events}
+    dangling = {
+        str(c) for e in all_events
+        if (c := (e.get("correlation") or {}).get("causation_id"))
+        and c not in invocation_ids
+    }
+    checks["causal_closure"] = not dangling
+
+    # Acyclicity: chp-causal-order-v1 emits everything without the cycle
+    # fallback iff the edge set is a DAG. Recompute edges cheaply by checking
+    # the topological property: order the union, then assert every event
+    # appears after its cause's first event.
+    ordered = order_events(all_events)
+    first_pos: dict[str, int] = {}
+    for i, e in enumerate(ordered):
+        inv = str(e.get("invocation_id") or "")
+        if inv and inv not in first_pos:
+            first_pos[inv] = i
+    acyclic = True
+    for i, e in enumerate(ordered):
+        c = (e.get("correlation") or {}).get("causation_id")
+        if c and str(c) in first_pos and first_pos[str(c)] > i:
+            acyclic = False
+            break
+    checks["causal_acyclic"] = acyclic
+
+    valid = all(checks.values())
+    reason = None if valid else "task-bundle checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    if not checks["causal_closure"] and dangling:
+        reason = (reason or "") + f" (dangling causation_ids: {sorted(dangling)[:3]})"
+    return TaskBundleVerification(
+        valid=valid, assurance=str(task.get("assurance", "none")), checks=checks,
+        correlation_id=correlation_id, task_root_hash=task.get("task_root_hash"),
+        hosts=hosts, reason=reason)

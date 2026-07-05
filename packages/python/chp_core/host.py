@@ -118,6 +118,20 @@ class CapabilityExecutionContext:
     def replay(self, correlation_id: str | None = None) -> list[JSON]:
         return self.host.replay(correlation_id or self.correlation_id)
 
+    def child_correlation(self) -> "CorrelationContext":
+        """Correlation for work CAUSED BY this invocation: same correlation_id,
+        ``causation_id`` = this invocation_id.
+
+        Pass this to any remote or router ``ainvoke`` to extend the causal tree
+        ACROSS hosts — the wire carries the full correlation, and
+        chp-causal-order-v1 uses the edge to order the federated timeline::
+
+            await remote.ainvoke("cap.id", payload,
+                                 correlation=ctx.child_correlation())
+        """
+        from dataclasses import replace
+        return replace(self.envelope.correlation, causation_id=self.envelope.invocation_id)
+
     async def ainvoke(
         self,
         capability_id: str,
@@ -131,15 +145,12 @@ class CapabilityExecutionContext:
         its ``causation_id`` points at THIS invocation, so the evidence stream is
         a real call tree (group by invocation_id; child.causation_id == parent
         invocation_id) — not just a flat sequence. Exports directly to OTel's
-        parent_span_id."""
-        from dataclasses import replace
-        child_corr = replace(
-            self.envelope.correlation, causation_id=self.envelope.invocation_id
-        )
+        parent_span_id. For CROSS-host children use ``child_correlation()`` with
+        a RemoteCapabilityHost/router."""
         return await self.host.ainvoke(
             capability_id,
             payload,
-            correlation=child_corr,
+            correlation=self.child_correlation(),
             subject=subject,
         )
 

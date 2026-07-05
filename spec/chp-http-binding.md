@@ -1,4 +1,4 @@
-# Capability Host Protocol — HTTP Binding (v0.1)
+# Capability Host Protocol — HTTP Binding (v0.2)
 
 Status: draft. Normative binding of the CHP object model
 ([v0.1](chp-v0.1.md)) onto HTTP, so a host in any language is wire-compatible
@@ -61,6 +61,7 @@ balancers; every other route requires auth (§2).
 | GET | `/replay/{correlation_id}` | required | — | `ReplayResult` |
 | POST | `/replay` | required | `ReplayQuery` | `ReplayResult` |
 | GET | `/verify/{correlation_id}` | required | — | chain-verification result (§4) |
+| GET | `/export/{correlation_id}` | required | — | this host's (signed when keyed) evidence bundle; on a gateway, the assembled cross-host **task bundle** (§4a) |
 | GET | `/metrics` | required | — | Prometheus text (`text/plain; version=0.0.4`) |
 
 `/invoke` accepts a convenience form: a top-level `correlation_id` is lifted into
@@ -83,11 +84,28 @@ depend on them.
 
 `GET /verify/{correlation_id}` returns the host's own chain check for that
 correlation — at minimum `{valid: boolean}`, plus `first_broken_sequence` and the
-counts the store's `verify_chain` produces. A gateway that holds no local store
-(evidence distributed across a mesh) MUST instead return a JSON object with a
-`note` explaining verification isn't available in gateway mode and the `hosts`
-that hold the evidence — never a false `valid`. Offline bundle verification
-(signatures, cross-language) is separate and lives in chp-v0.2.md §3.
+counts the store's `verify_chain` produces.
+
+A gateway that holds no local store SHOULD perform **federated verification**
+(chp-v0.2.md §8): assemble the task bundle from each member host's `/export`
+and return the task-bundle verification result with `"mode": "federated"`
+(`valid` is present and honest). A gateway that cannot (members lack `/export`,
+or a member is unreachable) MUST return either a `503` naming the unreachable
+hosts or the legacy JSON `note` object ("verification isn't available…", plus
+the `hosts` that hold the evidence) — **never a false `valid`**, and never a
+silently-partial result. Offline bundle verification (signatures,
+cross-language) is separate and lives in chp-v0.2.md §3/§8.
+
+### 4a. Export route
+
+`GET /export/{correlation_id}` on a **single host** returns that host's evidence
+bundle for the correlation, signed when the host holds a key (chp-v0.2.md §3).
+On a **gateway**, it returns the assembled cross-host **task bundle**
+(chp-v0.2.md §8): the gateway fans out to every member's `/export`, keeps
+members with ≥1 event, sorts canonically, and aggregates — at request time,
+never storing evidence. If any member is unreachable the gateway MUST respond
+`503` listing the unreachable hosts: a silently-partial evidence bundle is the
+failure mode task bundles exist to prevent; the caller retries.
 
 ## 5. Conformance
 

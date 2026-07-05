@@ -17,6 +17,19 @@ Commercial components (the hosted evidence service, registry network, compliance
 products, and enterprise/regulated-system adapters) live in separate repositories
 and are **not** accepted here. See [`GOVERNANCE.md`](GOVERNANCE.md).
 
+## Proposing a protocol change
+
+Protocol-level changes (spec text, schemas, canonical bytes, wire routes,
+reserved names) follow the process in
+[`spec/proposals/README.md`](spec/proposals/README.md): additive by default,
+byte-compat vectors as the regression gate, both implementations (Python + TS)
+move together, and every wire-visible change gains a conformance check. Start
+from [`spec/README.md`](spec/README.md) (the index), copy the proposal template,
+and link a Radicle issue. Regenerate vectors only via
+`scripts/gen-test-vectors.py`; regenerate the reserved-names registry via
+`scripts/gen-reserved-names.py`; record the change in
+[`spec/CHANGELOG.md`](spec/CHANGELOG.md).
+
 ## Principles
 
 - Prefer local-first behavior over distributed assumptions.

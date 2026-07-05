@@ -1,0 +1,152 @@
+{
+  "algorithm": "chp-causal-order-v1",
+  "events": [
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": "inv-b1",
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_c1",
+      "event_type": "execution_started",
+      "host_id": "host-c",
+      "invocation_id": "inv-c1",
+      "outcome": null,
+      "payload": {},
+      "sequence": 1,
+      "timestamp": "2026-01-01T10:00:02Z"
+    },
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_a3",
+      "event_type": "execution_started",
+      "host_id": "host-a",
+      "invocation_id": "inv-a2",
+      "outcome": null,
+      "payload": {},
+      "sequence": 3,
+      "timestamp": "2026-01-01T10:00:05Z"
+    },
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": "inv-a1",
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_b1",
+      "event_type": "execution_started",
+      "host_id": "host-B",
+      "invocation_id": "inv-b1",
+      "outcome": null,
+      "payload": {},
+      "sequence": 1,
+      "timestamp": "2026-01-01T09:59:58Z"
+    },
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_a1",
+      "event_type": "execution_started",
+      "host_id": "host-a",
+      "invocation_id": "inv-a1",
+      "outcome": null,
+      "payload": {},
+      "sequence": 1,
+      "timestamp": "2026-01-01T10:00:00Z"
+    },
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": "inv-b1",
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_c2",
+      "event_type": "execution_started",
+      "host_id": "host-c",
+      "invocation_id": "inv-c1",
+      "outcome": null,
+      "payload": {},
+      "sequence": 2,
+      "timestamp": "2026-01-01T10:00:03Z"
+    },
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": "inv-a1",
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_b2",
+      "event_type": "execution_started",
+      "host_id": "host-B",
+      "invocation_id": "inv-b1",
+      "outcome": null,
+      "payload": {},
+      "sequence": 2,
+      "timestamp": "2026-01-01T09:59:59Z"
+    },
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_a2",
+      "event_type": "execution_started",
+      "host_id": "host-a",
+      "invocation_id": "inv-a1",
+      "outcome": null,
+      "payload": {},
+      "sequence": 2,
+      "timestamp": "2026-01-01T10:00:02Z"
+    },
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_b3",
+      "event_type": "execution_started",
+      "host_id": "host-B",
+      "invocation_id": "inv-b2",
+      "outcome": null,
+      "payload": {},
+      "sequence": 3,
+      "timestamp": "2026-01-01T10:00:05Z"
+    },
+    {
+      "capability_id": "demo.cap",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "corr_order"
+      },
+      "event_id": "evt_a4",
+      "event_type": "execution_started",
+      "host_id": "host-a",
+      "invocation_id": "inv-a1",
+      "outcome": null,
+      "payload": {},
+      "sequence": 4,
+      "timestamp": "2026-01-01T10:00:09Z"
+    }
+  ],
+  "expected_order": [
+    "evt_a1",
+    "evt_b1",
+    "evt_b2",
+    "evt_a2",
+    "evt_c1",
+    "evt_c2",
+    "evt_b3",
+    "evt_a3",
+    "evt_a4"
+  ],
+  "note": "Deterministic cross-host ordering (chp-v0.2.md). An implementation MUST reproduce expected_order exactly from events (input order is irrelevant). Covers: causal edges overriding skewed wall clocks, and a byte-wise host_id tiebreak that a case-insensitive comparator gets wrong."
+}

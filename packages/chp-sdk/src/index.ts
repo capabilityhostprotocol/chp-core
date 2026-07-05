@@ -12,6 +12,7 @@
 export { canon, encodeStr, type JsonValue } from './canon.js';
 export { contentHash, rootHash, type EvidenceEvent } from './hash.js';
 export { verifyChain, type ChainResult } from './chain.js';
+export { orderEvents } from './ordering.js';
 export {
   CANONICALIZATION,
   SIGNATURE_ALGORITHM,
@@ -24,6 +25,8 @@ export {
   buildAttestation,
   buildBundle,
   signBundle,
+  buildTaskBundle,
+  computeTaskRootHash,
 } from './signing.js';
 export {
   verifyBundle,
@@ -34,7 +37,9 @@ export {
   didAnchorMessage,
   verifyDidAnchor,
   WELL_KNOWN_IDENTITY_PATH,
+  verifyTaskBundle,
   type BundleVerification,
+  type TaskBundleVerification,
 } from './verify.js';
 export {
   parseSshsig,
@@ -44,4 +49,4 @@ export {
   DID_ANCHOR_NAMESPACE,
   type ParsedSshsig,
 } from './sshsig.js';
-export { RemoteCapabilityHost, type InvocationResult } from './client.js';
+export { RemoteCapabilityHost, childCorrelation, type InvocationResult } from './client.js';

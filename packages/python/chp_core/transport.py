@@ -90,6 +90,19 @@ class LocalTransport:
     async def replay_result(self, query: "str | ReplayQuery | JSON") -> JSON:
         return self._host.replay_result(query).to_dict()
 
+    async def export_bundle(self, correlation_id: str) -> JSON:
+        """This host's (signed when keyed) bundle — mirrors GET /export/{corr}."""
+        from . import signing
+        from .types import utc_now
+
+        events = self._host.store.export_correlation(correlation_id)
+        bundle = signing.build_bundle(self._host.host_id, events, created_at=utc_now())
+        key = signing.load_host_key()
+        if key is not None and key.can_sign:
+            bundle = signing.sign_bundle(
+                bundle, key, anchors=signing.load_configured_anchors() or None)
+        return bundle
+
     async def health(self) -> JSON:
         return _health_from_descriptor(self._host.discover())
 
@@ -125,6 +138,9 @@ class HttpTransport:
 
     async def replay_result(self, query: "str | ReplayQuery | JSON") -> JSON:
         return await asyncio.to_thread(self._remote.replay_result, query)
+
+    async def export_bundle(self, correlation_id: str) -> JSON:
+        return await asyncio.to_thread(self._remote.export_bundle, correlation_id)
 
     async def health(self) -> JSON:
         return await asyncio.to_thread(self._remote.health)

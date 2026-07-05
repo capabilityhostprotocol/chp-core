@@ -1,108 +1,108 @@
 {
   "canonicalization": "chp-stable-v1",
-  "note": "canon(value) = json.dumps(value, sort_keys=True) per spec/chp-v0.2.md 2. A conforming implementation MUST reproduce every expected_canon byte-for-byte. Floats are intentionally absent - chp-stable-v1 forbids them in canonicalized content (2 rule 6).",
   "cases": [
     {
-      "name": "ascii_string",
+      "expected_canon": "\"hello\"",
       "input": "hello",
-      "expected_canon": "\"hello\""
+      "name": "ascii_string"
     },
     {
-      "name": "non_ascii_escaped",
+      "expected_canon": "\"caf\\u00e9\"",
       "input": "caf\u00e9",
-      "expected_canon": "\"caf\\u00e9\""
+      "name": "non_ascii_escaped"
     },
     {
-      "name": "emoji_surrogate_pair",
+      "expected_canon": "\"\\ud83d\\udd12\"",
       "input": "\ud83d\udd12",
-      "expected_canon": "\"\\ud83d\\udd12\""
+      "name": "emoji_surrogate_pair"
     },
     {
-      "name": "control_chars",
+      "expected_canon": "\"\\b\\t\\n\\f\\r\"",
       "input": "\b\t\n\f\r",
-      "expected_canon": "\"\\b\\t\\n\\f\\r\""
+      "name": "control_chars"
     },
     {
-      "name": "c0_control_u0001",
+      "expected_canon": "\"\\u0001\"",
       "input": "\u0001",
-      "expected_canon": "\"\\u0001\""
+      "name": "c0_control_u0001"
     },
     {
-      "name": "del_0x7f",
+      "expected_canon": "\"\\u007f\"",
       "input": "\u007f",
-      "expected_canon": "\"\\u007f\""
+      "name": "del_0x7f"
     },
     {
-      "name": "quote_and_backslash",
+      "expected_canon": "\"a\\\"b\\\\c\"",
       "input": "a\"b\\c",
-      "expected_canon": "\"a\\\"b\\\\c\""
+      "name": "quote_and_backslash"
     },
     {
-      "name": "key_sort_flat",
+      "expected_canon": "{\"a\": 2, \"b\": 3, \"c\": 1}",
       "input": {
-        "c": 1,
         "a": 2,
-        "b": 3
+        "b": 3,
+        "c": 1
       },
-      "expected_canon": "{\"a\": 2, \"b\": 3, \"c\": 1}"
+      "name": "key_sort_flat"
     },
     {
-      "name": "key_sort_nested",
+      "expected_canon": "{\"a\": [3, 2, 1], \"z\": {\"a\": 2, \"b\": 1}}",
       "input": {
-        "z": {
-          "b": 1,
-          "a": 2
-        },
         "a": [
           3,
           2,
           1
-        ]
-      },
-      "expected_canon": "{\"a\": [3, 2, 1], \"z\": {\"a\": 2, \"b\": 1}}"
-    },
-    {
-      "name": "integers_and_bools",
-      "input": {
-        "i": 42,
-        "neg": -7,
-        "t": true,
-        "f": false,
-        "n": null
-      },
-      "expected_canon": "{\"f\": false, \"i\": 42, \"n\": null, \"neg\": -7, \"t\": true}"
-    },
-    {
-      "name": "empty_object",
-      "input": {},
-      "expected_canon": "{}"
-    },
-    {
-      "name": "empty_array",
-      "input": [],
-      "expected_canon": "[]"
-    },
-    {
-      "name": "unicode_key_sort",
-      "input": {
-        "\u00e9": 1,
-        "a": 2,
-        "z": 3
-      },
-      "expected_canon": "{\"a\": 2, \"z\": 3, \"\\u00e9\": 1}"
-    },
-    {
-      "name": "nested_mixed",
-      "input": {
-        "event": {
-          "payload": {
-            "note": "caf\u00e9 \ud83d\udd12",
-            "n": 1
-          },
-          "ok": true
+        ],
+        "z": {
+          "a": 2,
+          "b": 1
         }
       },
-      "expected_canon": "{\"event\": {\"ok\": true, \"payload\": {\"n\": 1, \"note\": \"caf\\u00e9 \\ud83d\\udd12\"}}}"
+      "name": "key_sort_nested"
+    },
+    {
+      "expected_canon": "{\"f\": false, \"i\": 42, \"n\": null, \"neg\": -7, \"t\": true}",
+      "input": {
+        "f": false,
+        "i": 42,
+        "n": null,
+        "neg": -7,
+        "t": true
+      },
+      "name": "integers_and_bools"
+    },
+    {
+      "expected_canon": "{}",
+      "input": {},
+      "name": "empty_object"
+    },
+    {
+      "expected_canon": "[]",
+      "input": [],
+      "name": "empty_array"
+    },
+    {
+      "expected_canon": "{\"a\": 2, \"z\": 3, \"\\u00e9\": 1}",
+      "input": {
+        "a": 2,
+        "z": 3,
+        "\u00e9": 1
+      },
+      "name": "unicode_key_sort"
+    },
+    {
+      "expected_canon": "{\"event\": {\"ok\": true, \"payload\": {\"n\": 1, \"note\": \"caf\\u00e9 \\ud83d\\udd12\"}}}",
+      "input": {
+        "event": {
+          "ok": true,
+          "payload": {
+            "n": 1,
+            "note": "caf\u00e9 \ud83d\udd12"
+          }
+        }
+      },
+      "name": "nested_mixed"
     }
-  ]
+  ],
+  "note": "canon(value) = json.dumps(value, sort_keys=True) per spec/chp-v0.2.md 2. A conforming implementation MUST reproduce every expected_canon byte-for-byte. Floats are intentionally absent - chp-stable-v1 forbids them in canonicalized content (2 rule 6)."
 }
