@@ -5,7 +5,7 @@
  * described by `spec/chp-v0.1.md` and the JSON Schemas in `schemas/`.
  *
  * Internal legacy mesh/governance helpers are available from
- * `@auxo/ts-types/legacy`.
+ * `@capabilityhostprotocol/types/legacy`.
  *
  * @packageDocumentation
  */

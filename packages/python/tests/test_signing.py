@@ -171,6 +171,25 @@ def test_strict_verify_chain_fails_on_null_hash(tmp_path):
     assert strict.first_broken_sequence == 1
 
 
+def test_verify_attestation_primitive(tmp_path):
+    # The primitive both the bundle path and the mesh key-pinning path use.
+    from chp_core.types import utc_now
+    key = signing.generate_keypair(tmp_path / "keys")
+    att = signing.build_attestation("prod-gateway", key, valid_from="2026-01-01T00:00:00Z")
+
+    assert signing.verify_attestation(att, public_key=key.public_key_b64,
+                                      expected_host_id="prod-gateway", at_time=utc_now())
+    # wrong host_id, wrong key, and a tampered claim all fail
+    assert not signing.verify_attestation(att, expected_host_id="attacker")
+    assert not signing.verify_attestation(att, public_key="AAAA")
+    tampered = {**att, "host_id": "spoofed"}
+    assert not signing.verify_attestation(tampered)
+    # expired: bundle/pin time after valid_until
+    expiring = signing.build_attestation("h", key, valid_from="2026-01-01T00:00:00Z",
+                                         valid_until="2026-02-01T00:00:00Z")
+    assert not signing.verify_attestation(expiring, at_time="2026-06-01T00:00:00Z")
+
+
 def test_relabelled_host_id_fails_verification(tmp_path):
     # Provenance: the header signature covers host_id, so relabelling the origin
     # (the exact "anyone can sign a bundle labeled prod-gateway-acme" gap) breaks it.
@@ -228,6 +247,44 @@ def test_unexpired_key_identity_passes(tmp_path):
     assert signing.verify_bundle(bundle).checks["host_identity"] is True
 
 
+def test_governed_bundle_has_no_floats_and_verifies(tmp_path):
+    # chp-stable-v1 §2: no floats in canonicalized content. A governed bundle
+    # carrying a safety score would silently fail cross-language verification if
+    # the score were a float (Python "0.0" vs JS "0"). Guard: the score is a
+    # string in the hashed payload, and the signed bundle verifies.
+    from chp_core.safety import RuleBasedSafetyEvaluator
+    from chp_core.types import GuardrailDefinition
+
+    ev = RuleBasedSafetyEvaluator(guardrails=[GuardrailDefinition(
+        id="g", capability_id_pattern="x.cap", max_risk_level="critical",
+        requires_human_for=[])])
+    store = SQLiteEvidenceStore(str(tmp_path / "ev.sqlite"))
+    host = LocalCapabilityHost("gh", store=store, safety_evaluator=ev)
+
+    async def _h(_c, _p):
+        return {"ok": True}
+
+    host.register(CapabilityDescriptor(id="x.cap", version="1.0.0", description=""), _h)
+    asyncio.run(host.ainvoke("x.cap", {}, correlation={"correlation_id": "c"}))
+
+    events = store.export_correlation("c")
+    completed = next(e for e in events if e["event_type"] == "safety_assessment_completed")
+    assert isinstance(completed["payload"]["score"], str), "score must be string-encoded, not float"
+
+    def _no_floats(v):
+        assert not isinstance(v, float), f"float in hashed payload: {v!r}"
+        if isinstance(v, dict):
+            [_no_floats(x) for x in v.values()]
+        elif isinstance(v, list):
+            [_no_floats(x) for x in v]
+    for e in events:
+        _no_floats(e.get("payload") or {})
+
+    key = signing.generate_keypair(tmp_path / "keys")
+    bundle = signing.sign_bundle(signing.build_bundle("gh", events, created_at="2026-07-05T00:00:00Z"), key)
+    assert signing.verify_bundle(bundle).valid
+
+
 def test_published_vectors_match_current_canonicalization():
     # Drift guard: the published spec/test-vectors are what non-Python verifiers
     # rely on. If the canonicalization ever changes without regenerating them,
@@ -245,3 +302,10 @@ def test_published_vectors_match_current_canonicalization():
     bundle = json.loads((root / "signed-bundle.json").read_text())
     assert signing.verify_bundle(bundle).valid, "published signed-bundle vector no longer verifies"
     assert bundle["root_hash"] == exp["root_hash"]
+
+    # The governed vector: a safety-blocked chain with a string-encoded score.
+    # If canonicalization or the no-float rule regresses, this stops verifying.
+    gov = json.loads((root / "governance-bundle.json").read_text())
+    assert signing.verify_bundle(gov).valid, "published governance-bundle vector no longer verifies"
+    completed = next(e for e in gov["events"] if e["event_type"] == "safety_assessment_completed")
+    assert isinstance(completed["payload"]["score"], str), "governed vector score must be string-encoded"

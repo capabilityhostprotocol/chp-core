@@ -253,6 +253,39 @@ def sign_bundle(bundle: dict, host_key: HostKey, *, valid_until: str | None = No
     return signed
 
 
+def verify_attestation(
+    attestation: dict,
+    *,
+    public_key: str | None = None,
+    expected_host_id: str | None = None,
+    at_time: str | None = None,
+) -> bool:
+    """Verify a host-identity attestation (chp-v0.2.md §3): the key self-signs a
+    {host_id, public_key, key_id, valid_from, valid_until} claim.
+
+    Checks the self-signature and, when given, that ``public_key`` matches the
+    attested key, ``expected_host_id`` matches, and ``at_time`` falls within the
+    validity window. Used by both the bundle path and the mesh key-pinning path,
+    so a mesh peer verifies the attestation before trusting a key rather than
+    pinning whatever ``/host`` self-reports."""
+    att_pub = attestation.get("public_key")
+    if not att_pub:
+        return False
+    if public_key is not None and att_pub != public_key:
+        return False
+    if expected_host_id is not None and attestation.get("host_id") != expected_host_id:
+        return False
+    vf, vu = attestation.get("valid_from"), attestation.get("valid_until")
+    if at_time is not None:
+        if vf is not None and at_time < vf:
+            return False
+        if vu is not None and at_time > vu:
+            return False
+    claim = {k: attestation.get(k) for k in
+             ("host_id", "public_key", "key_id", "valid_from", "valid_until")}
+    return _verify_sig(att_pub, _canon(claim), attestation.get("signature", ""))
+
+
 @dataclass
 class BundleVerification:
     valid: bool
@@ -311,24 +344,12 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None) -> Bundle
         # unless the attesting key also vouches for the new host_id.
         att = bundle.get("host_identity")
         if att:
-            claim = {k: att.get(k) for k in
-                     ("host_id", "public_key", "key_id", "valid_from", "valid_until")}
-            # Temporal validity: the key must have been valid WHEN it signed this
-            # bundle (created_at within [valid_from, valid_until]). ISO-8601 UTC
-            # strings compare lexicographically; None means unbounded. A rotated-out
-            # key (valid_until in the past of created_at) is rejected — offline, no
-            # wall clock needed.
-            created = bundle.get("created_at")
-            vf, vu = att.get("valid_from"), att.get("valid_until")
-            temporal_ok = (
-                (vf is None or created is None or vf <= created)
-                and (vu is None or created is None or created <= vu)
-            )
-            checks["host_identity"] = (
-                att.get("host_id") == bundle.get("host_id")
-                and att.get("public_key") == pub
-                and temporal_ok
-                and _verify_sig(pub, _canon(claim), att.get("signature", ""))
+            # The key must have been valid WHEN it signed this bundle: created_at
+            # within [valid_from, valid_until]. A rotated-out key is rejected —
+            # offline, no wall clock needed.
+            checks["host_identity"] = verify_attestation(
+                att, public_key=pub, expected_host_id=bundle.get("host_id"),
+                at_time=bundle.get("created_at"),
             )
 
     valid = all(checks.values())

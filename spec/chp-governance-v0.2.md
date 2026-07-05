@@ -27,6 +27,14 @@ denial matches one of the reserved conditions below, a conforming host **MUST**
 emit the corresponding reserved code (not a synonym) — this is what lets a
 consumer branch on `code` across implementations.
 
+The **exact trigger predicate** for each code, and the **order** in which a host
+applies the gates that produce them, are normative in
+[chp-invocation-pipeline.md](chp-invocation-pipeline.md). That ordering is
+observable (a `policy_blocked` invocation emits no safety events), so an
+implementation MUST follow it — the table below is the vocabulary; the pipeline
+doc is the authoritative trigger + ordering. Note `capability_disabled`
+accompanies a **`skipped`** outcome, not `denied` (pipeline gate 3).
+
 | Reserved code | Meaning | `retryable` |
 |---|---|---|
 | `capability_not_found` | No capability with that id (or version) is registered. | false |

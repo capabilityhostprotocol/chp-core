@@ -43,18 +43,30 @@ def _host_version() -> str:
     return "unknown"
 
 
-def _host_assurance() -> JSON:
+def _host_assurance(host_id: str | None = None) -> JSON:
     """Declared evidence assurance tier for this host (v0.2). `signed` when a
     host keypair is present, else `hash-chain` (the store always chains).
-    Verifiers reject a lower-than-expected tier rather than degrade silently."""
+    Verifiers reject a lower-than-expected tier rather than degrade silently.
+
+    A signed host also serves its self-signed `host_identity` attestation so a
+    mesh peer can verify the key self-attests this host_id *before* pinning it
+    (chp-v0.2.md §3) — not blindly trust whatever /host reports."""
     try:
         from .signing import load_host_key
         key = load_host_key()
     except Exception:
         key = None
-    if key is not None:
-        return {"assurance": "signed", "key_id": key.key_id, "public_key": key.public_key_b64}
-    return {"assurance": "hash-chain"}
+    if key is None:
+        return {"assurance": "hash-chain"}
+    out: JSON = {"assurance": "signed", "key_id": key.key_id, "public_key": key.public_key_b64}
+    if host_id and key.can_sign:
+        try:
+            from .signing import build_attestation
+            from .types import utc_now
+            out["host_identity"] = build_attestation(host_id, key, valid_from=utc_now())
+        except Exception:
+            pass
+    return out
 
 
 class CapabilityHostHTTPServer(ThreadingHTTPServer):
@@ -136,7 +148,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if path == "/host":
             desc = self._sync_discover()
             desc.setdefault("host_version", _host_version())
-            for k, v in _host_assurance().items():
+            host_id = desc.get("id") or (desc.get("hosts") or [None])[0]
+            for k, v in _host_assurance(host_id).items():
                 desc.setdefault(k, v)
             self._write_json(desc)
             return

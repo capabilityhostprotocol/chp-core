@@ -284,6 +284,34 @@ def check_alignment(repo_root: Path) -> JSON:
         and "RISK_ORDER" in gov,
         {"path": "spec/chp-governance-v0.2.md"},
     )
+    # The normative invocation pipeline must name every reserved denial code
+    # (it's the authoritative trigger + ordering source per governance §2).
+    pipeline_path = repo_root / "spec" / "chp-invocation-pipeline.md"
+    if pipeline_path.exists():
+        pipeline = read_text(pipeline_path)
+        add_check(
+            checks,
+            "pipeline_spec_names_denial_codes",
+            all(f"`{c}`" in pipeline for c in reserved),
+            {"missing": sorted(c for c in reserved if f"`{c}`" not in pipeline)},
+        )
+    # Canonicalization golden set must recompute — chp-stable-v1 is
+    # json.dumps(sort_keys=True); a second implementation pins to these bytes.
+    canon_path = repo_root / "spec" / "test-vectors" / "canon" / "cases.json"
+    if canon_path.exists():
+        import json as _json
+
+        canon = read_json(canon_path)
+        drifted = [
+            c["name"] for c in canon.get("cases", [])
+            if _json.dumps(c["input"], sort_keys=True) != c["expected_canon"]
+        ]
+        add_check(
+            checks,
+            "canon_golden_set_recomputes",
+            not drifted,
+            {"drifted": drifted, "hint": "regenerate spec/test-vectors/canon/cases.json"},
+        )
 
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])

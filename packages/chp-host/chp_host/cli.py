@@ -6,6 +6,7 @@
     chp-host mcp --adapters git,github,planning,delegation,safety
     chp-host mcp --profile my-profile.json
     chp-host init [--role primary|worker|raspi|linux-worker]
+    chp-host onboard <codebase> [--module M --ops a,b --name X [--register]]
     chp-host mesh invite|add|list|remove
     chp-host gateway          (defaults to ~/.chp/mesh.json)
     chp-host adapters
@@ -954,6 +955,128 @@ def _install_gateway_service(chp_dir: Path, yes: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
+# chp-host onboard — portable onboarding wizard (scan → wrap / hand off → gate)
+# ---------------------------------------------------------------------------
+
+def _find_onboard_dir() -> Path | None:
+    """Locate the onboarding scripts (scanner/onboard.py + scan.py), portably.
+
+    Order: $CHP_SCANNER_DIR, a copy bundled in this package (chp_host/onboarding),
+    then walk up from the cwd looking for `scanner/onboard.py` (the dev checkout).
+    """
+    env = os.environ.get("CHP_SCANNER_DIR")
+    if env and (Path(env) / "onboard.py").exists():
+        return Path(env)
+    bundled = Path(__file__).resolve().parent / "onboarding"
+    if (bundled / "onboard.py").exists():
+        return bundled
+    here = Path.cwd().resolve()
+    for d in (here, *here.parents):
+        cand = d / "scanner"
+        if (cand / "onboard.py").exists():
+            return cand
+    return None
+
+
+def _load_onboard():
+    """Import the onboarding module (and put its dir on sys.path so `from scan import scan` works)."""
+    d = _find_onboard_dir()
+    if d is None:
+        return None
+    import importlib.util
+    if str(d) not in sys.path:
+        sys.path.insert(0, str(d))
+    spec = importlib.util.spec_from_file_location("chp_onboard", str(d / "onboard.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _conformance_gate(adapter_py: str) -> tuple[int, list] | None:
+    """Run the local conformance checker on a source file. Pure, no mesh/ctx required.
+
+    Returns (score, violations), or None if chp-adapter-conformance isn't installed (the gate is
+    skipped with a warning — Mode A still generated the adapter; portability over a hard requirement).
+    """
+    try:
+        from chp_adapter_conformance.checker import check_source_file, score
+    except ImportError:
+        return None
+    viols = check_source_file(adapter_py)
+    return score(viols), viols
+
+
+def _cmd_onboard(args: argparse.Namespace) -> int:
+    onb = _load_onboard()
+    if onb is None:
+        print("ERROR: onboarding scripts not found. Set CHP_SCANNER_DIR to the dir holding "
+              "onboard.py + scan.py (the repo's scanner/).", file=sys.stderr)
+        return 1
+
+    if getattr(args, "detect_agents", False):
+        agents = onb.detect_agents()
+        print("coding agents available:", [a for a, _ in agents] or "none on PATH")
+        return 0
+
+    repo = getattr(args, "repo", None)
+    if not repo:
+        print("usage: chp-host onboard <repo> [--module M --ops a,b --name X [--register]]", file=sys.stderr)
+        return 2
+    repo = os.path.abspath(os.path.expanduser(repo))
+    if not os.path.isdir(repo):
+        print(f"ERROR: {repo} is not a directory.", file=sys.stderr)
+        return 1
+
+    module = getattr(args, "module", None)
+    if not module:
+        return onb.wizard(repo)  # no --module → guided wizard (scan + the two paths)
+
+    ops = [o for o in (getattr(args, "ops", "") or "").split(",") if o]
+    name = getattr(args, "name", None)
+    if not (name and ops):
+        print("Mode A needs --module, --ops, --name. (Omit --module for the guided wizard.)", file=sys.stderr)
+        return 2
+
+    # Mode A — deterministic wrap. Generate next to the repo (or --out), then gate on conformance.
+    out_root = getattr(args, "out", None) or os.path.join(os.path.dirname(repo) or ".", "_onboarded")
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    try:
+        pkg = onb.generate_mode_a(repo, module, ops, name, out_root)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR: Mode A generation failed: {exc}", file=sys.stderr)
+        return 1
+    adapter_py = os.path.join(pkg, f"chp_adapter_{name}", "adapter.py")
+    print(f"✓ generated {pkg}")
+
+    gate = _conformance_gate(adapter_py)
+    if gate is None:
+        print("  conformance: skipped (chp-adapter-conformance not installed — install it to gate locally)")
+    else:
+        sc, viols = gate
+        print(f"  conformance: {sc}/100" + (f"  ({len(viols)} issue(s))" if viols else "  ✓"))
+        for v in viols:
+            print(f"    - [{v.severity}] {v.rule}: {v.message} ({v.location})")
+        if sc < 100:
+            print("  ✗ generated adapter is below the bar — fix the wrapper template before registering.", file=sys.stderr)
+            return 1
+
+    if getattr(args, "register", False):
+        print("  registering (pip install -e + restart to pick up the entry point)…")
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-e", pkg],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"  WARNING: pip install -e failed:\n{r.stderr.strip()[:400]}", file=sys.stderr)
+            return 1
+        print(f"  ✓ installed chp-adapter-{name} (entry point chp.adapters.{name}). "
+              f"Restart the host to load it: chp-host restart")
+    else:
+        print(f"  → to register: chp-host onboard {repo} --module {module} --ops {','.join(ops)} "
+              f"--name {name} --register   (or: pip install -e {pkg})")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # chp-host mesh subcommands
 # ---------------------------------------------------------------------------
 
@@ -1072,6 +1195,76 @@ def _cmd_mesh_list(args: argparse.Namespace) -> int:
         print("⚠ version skew — run 'chp-host update' on flagged nodes "
               "(or 'chp-host mesh update <url>' to update them remotely).")
     return 0
+
+
+def _cmd_mesh_verify_keys(args: argparse.Namespace) -> int:
+    """Fetch each remote's /host (authed), then trust-on-first-use its signing key.
+    A key that CHANGED from the pinned one is a hard error (exit 1)."""
+    from .mesh import load_mesh, mesh_path, pin_or_check_key
+
+    remotes = load_mesh().get("agent_remotes") or []
+    if not remotes:
+        print(f"No remotes in {mesh_path()}.")
+        return 0
+
+    print(f"{'URL':<32} {'Assurance':<12} {'Key':<18} {'Trust'}")
+    print("-" * 76)
+    bad = False
+    for r in remotes:
+        raw = r.get("url", "")
+        url = _resolve_mesh_url(raw)
+        key = os.environ.get(r.get("api_key_env", "") or "", "")
+        try:
+            req = urllib.request.Request(f"{url}/host", headers={"X-CHP-Key": key} if key else {})
+            h = json.loads(urllib.request.urlopen(req, timeout=4).read().decode())
+        except Exception as exc:
+            print(f"{url:<32} {'-':<12} {'-':<18} ✗ unreachable ({type(exc).__name__})")
+            continue
+        assurance = h.get("assurance", "none")
+        key_id = h.get("key_id")
+        if assurance != "signed" or not key_id:
+            print(f"{url:<32} {assurance:<12} {'(none)':<18} — no signing key")
+            continue
+        # Verify the self-signed host-identity attestation BEFORE pinning: the
+        # key must self-attest this host_id (chp-v0.2.md §3). A present-but-invalid
+        # attestation is a malformed/forged identity claim — refuse to pin it,
+        # rather than blindly trusting whatever /host reports.
+        att = h.get("host_identity")
+        if att is not None:
+            from chp_core import signing as _signing
+            from chp_core.types import utc_now as _utc_now
+            if not _signing.verify_attestation(
+                att, public_key=h.get("public_key"),
+                expected_host_id=h.get("id"), at_time=_utc_now(),
+            ):
+                bad = True
+                print(f"{url:<32} {assurance:<12} {key_id:<18} ✗ INVALID attestation — not pinned")
+                continue
+        status, detail = pin_or_check_key(raw, key_id, h.get("public_key"))
+        mark = {"pinned": "✓ pinned (TOFU)", "ok": "✓ trusted",
+                "mismatch": f"✗ CHANGED (was {detail})", "no-remote": "? not in manifest"}[status]
+        if status == "mismatch":
+            bad = True
+        print(f"{url:<32} {assurance:<12} {key_id:<18} {mark}")
+
+    if bad:
+        print("\n⚠ A pinned key CHANGED. If this was a deliberate rotation, run "
+              "'chp-host mesh trust --url <url> --reset-key'; otherwise investigate — "
+              "a changed key can mean impersonation.")
+        return 1
+    return 0
+
+
+def _cmd_mesh_trust(args: argparse.Namespace) -> int:
+    from .mesh import reset_key
+    if args.reset_key:
+        if reset_key(args.url.rstrip("/")):
+            print(f"Cleared pinned key for {args.url}. Next 'mesh verify-keys' will re-pin (TOFU).")
+            return 0
+        print(f"No remote {args.url} in the mesh manifest.", file=sys.stderr)
+        return 1
+    print("Nothing to do — pass --reset-key.", file=sys.stderr)
+    return 1
 
 
 def _cmd_mesh_remove(args: argparse.Namespace) -> int:
@@ -1695,6 +1888,21 @@ def build_parser() -> argparse.ArgumentParser:
     init_cmd.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompts.")
     init_cmd.set_defaults(func=_cmd_init)
 
+    onboard_cmd = sub.add_parser(
+        "onboard",
+        help="Onboard a codebase to CHP — scan, then wrap functions (Mode A) or hand off to your coding agent (Mode B).",
+    )
+    onboard_cmd.add_argument("repo", nargs="?", help="Path to the codebase to onboard.")
+    onboard_cmd.add_argument("--module", help="Mode A: importable module whose functions to wrap.")
+    onboard_cmd.add_argument("--ops", help="Mode A: comma-separated function names to expose as capabilities.")
+    onboard_cmd.add_argument("--name", help="Mode A: adapter name (chp-adapter-<name>).")
+    onboard_cmd.add_argument("--out", help="Output root for the generated package (default: <repo>/../_onboarded).")
+    onboard_cmd.add_argument("--register", action="store_true",
+                             help="Mode A: on a clean conformance gate, pip install -e the generated adapter.")
+    onboard_cmd.add_argument("--detect-agents", action="store_true",
+                             help="List the coding agents detected on PATH (Mode B handoff targets).")
+    onboard_cmd.set_defaults(func=_cmd_onboard)
+
     mesh_cmd = sub.add_parser("mesh", help="Manage the mesh manifest (~/.chp/mesh.json).")
     mesh_sub = mesh_cmd.add_subparsers(dest="mesh_action", required=True)
 
@@ -1715,6 +1923,16 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_remove = mesh_sub.add_parser("remove", help="Remove a remote from the mesh manifest.")
     mesh_remove.add_argument("url", help="URL to remove.")
     mesh_remove.set_defaults(func=_cmd_mesh_remove)
+
+    mesh_verify_keys = mesh_sub.add_parser(
+        "verify-keys", help="Fetch each remote's /host assurance + signing key; pin on first use (TOFU).")
+    mesh_verify_keys.set_defaults(func=_cmd_mesh_verify_keys)
+
+    mesh_trust = mesh_sub.add_parser("trust", help="Manage a remote's pinned signing key.")
+    mesh_trust.add_argument("--url", required=True)
+    mesh_trust.add_argument("--reset-key", action="store_true",
+                            help="Clear the pinned key so the next verify re-pins (use after a deliberate rotation).")
+    mesh_trust.set_defaults(func=_cmd_mesh_trust)
 
     mesh_revoke = mesh_sub.add_parser(
         "revoke", help="Remove a remote and delete its pre-shared key from the keychain.")

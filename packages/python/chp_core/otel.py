@@ -66,7 +66,13 @@ def _governance_attributes(events: list[JSON]) -> dict[str, Any]:
         if completed.get("level") is not None:
             attrs["chp.safety.level"] = completed["level"]
         if completed.get("score") is not None:
-            attrs["chp.safety.score"] = completed["score"]
+            # score is a string in hashed evidence (chp-stable-v1 §2 forbids floats);
+            # re-float it here — an OTel attribute is a non-hashed surface, so a
+            # numeric value is fine and nicer to range-query.
+            try:
+                attrs["chp.safety.score"] = float(completed["score"])
+            except (TypeError, ValueError):
+                attrs["chp.safety.score"] = completed["score"]
         attrs["chp.safety.blocked"] = "safety_action_blocked" in by_type
 
     # Autonomy budget.

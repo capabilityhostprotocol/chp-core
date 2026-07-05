@@ -41,6 +41,25 @@ from .types import (
 CapabilityHandler = Callable[["CapabilityExecutionContext", JSON], Any | Awaitable[Any]]
 
 
+def _stringify_floats(value: Any) -> Any:
+    """Represent every float in an evidence payload as its string form.
+
+    chp-stable-v1 (spec/chp-v0.2.md §2) forbids non-integer numbers in
+    canonicalized content: Python `json.dumps(0.0)` → `0.0` but an ECMAScript
+    `Number.toString` → `0`, so the same value would hash differently across
+    languages and silently break cross-language verification. `bool` (an `int`
+    subclass) and `int` pass through unchanged."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, dict):
+        return {k: _stringify_floats(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_stringify_floats(v) for v in value]
+    return value
+
+
 @dataclass(slots=True)
 class RegisteredCapability:
     descriptor: CapabilityDescriptor
@@ -599,7 +618,15 @@ class LocalCapabilityHost:
             correlation=envelope.correlation,
             timestamp=utc_now(),
             outcome=outcome,  # type: ignore[arg-type]
-            payload=redact_payload(payload or {}) if redacted else (payload or {}),
+            # chp-stable-v1 forbids floats in canonicalized (hashed) content —
+            # float serialization diverges across languages (Python 0.0 vs JS 0),
+            # which would silently break cross-language verification. Normalize any
+            # float to its string form at the single emission boundary so no
+            # emitter can produce unverifiable evidence. Non-hashed surfaces
+            # (InvocationResult.data, OTel attrs) keep the float.
+            payload=_stringify_floats(
+                redact_payload(payload or {}) if redacted else (payload or {})
+            ),
             redacted=redacted,
             error=error,
             denial=denial,

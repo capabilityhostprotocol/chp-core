@@ -49,8 +49,18 @@ these exact rules (matching Python `json.dumps(obj, sort_keys=True)`):
    `"café"`. (This supersedes any earlier "over UTF-8" wording.)
 4. Standard JSON escapes for `"` `\` and control chars `\b \t \n \f \r`,
    `\u00XX` for other C0 controls.
-5. `null`/`true`/`false` lowercase; integers bare; the resulting string is
-   UTF-8-encoded (pure ASCII here) and SHA-256'd → lowercase hex `content_hash`.
+5. `null`/`true`/`false` lowercase; integers bare.
+6. **No non-integer numbers.** Canonicalized content MUST NOT contain a JSON
+   *float*. Float-to-string serialization is not portable — Python `json.dumps`
+   emits `0.0` where an ECMAScript `Number.toString` emits `0`, so the same value
+   would hash differently across languages. A value that is conceptually
+   fractional (e.g. a safety `score`, an autonomy `spend`) MUST be represented in
+   canonicalized fields as a **string** (fixed precision, e.g. `"0.000"`) or a
+   scaled integer. Producers put the human/float form only in non-hashed surfaces
+   (an `InvocationResult.data`, an OTel attribute), never in an evidence event
+   payload. (This is the one place `chp-stable-v1` deliberately narrows JSON.)
+7. The resulting string is UTF-8-encoded (pure ASCII here) and SHA-256'd →
+   lowercase hex `content_hash`.
 
 The **root hash** = SHA-256 over each event's `content_hash`, in sequence order,
 each **followed by a `\n`** (`0x0a`) — i.e. `sha256(h1 + "\n" + h2 + "\n" + …)`.
@@ -107,6 +117,12 @@ A host at the `signed` tier MUST support exporting a correlation as a bundle:
   the header signature, and (when present) the host-identity attestation. A
   verifier offered an `expected_key_id` MUST reject a bundle signed by any other
   key.
+
+A `signed` host SHOULD also serve its `host_identity` attestation on the `/host`
+descriptor, so a mesh peer can verify the key self-attests this `host_id` (and is
+within its validity window) **before** trust-on-first-use pinning it — rather than
+pinning whatever `/host` self-reports. This is the same offline
+`verify_attestation` check the bundle path uses.
 
 Key rotation uses `valid_from`/`valid_until` in the `host_identity` attestation;
 a rotated key is a new identity. A verifier MUST reject a signed bundle whose
