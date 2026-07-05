@@ -1,0 +1,247 @@
+"""Tests for evidence integrity v0.2 — signing.py + strict verify_chain."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import stat
+
+import pytest
+
+from chp_core.host import LocalCapabilityHost
+from chp_core.store import SQLiteEvidenceStore
+from chp_core.types import CapabilityDescriptor
+from chp_core import signing
+
+
+CORR = "corr-sign-1"
+
+
+def _host_with_events(tmp_path) -> LocalCapabilityHost:
+    store = SQLiteEvidenceStore(str(tmp_path / "ev.sqlite"))
+    host = LocalCapabilityHost(store=store)
+
+    async def handler(_ctx, _payload):
+        return {"ok": True}
+
+    host.register(CapabilityDescriptor(id="s.cap", version="1.0.0", description=""), handler)
+    asyncio.run(host.ainvoke("s.cap", {"n": 1}, correlation={"correlation_id": CORR}))
+    asyncio.run(host.ainvoke("s.cap", {"n": 2}, correlation={"correlation_id": CORR}))
+    return host
+
+
+# --------------------------------------------------------------------------
+# Keypair
+# --------------------------------------------------------------------------
+
+def test_generate_keypair_private_is_0600(tmp_path):
+    key = signing.generate_keypair(tmp_path / "keys")
+    assert key.can_sign
+    assert len(key.key_id) == 16
+    priv = tmp_path / "keys" / "host_ed25519"
+    mode = stat.S_IMODE(os.stat(priv).st_mode)
+    assert mode == 0o600, oct(mode)
+
+
+def test_load_host_key_none_when_absent(tmp_path):
+    assert signing.load_host_key(tmp_path / "nope") is None
+
+
+def test_key_id_stable_from_pubkey(tmp_path):
+    k1 = signing.generate_keypair(tmp_path / "k")
+    k2 = signing.load_host_key(tmp_path / "k")
+    assert k2 is not None and k2.key_id == k1.key_id
+
+
+# --------------------------------------------------------------------------
+# Bundle build / sign / verify round trip
+# --------------------------------------------------------------------------
+
+def test_unsigned_bundle_verifies_at_hash_chain_tier(tmp_path):
+    host = _host_with_events(tmp_path)
+    events = host.store.export_correlation(CORR)
+    bundle = signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z")
+    assert bundle["assurance"] == "hash-chain"
+    v = signing.verify_bundle(bundle)
+    assert v.valid and v.assurance == "hash-chain"
+
+
+def test_signed_bundle_round_trip(tmp_path):
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z"), key
+    )
+    assert bundle["assurance"] == "signed"
+    v = signing.verify_bundle(bundle)
+    assert v.valid
+    assert v.checks["signature"] is True
+    # pinning the correct signer still passes
+    assert signing.verify_bundle(bundle, expected_key_id=key.key_id).valid
+
+
+def test_tampered_event_payload_fails(tmp_path):
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z"), key
+    )
+    # Mutate a payload but leave its content_hash — hash recompute must catch it.
+    bundle["events"][0]["payload"] = {"n": 999}
+    v = signing.verify_bundle(bundle)
+    assert not v.valid
+    assert v.checks["event_hashes"] is False
+
+
+def test_tampered_root_hash_fails(tmp_path):
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z"), key
+    )
+    bundle["root_hash"] = "0" * 64
+    v = signing.verify_bundle(bundle)
+    assert not v.valid
+
+
+def test_signature_from_unexpected_key_rejected(tmp_path):
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z"), key
+    )
+    # A valid signature, but not from the key we trust.
+    v = signing.verify_bundle(bundle, expected_key_id="deadbeefdeadbeef")
+    assert not v.valid
+
+
+def test_forged_signature_fails(tmp_path):
+    host = _host_with_events(tmp_path)
+    attacker = signing.generate_keypair(tmp_path / "attacker")
+    events = host.store.export_correlation(CORR)
+    # Attacker rebuilds + re-signs after tampering (the exact threat unsigned
+    # hash-chains can't stop). Verifier pins the real host key → rejected.
+    real = signing.generate_keypair(tmp_path / "real")
+    bundle = signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z")
+    bundle["events"][0]["payload"] = {"n": 999}
+    forged = signing.sign_bundle(bundle, attacker)
+    v = signing.verify_bundle(forged, expected_key_id=real.key_id)
+    assert not v.valid
+
+
+# --------------------------------------------------------------------------
+# Strict verify_chain
+# --------------------------------------------------------------------------
+
+def test_degrades_without_cryptography(tmp_path, monkeypatch):
+    # Optional-dep contract: no cryptography → unsigned bundles still build and
+    # verify at hash-chain tier; only signing raises a clear error.
+    def _boom():
+        raise signing.SigningUnavailable("simulated missing cryptography")
+
+    monkeypatch.setattr(signing, "_load_backend", _boom)
+    assert signing.signing_available() is False
+    host = _host_with_events(tmp_path)
+    events = host.store.export_correlation(CORR)
+    bundle = signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z")
+    assert signing.verify_bundle(bundle).valid  # hash-chain tier unaffected
+    with pytest.raises(signing.SigningUnavailable):
+        signing.generate_keypair(tmp_path / "k2")
+
+
+def test_strict_verify_chain_fails_on_null_hash(tmp_path):
+    store = SQLiteEvidenceStore(str(tmp_path / "legacy.sqlite"))
+    # Simulate a legacy event with no content_hash.
+    with store._lock:
+        store._conn.execute("INSERT INTO evidence_sequence DEFAULT VALUES")
+        store._conn.execute(
+            "INSERT INTO evidence_events (sequence, event_id, event_type, invocation_id, "
+            "capability_id, host_id, correlation_id, timestamp, payload_json, event_json, "
+            "content_hash, prev_hash) VALUES (1,'e1','execution_started','i1','c','h','cx','t','{}','{}',NULL,NULL)"
+        )
+        store._conn.commit()
+    lenient = store.verify_chain("cx")
+    strict = store.verify_chain("cx", strict=True)
+    assert lenient.valid is True          # legacy tolerated by default
+    assert strict.valid is False          # strict flags the unhashed event
+    assert strict.first_broken_sequence == 1
+
+
+def test_relabelled_host_id_fails_verification(tmp_path):
+    # Provenance: the header signature covers host_id, so relabelling the origin
+    # (the exact "anyone can sign a bundle labeled prod-gateway-acme" gap) breaks it.
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("real-host", events, created_at="2026-07-03T00:00:00Z"), key
+    )
+    assert signing.verify_bundle(bundle).valid
+    bundle["host_id"] = "prod-gateway-acme"
+    v = signing.verify_bundle(bundle)
+    assert not v.valid
+    assert v.checks["signature"] is False
+
+
+def test_attestation_binds_key_to_host(tmp_path):
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("real-host", events, created_at="2026-07-03T00:00:00Z"), key
+    )
+    att = bundle["host_identity"]
+    assert att["host_id"] == "real-host" and att["public_key"] == key.public_key_b64
+    assert signing.verify_bundle(bundle).checks["host_identity"] is True
+    # Swapping the attestation's host_id (without re-signing) is caught.
+    bundle["host_identity"]["host_id"] = "someone-else"
+    assert signing.verify_bundle(bundle).checks["host_identity"] is False
+
+
+def test_expired_key_identity_fails(tmp_path):
+    # Key lifecycle: a bundle whose created_at is after the attestation's
+    # valid_until (the key was rotated out) fails — offline, no wall clock.
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z"),
+        key, valid_until="2026-01-01T00:00:00Z",  # expired well before created_at
+    )
+    v = signing.verify_bundle(bundle)
+    assert not v.valid
+    assert v.checks["host_identity"] is False
+
+
+def test_unexpired_key_identity_passes(tmp_path):
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z"),
+        key, valid_until="2027-01-01T00:00:00Z",  # still valid at created_at
+    )
+    assert signing.verify_bundle(bundle).checks["host_identity"] is True
+
+
+def test_published_vectors_match_current_canonicalization():
+    # Drift guard: the published spec/test-vectors are what non-Python verifiers
+    # rely on. If the canonicalization ever changes without regenerating them,
+    # cross-language verification silently breaks — this test catches it.
+    import json
+    from pathlib import Path
+    from chp_core.store import _compute_event_hash
+
+    root = Path(__file__).resolve().parents[3] / "spec" / "test-vectors"
+    exp = json.loads((root / "expected.json").read_text())
+    ev = json.loads((root / "event.json").read_text())["event"]
+
+    assert _compute_event_hash(ev, None) == exp["event_content_hash"], \
+        "content_hash drifted from published vector — regenerate spec/test-vectors"
+    bundle = json.loads((root / "signed-bundle.json").read_text())
+    assert signing.verify_bundle(bundle).valid, "published signed-bundle vector no longer verifies"
+    assert bundle["root_hash"] == exp["root_hash"]

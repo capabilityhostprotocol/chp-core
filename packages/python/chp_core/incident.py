@@ -1,4 +1,7 @@
-"""Incident detection, lifecycle, and remediation capability for CHP §9.5."""
+"""Incident detection, lifecycle, and remediation capability for CHP.
+
+Incident event vocabulary is normative in spec/chp-governance-v0.2.md §4.3.
+"""
 
 from __future__ import annotations
 

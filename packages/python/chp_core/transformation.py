@@ -151,11 +151,6 @@ def register_transformation_capability(host: Any, cap: TransformationCapability)
         params: dict = payload.get("params") or {}
 
         ctx.emit(
-            "execution_started",
-            {"capability_id": cap.capability_id, "capability_version": cap.capability_version},
-            redacted=False,
-        )
-        ctx.emit(
             "transformation_started",
             {"transform_type": transform_type, "input_byte_count": len(content.encode("utf-8"))},
             redacted=False,
@@ -171,7 +166,6 @@ def register_transformation_capability(host: Any, cap: TransformationCapability)
                 {"error": str(exc), "latency_ms": latency_ms},
                 redacted=False,
             )
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
 
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
@@ -185,11 +179,6 @@ def register_transformation_capability(host: Any, cap: TransformationCapability)
                 "output_byte_count": result.record.output_byte_count,
                 "latency_ms": latency_ms,
             },
-            redacted=False,
-        )
-        ctx.emit(
-            "execution_completed",
-            {"capability_id": cap.capability_id, "outcome": "success"},
             redacted=False,
         )
         return result.to_dict()

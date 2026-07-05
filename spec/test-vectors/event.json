@@ -1,0 +1,19 @@
+{
+  "event": {
+    "capability_id": "demo.cap",
+    "correlation": {
+      "causation_id": null,
+      "correlation_id": "corr_test"
+    },
+    "event_id": "evt_test0002",
+    "event_type": "execution_started",
+    "host_id": "vector-host",
+    "invocation_id": "inv_test0002",
+    "outcome": null,
+    "payload": {
+      "note": "caf\u00e9"
+    },
+    "timestamp": "2026-01-01T00:00:00Z"
+  },
+  "prev_hash": null
+}

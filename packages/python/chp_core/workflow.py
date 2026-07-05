@@ -69,11 +69,6 @@ def register_workflow_capability(
         raw_steps: list[dict] = payload.get("steps") or []
 
         ctx.emit(
-            "execution_started",
-            {"capability_id": desc.id, "capability_version": desc.version},
-            redacted=False,
-        )
-        ctx.emit(
             "workflow_started",
             {"workflow_id": workflow_id, "name": name, "step_count": len(raw_steps)},
             redacted=False,
@@ -163,7 +158,6 @@ def register_workflow_capability(
                         },
                         redacted=False,
                     )
-                    ctx.emit("execution_failed", {"error": step_error}, redacted=False)
                     raise RuntimeError(f"step {step_id!r} failed: {step_error}")
 
         total_ms = round((time.perf_counter() - total_start) * 1000, 2)
@@ -177,11 +171,6 @@ def register_workflow_capability(
                 "failed_steps": failed,
                 "total_duration_ms": total_ms,
             },
-            redacted=False,
-        )
-        ctx.emit(
-            "execution_completed",
-            {"capability_id": desc.id, "outcome": "success"},
             redacted=False,
         )
         return WorkflowResult(

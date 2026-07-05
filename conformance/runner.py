@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,7 +58,25 @@ async def invoke_host(host: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 async def build_passing_host() -> LocalCapabilityHost:
-    host = LocalCapabilityHost("conformance-host", store=SQLiteEvidenceStore(":memory:"))
+    from chp_core.policy import PolicyConfig  # noqa: PLC0415
+    from chp_core.safety import RuleBasedSafetyEvaluator  # noqa: PLC0415
+    from chp_core.types import GuardrailDefinition  # noqa: PLC0415
+
+    # A fully-governed fixture: cap the allowed risk tier at 'medium' (a 'high'
+    # capability is policy_blocked) and configure a safety guardrail that blocks
+    # conformance.unsafe (safety_blocked). Explicit config (not load_policy())
+    # keeps the fixture deterministic.
+    evaluator = RuleBasedSafetyEvaluator(guardrails=[
+        GuardrailDefinition(
+            id="conformance-guardrail", capability_id_pattern="conformance.unsafe",
+            max_risk_level="critical", requires_human_for=["conformance.unsafe"],
+        ),
+    ])
+    host = LocalCapabilityHost(
+        "conformance-host", store=SQLiteEvidenceStore(":memory:"),
+        policy=PolicyConfig(max_risk_tier="medium"),
+        safety_evaluator=evaluator,
+    )
 
     async def echo(_ctx, payload):
         return {"echo": payload.get("value")}
@@ -94,6 +113,41 @@ async def build_passing_host() -> LocalCapabilityHost:
                     parameters={"fields": ["value"]},
                 )
             ],
+        ),
+        echo,
+    )
+    # Governance fixtures (v0.2): an approval-gated and a budget-capped capability,
+    # so approval/budget conformance is verifiable — including black-box over HTTP.
+    from chp_core import AutonomyProfile  # noqa: PLC0415
+
+    host.register(
+        CapabilityDescriptor(
+            id="conformance.approval", version="1.0.0",
+            description="Approval-gated (every invocation requires approval).",
+            autonomy=AutonomyProfile(tier="approval_required"),
+        ),
+        echo,
+    )
+    host.register(
+        CapabilityDescriptor(
+            id="conformance.budgeted", version="1.0.0",
+            description="Budget-capped (action_limit=1 per correlation).",
+            autonomy=AutonomyProfile(action_limit=1),
+        ),
+        echo,
+    )
+    host.register(
+        CapabilityDescriptor(
+            id="conformance.risky", version="1.0.0",
+            description="High-risk (exceeds the host's max_risk_tier).",
+            risk="high",
+        ),
+        echo,
+    )
+    host.register(
+        CapabilityDescriptor(
+            id="conformance.unsafe", version="1.0.0",
+            description="Blocked by a safety guardrail.",
         ),
         echo,
     )
@@ -1211,7 +1265,195 @@ async def check_evidence_hash_chain(host: Any) -> None:
             os.unlink(store_path)
 
 
-CHECKS: list[tuple[str, Check]] = [
+async def check_signed_evidence_bundle(_host: Any) -> None:
+    """v0.2: a host can export a signed evidence bundle that verifies offline,
+    and any tampering is detected."""
+    import tempfile, os
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core import signing
+
+    if not signing.signing_available():
+        return  # signing is an optional tier; nothing to assert without the backend
+
+    with tempfile.TemporaryDirectory() as d:
+        store = SQLiteEvidenceStore(os.path.join(d, "ev.sqlite"))
+        host = LocalCapabilityHost("conf-sign", store=store)
+
+        async def echo(_ctx, payload):
+            return {"echo": payload.get("value")}
+
+        host.register(CapabilityDescriptor(id="conf.sign.echo", version="1.0.0", description=""), echo)
+        await host.ainvoke("conf.sign.echo", {"value": "v"}, correlation={"correlation_id": "cs"})
+
+        key = signing.generate_keypair(os.path.join(d, "keys"))
+        events = store.export_correlation("cs")
+        bundle = signing.sign_bundle(signing.build_bundle("conf-sign", events, created_at="2026-01-01T00:00:00Z"), key)
+        store.close()
+
+        assert signing.verify_bundle(bundle, expected_key_id=key.key_id).valid, "signed bundle must verify"
+        tampered = dict(bundle)
+        tampered["events"] = [dict(e) for e in bundle["events"]]
+        tampered["events"][0]["payload"] = {"value": "TAMPERED"}
+        assert not signing.verify_bundle(tampered).valid, "tampered bundle must fail verification"
+
+
+async def check_strict_verify_rejects_unhashed(_host: Any) -> None:
+    """v0.2: strict verification fails on a legacy unhashed event; lenient tolerates it."""
+    import tempfile, os
+    from chp_core import SQLiteEvidenceStore
+
+    with tempfile.TemporaryDirectory() as d:
+        store = SQLiteEvidenceStore(os.path.join(d, "ev.sqlite"))
+        with store._lock:
+            store._conn.execute("INSERT INTO evidence_sequence DEFAULT VALUES")
+            store._conn.execute(
+                "INSERT INTO evidence_events (sequence,event_id,event_type,invocation_id,"
+                "capability_id,host_id,correlation_id,timestamp,payload_json,event_json,"
+                "content_hash,prev_hash) VALUES (1,'e','execution_started','i','c','h','cx','t','{}','{}',NULL,NULL)"
+            )
+            store._conn.commit()
+        assert store.verify_chain("cx").valid, "lenient must tolerate legacy unhashed events"
+        assert not store.verify_chain("cx", strict=True).valid, "strict must reject unhashed events"
+        store.close()
+
+
+async def check_retention_preserves_chain(_host: Any) -> None:
+    """v0.2: retention prunes whole old correlations without breaking a survivor's chain."""
+    import tempfile, os
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core.compliance import SQLiteComplianceManager
+    from chp_core.types import RetentionPolicy
+
+    with tempfile.TemporaryDirectory() as d:
+        store = SQLiteEvidenceStore(os.path.join(d, "ev.sqlite"))
+        host = LocalCapabilityHost("conf-ret", store=store)
+
+        async def noop(_ctx, _p):
+            return {"ok": True}
+
+        host.register(CapabilityDescriptor(id="conf.ret.noop", version="1.0.0", description=""), noop)
+        for cid in ("old", "keep"):
+            await host.ainvoke("conf.ret.noop", {}, correlation={"correlation_id": cid})
+            await host.ainvoke("conf.ret.noop", {}, correlation={"correlation_id": cid})
+        with store._lock:
+            store._conn.execute("UPDATE evidence_events SET timestamp='2020-01-01T00:00:00Z' WHERE correlation_id='old'")
+            store._conn.commit()
+
+        SQLiteComplianceManager(store).apply_retention([
+            RetentionPolicy(policy_id="p", applies_to=["*"], retain_days=365)
+        ])
+        assert store.count_by_correlation("old") == 0, "fully-old correlation must be pruned"
+        assert store.count_by_correlation("keep") == 4, "recent correlation must survive intact"
+        assert store.verify_chain("keep").valid, "survivor chain must still verify after prune"
+        store.close()
+
+
+async def check_approval_required_governance(host: Any) -> None:
+    """v0.2 governance (chp-governance-v0.2.md §4.1): a capability whose autonomy
+    tier is 'approval_required' is denied with the reserved code
+    'approval_required', emits 'approval_requested' BEFORE denying, and does NOT
+    start execution. The human-in-the-loop differentiator — guarded so a host
+    can't silently drop the approval evidence and still claim conformance.
+    Uses the fixture profile's conformance.approval, so it holds black-box too."""
+    result = await invoke_host(
+        host, "conformance.approval", {}, correlation={"correlation_id": "conf-approval-001"}
+    )
+    assert not result_value(result, "success"), f"approval-gated must be denied: {result}"
+    assert result_value(result, "outcome") == "denied", (
+        f"expected 'denied', got {result_value(result, 'outcome')!r}"
+    )
+    denial = result_value(result, "denial")
+    code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
+    assert code == "approval_required", f"expected 'approval_required', got {code!r}"
+    types = [e["event_type"] for e in host.replay("conf-approval-001")]
+    assert "approval_requested" in types, f"approval_requested not emitted: {types}"
+    assert "execution_started" not in types, "gated capability must not begin execution"
+
+
+async def check_budget_exceeded_governance(host: Any) -> None:
+    """v0.2 governance (§4.1): once an autonomy action_limit is exhausted, further
+    invocations on that correlation are denied with the reserved code
+    'budget_exceeded' and a 'budget_exceeded' event — the autonomy-budget
+    differentiator. The invocation before the limit still succeeds. Uses the
+    fixture profile's conformance.budgeted (action_limit=1)."""
+    corr = {"correlation_id": "conf-budget-001"}
+    first = await invoke_host(host, "conformance.budgeted", {}, correlation=corr)
+    assert result_value(first, "success"), f"first invocation (within budget) must succeed: {first}"
+    second = await invoke_host(host, "conformance.budgeted", {}, correlation=corr)
+    assert not result_value(second, "success"), f"over-budget invocation must be denied: {second}"
+    assert result_value(second, "outcome") == "denied", (
+        f"expected 'denied', got {result_value(second, 'outcome')!r}"
+    )
+    denial = result_value(second, "denial")
+    code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
+    assert code == "budget_exceeded", f"expected 'budget_exceeded', got {code!r}"
+    types = [e["event_type"] for e in host.replay("conf-budget-001")]
+    assert "budget_exceeded" in types, f"budget_exceeded event not emitted: {types}"
+
+
+async def check_risk_tier_governance(host: Any) -> None:
+    """v0.2 governance (chp-governance-v0.2.md §3): a capability whose risk tier
+    orders above the host's max_risk_tier is denied with the reserved code
+    'policy_blocked'. The risk-tier differentiator — guarded. Uses the fixture
+    profile's conformance.risky ('high') against a host capped at 'medium'."""
+    result = await invoke_host(
+        host, "conformance.risky", {}, correlation={"correlation_id": "conf-risk-001"}
+    )
+    assert not result_value(result, "success"), f"over-tier capability must be denied: {result}"
+    assert result_value(result, "outcome") == "denied", (
+        f"expected 'denied', got {result_value(result, 'outcome')!r}"
+    )
+    denial = result_value(result, "denial")
+    code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
+    assert code == "policy_blocked", f"expected 'policy_blocked', got {code!r}"
+    types = [e["event_type"] for e in host.replay("conf-risk-001")]
+    assert "execution_started" not in types, "over-tier capability must not begin execution"
+
+
+async def check_safety_governance(host: Any) -> None:
+    """v0.2 governance (chp-governance-v0.2.md §4.2): with a safety evaluator
+    configured, an invocation a guardrail blocks is denied with the reserved
+    'safety_blocked' code, records the assessment pair (started/completed) and
+    safety_action_blocked, and never starts execution. The safety differentiator
+    — a signed safety verdict on the governed plane, guarded. Uses the fixture
+    profile's conformance.unsafe."""
+    result = await invoke_host(
+        host, "conformance.unsafe", {}, correlation={"correlation_id": "conf-safety-001"}
+    )
+    assert not result_value(result, "success"), f"guardrail-blocked must be denied: {result}"
+    assert result_value(result, "outcome") == "denied", (
+        f"expected 'denied', got {result_value(result, 'outcome')!r}"
+    )
+    denial = result_value(result, "denial")
+    code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
+    assert code == "safety_blocked", f"expected 'safety_blocked', got {code!r}"
+    types = [e["event_type"] for e in host.replay("conf-safety-001")]
+    for required in ("safety_assessment_started", "safety_assessment_completed",
+                     "safety_action_blocked"):
+        assert required in types, f"missing {required}: {types}"
+    assert "execution_started" not in types, "blocked capability must not begin execution"
+
+
+async def check_wire_verify(host: Any) -> None:
+    """v0.2 over the wire: after an invocation, GET /verify/{corr} confirms the
+    host's own chain is intact (or, in gateway mode, says so honestly)."""
+    corr = "conf-wire-verify"
+    await invoke_host(host, "conformance.echo", {"value": "v"}, correlation={"correlation_id": corr})
+    result = host.verify(corr)
+    if "valid" in result:
+        assert result["valid"] is True, f"host /verify reported an invalid chain: {result}"
+    else:
+        # Gateway mode: no local store — must say so, not claim validity.
+        assert "note" in result, f"/verify returned neither 'valid' nor a gateway 'note': {result}"
+
+
+# The NORMATIVE suite = the spec's MUST behaviors. Passing THIS is what
+# "spec-conformant CHP host" means — it does NOT require shipping the reference
+# capability library. (Previously the two were mixed, so a spec-perfect host
+# that omitted the reference RAG/graph/workflow capabilities failed ~half the
+# runner. That redefined "conforming" as "ships our library"; this split undoes
+# it.) See spec/chp-v0.1.md §11 + chp-v0.2.md.
+NORMATIVE_CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
     ("invocation through envelope", check_invocation_envelope),
@@ -1220,6 +1462,24 @@ CHECKS: list[tuple[str, Check]] = [
     ("evidence emission on failure", check_failure_evidence),
     ("evidence emission on denial", check_denial_evidence),
     ("replay by correlation id", check_replay_by_correlation),
+    ("identity propagation", check_identity_propagation),
+    ("standard denial codes", check_standard_denial_codes),
+    ("input schema validation", check_input_schema_validation),
+    ("approval-required governance (v0.2)", check_approval_required_governance),
+    ("budget-exceeded governance (v0.2)", check_budget_exceeded_governance),
+    ("risk-tier governance (v0.2)", check_risk_tier_governance),
+    ("safety-guardrail governance (v0.2)", check_safety_governance),
+    ("sqlite persistence", check_persistence),
+    ("evidence hash chain", check_evidence_hash_chain),
+    ("signed evidence bundle (v0.2)", check_signed_evidence_bundle),
+    ("strict verify rejects unhashed (v0.2)", check_strict_verify_rejects_unhashed),
+    ("retention preserves chain (v0.2)", check_retention_preserves_chain),
+]
+
+# The REFERENCE suite exercises the bundled reference capability library. These
+# are NOT protocol MUSTs — a conforming host need not ship them. They gate the
+# reference implementation's quality, not spec conformance.
+REFERENCE_CHECKS: list[tuple[str, Check]] = [
     ("pre-tool governance", check_pretool_governance),
     ("retrieval capability", check_retrieval_capability),
     ("ingestion capability", check_ingestion_capability),
@@ -1230,18 +1490,46 @@ CHECKS: list[tuple[str, Check]] = [
     ("metrics report", check_metrics_report),
     ("certification", check_certification),
     ("version control capability", check_version_control_capability),
-    ("identity propagation", check_identity_propagation),
     ("composability declaration", check_composability_declaration),
     ("state machine capability", check_state_machine_capability),
     ("agent interface", check_agent_interface),
     ("safety capability", check_safety_capability),
     ("compliance capability", check_compliance_capability),
     ("incident capability", check_incident_capability),
-    ("sqlite persistence", check_persistence),
-    ("standard denial codes", check_standard_denial_codes),
-    ("input schema validation", check_input_schema_validation),
-    ("evidence hash chain", check_evidence_hash_chain),
 ]
+
+# The WIRE suite = the normative behaviours observable over the HTTP binding
+# (spec/chp-http-binding.md §5), driving a running host through the reference
+# RemoteCapabilityHost client. It's the subset of NORMATIVE_CHECKS that needs
+# only the wire surface (discover / invoke / replay / verify) — the checks that
+# reach into a local SQLite store can't run black-box. A host-under-test
+# pre-registers the fixture profile (conformance.echo/fail/guarded).
+WIRE_CHECKS: list[tuple[str, Check]] = [
+    ("capability declaration", check_declaration),
+    ("capability discovery", check_discovery),
+    ("invocation through envelope", check_invocation_envelope),
+    ("correlation propagation", check_correlation_propagation),
+    ("evidence emission on success", check_success_evidence),
+    ("evidence emission on failure", check_failure_evidence),
+    ("evidence emission on denial", check_denial_evidence),
+    ("replay by correlation id", check_replay_by_correlation),
+    ("standard denial codes", check_standard_denial_codes),
+    ("approval-required governance (v0.2)", check_approval_required_governance),
+    ("budget-exceeded governance (v0.2)", check_budget_exceeded_governance),
+    ("risk-tier governance (v0.2)", check_risk_tier_governance),
+    ("safety-guardrail governance (v0.2)", check_safety_governance),
+    ("chain verification over /verify", check_wire_verify),
+]
+
+SUITES: dict[str, list[tuple[str, Check]]] = {
+    "normative": NORMATIVE_CHECKS,
+    "reference": REFERENCE_CHECKS,
+    "wire": WIRE_CHECKS,
+    "all": NORMATIVE_CHECKS + REFERENCE_CHECKS,
+}
+
+# Back-compat: existing callers importing CHECKS get the full run.
+CHECKS: list[tuple[str, Check]] = SUITES["all"]
 
 
 SAMPLE_HOSTS = {
@@ -1252,21 +1540,39 @@ SAMPLE_HOSTS = {
 }
 
 
-async def run(sample: str) -> list[CheckResult]:
-    builder = SAMPLE_HOSTS.get(sample)
-    if builder is None:
-        raise ValueError(f"unknown sample host: {sample!r}. Choices: {list(SAMPLE_HOSTS)}")
-    host_or_coro = builder()
-    host = await host_or_coro if hasattr(host_or_coro, "__await__") else host_or_coro
-
+async def _run_checks(host: Any, checks: list[tuple[str, Check]]) -> list[CheckResult]:
     results = []
-    for name, check in CHECKS:
+    for name, check in checks:
         try:
             await check(host)
             results.append(CheckResult(name, True))
         except Exception as exc:  # noqa: BLE001
             results.append(CheckResult(name, False, str(exc) or exc.__class__.__name__))
     return results
+
+
+async def run(sample: str, suite: str = "all") -> list[CheckResult]:
+    builder = SAMPLE_HOSTS.get(sample)
+    if builder is None:
+        raise ValueError(f"unknown sample host: {sample!r}. Choices: {list(SAMPLE_HOSTS)}")
+    checks = SUITES.get(suite)
+    if checks is None:
+        raise ValueError(f"unknown suite: {suite!r}. Choices: {list(SUITES)}")
+    host_or_coro = builder()
+    host = await host_or_coro if hasattr(host_or_coro, "__await__") else host_or_coro
+    return await _run_checks(host, checks)
+
+
+async def run_url(base_url: str, *, api_key: str | None = None,
+                  suite: str = "wire") -> list[CheckResult]:
+    """Black-box: drive a running host over HTTP through RemoteCapabilityHost."""
+    from chp_core.http import RemoteCapabilityHost
+
+    checks = SUITES.get(suite)
+    if checks is None:
+        raise ValueError(f"unknown suite: {suite!r}. Choices: {list(SUITES)}")
+    host = RemoteCapabilityHost(base_url, api_key=api_key)
+    return await _run_checks(host, checks)
 
 
 def main() -> int:
@@ -1277,14 +1583,43 @@ def main() -> int:
         default="passing",
         help="Built-in sample host to test against.",
     )
+    parser.add_argument(
+        "--suite",
+        choices=list(SUITES),
+        default="all",
+        help="normative = spec MUSTs (defines conformance); reference = bundled "
+             "capability library; wire = black-box HTTP checks (--url); all = "
+             "normative + reference (default).",
+    )
+    parser.add_argument(
+        "--url",
+        default=None,
+        help="Black-box: base URL of a running host to test over HTTP "
+             "(spec/chp-http-binding.md). Defaults --suite to 'wire'.",
+    )
+    parser.add_argument(
+        "--key",
+        default=os.environ.get("CHP_HOST_API_KEY"),
+        help="X-CHP-Key for the black-box host (or set CHP_HOST_API_KEY).",
+    )
     args = parser.parse_args()
 
-    results = asyncio.run(run(args.sample))
+    if args.url:
+        suite = args.suite if args.suite != "all" else "wire"
+        results = asyncio.run(run_url(args.url, api_key=args.key, suite=suite))
+    else:
+        results = asyncio.run(run(args.sample, args.suite))
     for result in results:
         status = "PASS" if result.ok else "FAIL"
         suffix = f" - {result.detail}" if result.detail else ""
         print(f"{status} {result.name}{suffix}")
 
+    if args.url:
+        print(f"\n[wire] {sum(r.ok for r in results)}/{len(results)} black-box HTTP checks "
+              f"against {args.url}")
+    if args.suite == "normative":
+        print(f"\n[normative] {sum(r.ok for r in results)}/{len(results)} spec MUST checks "
+              "— this is what spec-conformance means (reference library not required).")
     return 0 if all(result.ok for result in results) else 1
 
 

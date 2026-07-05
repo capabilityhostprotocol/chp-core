@@ -398,19 +398,16 @@ def register_knowledge_graph_capability(host: Any, kg: KnowledgeGraphCapability)
         label: str | None = payload.get("label")
         properties: dict = payload.get("properties") or {}
 
-        ctx.emit("execution_started", {"capability_id": add_entity_desc.id, "capability_version": version}, redacted=False)
         try:
             record = kg.add_entity(entity_id, entity_type, label=label, properties=properties)
         except Exception as exc:
             ctx.emit("graph_operation_failed", {"error": str(exc), "operation": "add_entity"}, redacted=False)
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
         ctx.emit("graph_entity_added", {
             "entity_id": record.entity_id,
             "entity_type": record.entity_type,
             "label": record.label,
         }, redacted=False)
-        ctx.emit("execution_completed", {"capability_id": add_entity_desc.id, "outcome": "success"}, redacted=False)
         return record.to_dict()
 
     host.register(add_entity_desc, _add_entity)
@@ -432,19 +429,16 @@ def register_knowledge_graph_capability(host: Any, kg: KnowledgeGraphCapability)
         relation_type: str = payload.get("relation_type", "related_to")
         properties: dict = payload.get("properties") or {}
 
-        ctx.emit("execution_started", {"capability_id": add_relation_desc.id, "capability_version": version}, redacted=False)
         try:
             record = kg.add_relation(from_id, to_id, relation_type, properties=properties)
         except Exception as exc:
             ctx.emit("graph_operation_failed", {"error": str(exc), "operation": "add_relation"}, redacted=False)
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
         ctx.emit("graph_relation_added", {
             "from_entity_id": record.from_entity_id,
             "to_entity_id": record.to_entity_id,
             "relation_type": record.relation_type,
         }, redacted=False)
-        ctx.emit("execution_completed", {"capability_id": add_relation_desc.id, "outcome": "success"}, redacted=False)
         return record.to_dict()
 
     host.register(add_relation_desc, _add_relation)
@@ -464,19 +458,16 @@ def register_knowledge_graph_capability(host: Any, kg: KnowledgeGraphCapability)
         entity_type: str | None = payload.get("entity_type")
         limit: int | None = payload.get("limit")
 
-        ctx.emit("execution_started", {"capability_id": query_desc.id, "capability_version": version}, redacted=False)
         try:
             result = kg.query_entities(entity_type=entity_type, limit=limit)
         except Exception as exc:
             ctx.emit("graph_operation_failed", {"error": str(exc), "operation": "query_entities"}, redacted=False)
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
         ctx.emit("graph_queried", {
             "entity_type": entity_type,
             "entity_count": result.entity_count,
             "latency_ms": result.latency_ms,
         }, redacted=False)
-        ctx.emit("execution_completed", {"capability_id": query_desc.id, "outcome": "success"}, redacted=False)
         return result.to_dict()
 
     host.register(query_desc, _query_entities)
@@ -498,12 +489,10 @@ def register_knowledge_graph_capability(host: Any, kg: KnowledgeGraphCapability)
         direction: str = payload.get("direction", "outgoing")
         depth: int = int(payload.get("depth", 1))
 
-        ctx.emit("execution_started", {"capability_id": traverse_desc.id, "capability_version": version}, redacted=False)
         try:
             result = kg.traverse(start_id, relation_type=relation_type, direction=direction, depth=depth)
         except Exception as exc:
             ctx.emit("graph_operation_failed", {"error": str(exc), "operation": "traverse"}, redacted=False)
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
         ctx.emit("graph_traversed", {
             "start_id": start_id,
@@ -512,7 +501,6 @@ def register_knowledge_graph_capability(host: Any, kg: KnowledgeGraphCapability)
             "entity_count": result.entity_count,
             "latency_ms": result.latency_ms,
         }, redacted=False)
-        ctx.emit("execution_completed", {"capability_id": traverse_desc.id, "outcome": "success"}, redacted=False)
         return result.to_dict()
 
     host.register(traverse_desc, _traverse)

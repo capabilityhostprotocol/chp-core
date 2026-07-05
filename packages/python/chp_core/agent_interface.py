@@ -1,7 +1,8 @@
-"""Agent interface serialization for CHP v0.5.0 (§7.2).
+"""Agent interface serialization for CHP.
 
 Converts CapabilityDescriptor objects into tool call formats used by
-AI agent frameworks (Anthropic and OpenAI).
+AI agent frameworks (Anthropic and OpenAI). Cost/safety hints on the
+descriptor are described in spec/chp-governance-v0.2.md.
 """
 
 from __future__ import annotations

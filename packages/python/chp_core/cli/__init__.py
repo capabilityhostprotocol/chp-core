@@ -7,9 +7,12 @@ import argparse
 from ..work import DEFAULT_WORK_STORE
 from ._core import (
     cmd_demo_endpoint,
+    cmd_export_evidence,
     cmd_host,
     cmd_invoke,
+    cmd_keygen,
     cmd_replay,
+    cmd_retention_apply,
     cmd_serve_demo,
     cmd_validate_contract,
     cmd_verify_evidence,
@@ -51,6 +54,7 @@ from ._session import (
     cmd_session_list,
     cmd_session_metrics_report,
     cmd_session_otel,
+    cmd_session_prov,
     cmd_session_replay,
     cmd_session_retrieval_report,
     cmd_session_show,
@@ -459,6 +463,11 @@ def build_parser() -> argparse.ArgumentParser:
     session_otel_p.add_argument("--dry-run", action="store_true", help="Print spans as JSON instead of exporting.")
     session_otel_p.set_defaults(func=cmd_session_otel)
 
+    session_prov_p = session_sub.add_parser("prov", help="Export a session as W3C PROV-JSON (signed, governed provenance).")
+    session_prov_p.add_argument("session_id")
+    session_prov_p.add_argument("--store", default=None)
+    session_prov_p.set_defaults(func=cmd_session_prov)
+
     session_export_p = session_sub.add_parser("export", help="Export a session as a portable JSON bundle.")
     session_export_p.add_argument("session_id")
     session_export_p.add_argument("--store", default=None)
@@ -596,10 +605,38 @@ def build_parser() -> argparse.ArgumentParser:
     delegation_show_p.add_argument("--store", default=None)
     delegation_show_p.set_defaults(func=cmd_delegation_show)
 
-    verify_p = subcommands.add_parser("verify-evidence", help="Verify the SHA256 hash chain for a session.")
-    verify_p.add_argument("session_id")
+    verify_p = subcommands.add_parser("verify-evidence", help="Verify an evidence chain (strict) or a signed bundle.")
+    verify_p.add_argument("session_id", nargs="?", help="Correlation/session ID to chain-verify.")
     verify_p.add_argument("--store", default=None)
+    verify_p.add_argument("--lenient", action="store_true", help="Tolerate legacy unhashed events (default: strict).")
+    verify_p.add_argument("--bundle", default=None, metavar="PATH", help="Verify an exported bundle JSON instead.")
+    verify_p.add_argument("--expect-key", default=None, dest="expect_key", metavar="KEY_ID",
+                          help="Pin the signer: reject a bundle signed by any other key.")
     verify_p.set_defaults(func=cmd_verify_evidence)
+
+    retention_p = subcommands.add_parser("retention", help="Apply evidence retention (chain-preserving).")
+    retention_sub = retention_p.add_subparsers(dest="retention_command", required=True)
+    retention_apply_p = retention_sub.add_parser("apply", help="Apply retention policies from a config file.")
+    retention_apply_p.add_argument("--config", required=True, metavar="PATH")
+    retention_apply_p.add_argument("--store", default=None)
+    retention_apply_p.add_argument("--dry-run", action="store_true")
+    retention_apply_p.add_argument("--vacuum", action="store_true", help="Compact the store after pruning.")
+    retention_apply_p.set_defaults(func=cmd_retention_apply)
+
+    keygen_p = subcommands.add_parser("keygen", help="Generate a host ed25519 signing keypair.")
+    keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
+    keygen_p.add_argument("--overwrite", action="store_true", help="Replace an existing key.")
+    keygen_p.set_defaults(func=cmd_keygen)
+
+    export_p = subcommands.add_parser("export-evidence", help="Export a correlation as a (signed) evidence bundle.")
+    export_p.add_argument("session_id", help="Correlation/session ID to export.")
+    export_p.add_argument("--store", default=None)
+    export_p.add_argument("--out", default=None, metavar="PATH", help="Write bundle to a file.")
+    export_p.add_argument("--host-id", default="local-chp-host", dest="host_id")
+    export_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
+    export_p.add_argument("--sign", action="store_true", help="Require signing (error if no key).")
+    export_p.add_argument("--no-sign", action="store_true", help="Export unsigned (hash-chain tier).")
+    export_p.set_defaults(func=cmd_export_evidence)
 
     # --- policy group ---
     policy_p = subcommands.add_parser("policy", help="Validate and lint CHP policy files.")

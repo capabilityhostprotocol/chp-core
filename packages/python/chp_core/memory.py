@@ -129,16 +129,10 @@ def register_memory_capability(host: "LocalCapabilityHost", memory: MemoryCapabi
         key = str(payload.get("key", ""))
         scope: MemoryScope = payload.get("scope", "session")
         scope_id: str = payload.get("scope_id", "")
-        ctx.emit("execution_started", {"capability_id": "memory.get"}, redacted=False)
-        try:
-            value = memory.get(key, scope=scope, scope_id=scope_id)
-            found = value is not None
-            ctx.emit("memory_read", {"key": key, "scope": scope, "scope_id": scope_id, "found": found}, redacted=False)
-            ctx.emit("execution_completed", {"outcome": "success"}, redacted=False)
-            return {"value": value, "found": found}
-        except Exception as exc:
-            ctx.emit("execution_failed", {"reason": str(exc), "exception_type": type(exc).__name__}, redacted=False)
-            raise
+        value = memory.get(key, scope=scope, scope_id=scope_id)
+        found = value is not None
+        ctx.emit("memory_read", {"key": key, "scope": scope, "scope_id": scope_id, "found": found}, redacted=False)
+        return {"value": value, "found": found}
 
     # ── memory.set ────────────────────────────────────────────────────────────
     async def _set(ctx: Any, payload: JSON) -> JSON:
@@ -146,44 +140,26 @@ def register_memory_capability(host: "LocalCapabilityHost", memory: MemoryCapabi
         value = payload.get("value")
         scope: MemoryScope = payload.get("scope", "session")
         scope_id: str = payload.get("scope_id", "")
-        ctx.emit("execution_started", {"capability_id": "memory.set"}, redacted=False)
-        try:
-            memory.set(key, value, scope=scope, scope_id=scope_id)
-            serialized_len = len(json.dumps(value).encode())
-            ctx.emit("memory_written", {"key": key, "scope": scope, "scope_id": scope_id, "bytes_written": serialized_len}, redacted=False)
-            ctx.emit("execution_completed", {"outcome": "success"}, redacted=False)
-            return {"key": key, "scope": scope}
-        except Exception as exc:
-            ctx.emit("execution_failed", {"reason": str(exc), "exception_type": type(exc).__name__}, redacted=False)
-            raise
+        memory.set(key, value, scope=scope, scope_id=scope_id)
+        serialized_len = len(json.dumps(value).encode())
+        ctx.emit("memory_written", {"key": key, "scope": scope, "scope_id": scope_id, "bytes_written": serialized_len}, redacted=False)
+        return {"key": key, "scope": scope}
 
     # ── memory.delete ─────────────────────────────────────────────────────────
     async def _delete(ctx: Any, payload: JSON) -> JSON:
         key = str(payload.get("key", ""))
         scope: MemoryScope = payload.get("scope", "session")
         scope_id: str = payload.get("scope_id", "")
-        ctx.emit("execution_started", {"capability_id": "memory.delete"}, redacted=False)
-        try:
-            existed = memory.delete(key, scope=scope, scope_id=scope_id)
-            ctx.emit("memory_deleted", {"key": key, "scope": scope, "scope_id": scope_id, "existed": existed}, redacted=False)
-            ctx.emit("execution_completed", {"outcome": "success"}, redacted=False)
-            return {"key": key, "existed": existed}
-        except Exception as exc:
-            ctx.emit("execution_failed", {"reason": str(exc), "exception_type": type(exc).__name__}, redacted=False)
-            raise
+        existed = memory.delete(key, scope=scope, scope_id=scope_id)
+        ctx.emit("memory_deleted", {"key": key, "scope": scope, "scope_id": scope_id, "existed": existed}, redacted=False)
+        return {"key": key, "existed": existed}
 
     # ── memory.list ───────────────────────────────────────────────────────────
     async def _list(ctx: Any, payload: JSON) -> JSON:
         scope: MemoryScope = payload.get("scope", "session")
         scope_id: str = payload.get("scope_id", "")
-        ctx.emit("execution_started", {"capability_id": "memory.list"}, redacted=False)
-        try:
-            keys = memory.list(scope=scope, scope_id=scope_id)
-            ctx.emit("execution_completed", {"outcome": "success"}, redacted=False)
-            return {"keys": keys, "count": len(keys)}
-        except Exception as exc:
-            ctx.emit("execution_failed", {"reason": str(exc), "exception_type": type(exc).__name__}, redacted=False)
-            raise
+        keys = memory.list(scope=scope, scope_id=scope_id)
+        return {"keys": keys, "count": len(keys)}
 
     _memory_emits = _MEMORY_EMITS + ["memory_read"]
     _write_emits = _MEMORY_EMITS + ["memory_written"]

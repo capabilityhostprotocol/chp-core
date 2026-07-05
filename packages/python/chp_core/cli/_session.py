@@ -173,7 +173,9 @@ def cmd_session_otel(args: argparse.Namespace) -> int:
     store_path = _resolve_store(args.store)
     store = SQLiteEvidenceStore(store_path)
     try:
-        events = store.by_correlation(args.session_id)
+        # export_correlation attaches content_hash/prev_hash so the OTel spans
+        # carry the tamper-evidence anchor (signed OTel, not plain OTel).
+        events = store.export_correlation(args.session_id)
     finally:
         store.close()
 
@@ -194,6 +196,28 @@ def cmd_session_otel(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"OTLP export failed: {exc}", file=sys.stderr)
         return 1
+
+
+def cmd_session_prov(args: argparse.Namespace) -> int:
+    import sys
+    from ..prov import replay_to_prov
+    from ..store import SQLiteEvidenceStore
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        # export_correlation attaches content_hash so the PROV entities carry the
+        # tamper-evidence anchor (signed, governed provenance — not plain PROV).
+        events = store.export_correlation(args.session_id)
+    finally:
+        store.close()
+
+    if not events:
+        print(f"No events found for session: {args.session_id}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(replay_to_prov(events), indent=2))
+    return 0
 
 
 def cmd_session_autonomy_report(args: argparse.Namespace) -> int:

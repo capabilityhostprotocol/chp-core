@@ -256,11 +256,6 @@ def register_event_bus_capability(host: Any, bus: EventBusCapability) -> None:
         data: dict[str, Any] = payload.get("data") or {}
         correlation_id: str | None = payload.get("correlation_id")
 
-        ctx.emit(
-            "execution_started",
-            {"capability_id": emit_desc.id, "capability_version": version},
-            redacted=False,
-        )
         try:
             record = bus.emit_event(
                 event_type, source, data, correlation_id=correlation_id
@@ -271,7 +266,6 @@ def register_event_bus_capability(host: Any, bus: EventBusCapability) -> None:
                 {"error": str(exc), "operation": "emit"},
                 redacted=False,
             )
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
         ctx.emit(
             "domain_event_emitted",
@@ -281,11 +275,6 @@ def register_event_bus_capability(host: Any, bus: EventBusCapability) -> None:
                 "source": record.source,
                 "data_hash": record.data_hash,
             },
-            redacted=False,
-        )
-        ctx.emit(
-            "execution_completed",
-            {"capability_id": emit_desc.id, "outcome": "success"},
             redacted=False,
         )
         return record.to_dict()
@@ -308,11 +297,6 @@ def register_event_bus_capability(host: Any, bus: EventBusCapability) -> None:
         source: str | None = payload.get("source")
         limit: int | None = payload.get("limit")
 
-        ctx.emit(
-            "execution_started",
-            {"capability_id": query_desc.id, "capability_version": version},
-            redacted=False,
-        )
         try:
             result = bus.query_events(event_type=event_type, source=source, limit=limit)
         except Exception as exc:
@@ -321,7 +305,6 @@ def register_event_bus_capability(host: Any, bus: EventBusCapability) -> None:
                 {"error": str(exc), "operation": "query"},
                 redacted=False,
             )
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
         ctx.emit(
             "domain_events_queried",
@@ -330,11 +313,6 @@ def register_event_bus_capability(host: Any, bus: EventBusCapability) -> None:
                 "source_filter": source,
                 "event_count": result.event_count,
             },
-            redacted=False,
-        )
-        ctx.emit(
-            "execution_completed",
-            {"capability_id": query_desc.id, "outcome": "success"},
             redacted=False,
         )
         return result.to_dict()

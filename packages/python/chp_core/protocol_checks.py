@@ -226,6 +226,65 @@ def check_alignment(repo_root: Path) -> JSON:
         {"forbidden": ["CapabilityHostDescriptor", "ExecutionEvidenceEvent"]},
     )
 
+    # Published canonicalization vectors must still match what the code produces.
+    # Non-Python verifiers pin these bytes; silent drift breaks cross-language interop.
+    vec_dir = repo_root / "spec" / "test-vectors"
+    if (vec_dir / "expected.json").exists():
+        try:
+            from .store import _compute_event_hash
+
+            exp = read_json(vec_dir / "expected.json")
+            ev = read_json(vec_dir / "event.json")["event"]
+            recomputed = _compute_event_hash(ev, None)
+            add_check(
+                checks,
+                "canonicalization_vectors_match",
+                recomputed == exp["event_content_hash"],
+                {"expected": exp["event_content_hash"], "recomputed": recomputed,
+                 "hint": "canonicalization changed — regenerate spec/test-vectors/"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "canonicalization_vectors_match", False, {"error": str(exc)})
+
+    # Governance vocabulary: the reserved denial registry, the schema examples,
+    # the codes the runtime actually emits, and the normative spec MUST agree.
+    from .types import DenialReason
+
+    reserved = DenialReason.RESERVED_CODES
+    host_src = read_text(repo_root / "packages" / "python" / "chp_core" / "host.py")
+    emitted = set(re.findall(r'code="([a-z_]+)"', host_src)) | set(
+        re.findall(r'"code": "([a-z_]+)"', host_src))
+    add_check(
+        checks,
+        "denial_codes_runtime_reserved",
+        emitted <= reserved,
+        {"emitted_not_reserved": sorted(emitted - reserved), "hint":
+         "host.py emits a bare code missing from DenialReason.RESERVED_CODES"},
+    )
+    denial_schema = read_json(repo_root / "schemas" / "denial-reason.schema.json")
+    schema_examples = set(denial_schema["properties"]["code"].get("examples", []))
+    add_check(
+        checks,
+        "denial_codes_schema_reserved",
+        schema_examples == reserved,
+        {"schema_only": sorted(schema_examples - reserved),
+         "reserved_only": sorted(reserved - schema_examples)},
+    )
+    gov = read_text(repo_root / "spec" / "chp-governance-v0.2.md")
+    add_check(
+        checks,
+        "governance_spec_names_denial_codes",
+        all(f"`{c}`" in gov for c in reserved),
+        {"missing": sorted(c for c in reserved if f"`{c}`" not in gov)},
+    )
+    add_check(
+        checks,
+        "governance_spec_names_risk_tiers",
+        all(f"`{t}`" in gov for t in ("low", "medium", "high", "critical"))
+        and "RISK_ORDER" in gov,
+        {"path": "spec/chp-governance-v0.2.md"},
+    )
+
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
 
@@ -248,9 +307,13 @@ def check_messaging(repo_root: Path) -> JSON:
 
     add_check(
         checks,
-        "readme_evidence_first_positioning",
-        "visible, replayable, and ready for governance" in readme
-        and "See what your agents and tools actually did." in readme,
+        "readme_governed_plane_positioning",
+        # Guard the reinforced positioning: the governed, signed evidence PLANE
+        # (not the old undersold "execution evidence layer"), while keeping the
+        # "see what your agents did" hook.
+        "the single signed plane" in readme
+        and "governed evidence plane" in readme
+        and "See what your agents and tools actually did" in readme,
         {"path": "README.md"},
     )
     add_check(

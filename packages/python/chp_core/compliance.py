@@ -48,13 +48,25 @@ class SQLiteComplianceManager:
                         cutoff = datetime.now(timezone.utc) - timedelta(days=policy.retain_days)
                         cutoff_str = cutoff.isoformat().replace("+00:00", "Z")
 
+                        # Prune WHOLE correlations whose newest event is past the
+                        # cutoff — never individual events, which would leave a
+                        # survivor's prev_hash pointing at a deleted row and break
+                        # verify_chain. A fully-removed correlation can't split a
+                        # chain. (ponytail: whole-correlation granularity; add a
+                        # checkpoint table only if partial pruning is ever needed.)
                         if pattern == "*":
-                            sql = "DELETE FROM evidence_events WHERE timestamp < ?"
+                            sql = (
+                                "DELETE FROM evidence_events WHERE correlation_id IN ("
+                                "  SELECT correlation_id FROM evidence_events "
+                                "  GROUP BY correlation_id HAVING MAX(timestamp) < ?)"
+                            )
                             params: list = [cutoff_str]
                         else:
                             sql = (
-                                "DELETE FROM evidence_events "
-                                "WHERE timestamp < ? AND capability_id GLOB ?"
+                                "DELETE FROM evidence_events WHERE correlation_id IN ("
+                                "  SELECT correlation_id FROM evidence_events "
+                                "  GROUP BY correlation_id "
+                                "  HAVING MAX(timestamp) < ? AND SUM(capability_id GLOB ?) > 0)"
                             )
                             params = [cutoff_str, pattern]
                         cursor = self._store._conn.execute(sql, params)
@@ -66,12 +78,16 @@ class SQLiteComplianceManager:
                             - timedelta(days=policy.redact_payload_after_days)
                         )
                         redact_str = redact_cutoff.isoformat().replace("+00:00", "Z")
-                        empty = "{}"
+                        # Redaction rewrites the payload, so the stored content_hash
+                        # no longer matches — NULL it (event becomes honestly
+                        # `unverified` in verify_chain) rather than leaving a hash
+                        # that fails as if tampered.
                         if pattern == "*":
                             sql = (
                                 "UPDATE evidence_events "
                                 "SET payload_json = '{}', "
-                                "event_json = json_set(event_json, '$.payload', json('{}')) "
+                                "event_json = json_set(event_json, '$.payload', json('{}')), "
+                                "content_hash = NULL "
                                 "WHERE timestamp < ? AND payload_json != '{}'"
                             )
                             params = [redact_str]
@@ -79,12 +95,12 @@ class SQLiteComplianceManager:
                             sql = (
                                 "UPDATE evidence_events "
                                 "SET payload_json = '{}', "
-                                "event_json = json_set(event_json, '$.payload', json('{}')) "
+                                "event_json = json_set(event_json, '$.payload', json('{}')), "
+                                "content_hash = NULL "
                                 "WHERE timestamp < ? AND capability_id GLOB ? "
                                 "AND payload_json != '{}'"
                             )
                             params = [redact_str, pattern]
-                        _ = empty  # referenced only in the SQL literals above
                         cursor = self._store._conn.execute(sql, params)
                         total_redacted += cursor.rowcount
 

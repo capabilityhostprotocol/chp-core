@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 from typing import Any
 from urllib.request import Request, urlopen
@@ -220,12 +221,31 @@ def cmd_validate_contract(args: argparse.Namespace) -> int:
 
 def cmd_verify_evidence(args: argparse.Namespace) -> int:
     import sys
+
+    # Bundle mode: verify an exported (optionally signed) evidence bundle offline.
+    if getattr(args, "bundle", None):
+        from .. import signing
+
+        with open(args.bundle) as fh:
+            bundle = json.load(fh)
+        v = signing.verify_bundle(bundle, expected_key_id=getattr(args, "expect_key", None))
+        print(json.dumps({
+            "assurance": v.assurance,
+            "valid": v.valid,
+            "checks": v.checks,
+            "reason": v.reason,
+        }, indent=2))
+        return 0 if v.valid else 1
+
     from ..store import SQLiteEvidenceStore
 
+    # Chain mode: strict by default at the CLI (an unhashed/legacy event fails);
+    # --lenient restores the tolerant library default.
+    strict = not getattr(args, "lenient", False)
     store_path = _resolve_store(args.store)
     store = SQLiteEvidenceStore(store_path)
     try:
-        result = store.verify_chain(args.session_id)
+        result = store.verify_chain(args.session_id, strict=strict)
     finally:
         store.close()
 
@@ -235,12 +255,122 @@ def cmd_verify_evidence(args: argparse.Namespace) -> int:
         "verified_count": result.verified_count,
         "unverified_count": result.unverified_count,
         "valid": result.valid,
+        "strict": strict,
         "first_broken_sequence": result.first_broken_sequence,
     }
     print(json.dumps(output, indent=2))
     if not result.valid:
         print(f"Chain broken at sequence {result.first_broken_sequence}", file=sys.stderr)
         return 1
+    return 0
+
+
+def cmd_keygen(args: argparse.Namespace) -> int:
+    import sys
+    from .. import signing
+
+    try:
+        key = signing.generate_keypair(
+            args.key_dir or signing.DEFAULT_KEY_DIR, overwrite=args.overwrite
+        )
+    except signing.SigningUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except FileExistsError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({
+        "key_id": key.key_id,
+        "public_key": key.public_key_b64,
+        "key_dir": str(args.key_dir or signing.DEFAULT_KEY_DIR),
+    }, indent=2))
+    return 0
+
+
+def cmd_export_evidence(args: argparse.Namespace) -> int:
+    import sys
+    from .. import signing
+    from ..store import SQLiteEvidenceStore
+    from ..types import utc_now
+
+    store_path = _resolve_store(args.store)
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        events = store.export_correlation(args.session_id)
+    finally:
+        store.close()
+    if not events:
+        print(f"no events for correlation {args.session_id!r}", file=sys.stderr)
+        return 1
+
+    bundle = signing.build_bundle(args.host_id, events, created_at=utc_now())
+    # Sign if a key is present (or explicitly requested); otherwise hash-chain tier.
+    key = signing.load_host_key(args.key_dir or signing.DEFAULT_KEY_DIR)
+    if args.sign and key is None:
+        print("--sign requested but no host key found; run `chp keygen`", file=sys.stderr)
+        return 2
+    if key is not None and key.can_sign and (args.sign or not args.no_sign):
+        bundle = signing.sign_bundle(bundle, key)
+
+    text = json.dumps(bundle, indent=2)
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(text)
+        print(json.dumps({"out": args.out, "assurance": bundle["assurance"],
+                          "events": len(events), "root_hash": bundle["root_hash"]}, indent=2))
+    else:
+        print(text)
+    return 0
+
+
+def cmd_retention_apply(args: argparse.Namespace) -> int:
+    """Apply retention policies to an evidence store (chain-preserving), then
+    optionally compact. Config JSON: {"retain_days":30, "stores":[...],
+    "policies":[{"policy_id","retain_days","applies_to",...}]}."""
+    import sys
+    from ..store import SQLiteEvidenceStore
+    from ..compliance import SQLiteComplianceManager
+    from ..types import RetentionPolicy
+
+    with open(args.config) as fh:
+        cfg = json.load(fh)
+
+    if cfg.get("policies"):
+        policies = [RetentionPolicy(**p) for p in cfg["policies"]]
+    else:
+        policies = [RetentionPolicy(
+            policy_id="default", applies_to=["*"],
+            retain_days=int(cfg.get("retain_days", 30)),
+            redact_payload_after_days=cfg.get("redact_payload_after_days"),
+        )]
+    stores = cfg.get("stores") or ([_resolve_store(args.store)])
+
+    results = []
+    for store_path in stores:
+        store_path = os.path.expanduser(store_path)
+        store = SQLiteEvidenceStore(store_path)
+        try:
+            if args.dry_run:
+                # Report what WOULD be pruned without mutating.
+                with store._lock:
+                    row = store._conn.execute("SELECT COUNT(*) AS c FROM evidence_events").fetchone()
+                results.append({"store": store_path, "dry_run": True, "events": int(row["c"])})
+                continue
+            report = SQLiteComplianceManager(store).apply_retention(policies)
+            entry = {"store": store_path, "purged": report.events_purged,
+                     "redacted": report.events_redacted, "inspected": report.events_inspected}
+            if args.vacuum:
+                # VACUUM reclaims freed pages. Plain VACUUM needs a full-size temp
+                # copy (no headroom at 97% disk); callers on a tight disk should
+                # move archives off-box first — deletes already stop growth.
+                with store._lock:
+                    store._conn.execute("VACUUM")
+                entry["vacuumed"] = True
+            results.append(entry)
+        finally:
+            store.close()
+
+    print(json.dumps({"results": results}, indent=2))
     return 0
 
 

@@ -1,11 +1,22 @@
 # CHP And OpenTelemetry
 
-CHP should compose with OpenTelemetry, not compete with it.
+CHP and OpenTelemetry operate at different layers. OTel is **observability**;
+CHP is a **governed, signed evidence plane**. They interoperate — CHP exports
+its evidence as OpenTelemetry spans — but CHP is not an OTel trace and does not
+concede its own record.
 
-OpenTelemetry defines observability signals such as traces, metrics, logs, and
-baggage. In the trace model, spans represent units of work and span events
-represent meaningful points in time during a span. See the OpenTelemetry traces
-concept page: <https://opentelemetry.io/docs/concepts/signals/traces/>.
+The difference is structural. OpenTelemetry **splits execution across separate,
+optional, unsigned signals** — traces, metrics, logs, baggage — none of which
+is a contract, none signed, and none carrying governance. CHP unifies **what ran
+and what governed it** — policy, risk tier, invariants, safety checks, human
+approval, autonomy budgets, and denial — onto **one mandatory, signed,
+correlated plane**. A denial, a safety block, or a human approval is a
+first-class, tamper-evident event in CHP; in OTel it is, at best, an unsigned
+custom attribute on an optional span. That single governed signed plane is what
+no observability standard provides.
+
+See the OpenTelemetry traces concept page:
+<https://opentelemetry.io/docs/concepts/signals/traces/>.
 
 ## Relationship
 
@@ -70,7 +81,9 @@ CHP v0.1 includes no-dependency mapping helpers in `chp_core.otel`:
 These return OTLP-like dictionaries that preserve CHP fields. They are not a
 full OpenTelemetry SDK exporter.
 
-CHP v0.1 does not replace logs, spans, traces, metrics, baggage, collectors, or
-observability backends.
-
-The right integration is export, not duplication.
+CHP does not replace logs, spans, traces, metrics, baggage, collectors, or
+observability backends — it keeps its own governed, signed plane as the source
+of truth and **exports to OTel as a bridge** into that ecosystem. Notably, a CHP
+export is a span no other source produces: **signed** (carrying `chp.content_hash`)
+and **denial-aware** (carrying `chp.denied` / denial code). CHP feeds OTel on
+CHP's terms; it does not fold its governed record into OTel's unsigned signals.

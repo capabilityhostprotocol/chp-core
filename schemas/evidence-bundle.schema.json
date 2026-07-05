@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/evidence-bundle.schema.json",
+  "title": "EvidenceBundle",
+  "description": "A portable, offline-verifiable export of a correlation's evidence (CHP v0.2). Signed bundles are tamper-evident; hash-chain bundles detect mutation/reordering.",
+  "type": "object",
+  "required": ["host_id", "protocol_version", "created_at", "canonicalization", "assurance", "events", "root_hash"],
+  "additionalProperties": false,
+  "properties": {
+    "host_id": {
+      "type": "string",
+      "description": "The host that produced the evidence."
+    },
+    "protocol_version": {
+      "type": "string",
+      "description": "CHP protocol version (e.g. \"0.2\")."
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO-8601 bundle creation time."
+    },
+    "canonicalization": {
+      "type": "string",
+      "description": "Named canonicalization scheme for event hashes.",
+      "enum": ["chp-stable-v1"]
+    },
+    "assurance": {
+      "type": "string",
+      "description": "Assurance tier of this bundle.",
+      "enum": ["hash-chain", "signed"]
+    },
+    "events": {
+      "type": "array",
+      "description": "Ordered evidence events, each carrying its content_hash and prev_hash.",
+      "items": { "type": "object" }
+    },
+    "root_hash": {
+      "type": "string",
+      "description": "SHA256 over each event's content_hash in sequence order.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "public_key": {
+      "type": "string",
+      "description": "Base64 ed25519 public key (present on signed bundles)."
+    },
+    "signature": {
+      "type": "object",
+      "description": "ed25519 signature over root_hash (present on signed bundles).",
+      "required": ["algorithm", "key_id", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": { "type": "string", "enum": ["ed25519"] },
+        "key_id": { "type": "string" },
+        "signature": { "type": "string", "description": "Base64 signature bytes." }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "assurance": { "const": "signed" } } },
+      "then": { "required": ["public_key", "signature"] }
+    }
+  ]
+}

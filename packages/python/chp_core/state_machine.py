@@ -335,14 +335,11 @@ def register_state_machine_capability(host: Any, sm: StateMachineCapability | No
             initial_state=defn_raw.get("initial_state", ""),
             terminal_states=defn_raw.get("terminal_states", []),
         )
-        ctx.emit("execution_started", {"capability_id": create_desc.id}, redacted=False)
         try:
             record = sm.create(name, definition, context)
         except Exception as exc:
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
         ctx.emit("state_machine_created", {"machine_id": record.machine_id, "initial_state": record.current_state}, redacted=False)
-        ctx.emit("execution_completed", {"capability_id": create_desc.id, "outcome": "success"}, redacted=False)
         return record.to_dict()
 
     host.register(create_desc, _create)
@@ -362,12 +359,10 @@ def register_state_machine_capability(host: Any, sm: StateMachineCapability | No
         machine_id: str = payload.get("machine_id", "")
         event: str = payload.get("event", "")
 
-        ctx.emit("execution_started", {"capability_id": transition_desc.id}, redacted=False)
         ctx.emit("state_machine_transition_started", {"machine_id": machine_id, "event": event}, redacted=False)
         try:
             result = sm.transition(machine_id, event)
         except Exception as exc:
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
         if result.allowed:
             record = sm.get(machine_id)
@@ -382,7 +377,6 @@ def register_state_machine_capability(host: Any, sm: StateMachineCapability | No
                 ctx.emit("state_machine_transition_completed", {"machine_id": machine_id, "from": result.from_state, "to": result.to_state}, redacted=False)
         else:
             ctx.emit("state_machine_blocked", {"machine_id": machine_id, "reason": result.reason}, redacted=False)
-        ctx.emit("execution_completed", {"capability_id": transition_desc.id, "outcome": "success"}, redacted=False)
         return result.to_dict()
 
     host.register(transition_desc, _transition)
@@ -400,9 +394,7 @@ def register_state_machine_capability(host: Any, sm: StateMachineCapability | No
 
     async def _get(ctx, payload) -> dict:
         machine_id: str = payload.get("machine_id", "")
-        ctx.emit("execution_started", {"capability_id": get_desc.id}, redacted=False)
         record = sm.get(machine_id)
-        ctx.emit("execution_completed", {"capability_id": get_desc.id, "outcome": "success"}, redacted=False)
         return record.to_dict() if record else {}
 
     host.register(get_desc, _get)
@@ -420,9 +412,7 @@ def register_state_machine_capability(host: Any, sm: StateMachineCapability | No
 
     async def _list(ctx, payload) -> dict:
         status_filter: StateMachineStatus | None = payload.get("status")
-        ctx.emit("execution_started", {"capability_id": list_desc.id}, redacted=False)
         machines = sm.list_machines(status=status_filter)
-        ctx.emit("execution_completed", {"capability_id": list_desc.id, "outcome": "success"}, redacted=False)
         return {"machines": [m.to_dict() for m in machines], "count": len(machines)}
 
     host.register(list_desc, _list)

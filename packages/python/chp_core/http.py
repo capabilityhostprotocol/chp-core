@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import inspect
 import json
 import logging
@@ -42,6 +43,20 @@ def _host_version() -> str:
     return "unknown"
 
 
+def _host_assurance() -> JSON:
+    """Declared evidence assurance tier for this host (v0.2). `signed` when a
+    host keypair is present, else `hash-chain` (the store always chains).
+    Verifiers reject a lower-than-expected tier rather than degrade silently."""
+    try:
+        from .signing import load_host_key
+        key = load_host_key()
+    except Exception:
+        key = None
+    if key is not None:
+        return {"assurance": "signed", "key_id": key.key_id, "public_key": key.public_key_b64}
+    return {"assurance": "hash-chain"}
+
+
 class CapabilityHostHTTPServer(ThreadingHTTPServer):
     """Threading HTTP server bound to a CHP host (LocalCapabilityHost or MultiHostRouter)."""
 
@@ -55,13 +70,42 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
 
     server: CapabilityHostHTTPServer
 
+    # Slowloris guard: drop connections that stall mid-request rather than
+    # pinning a server thread indefinitely. BaseHTTPRequestHandler applies this
+    # as the per-request socket timeout.
+    timeout = 30
+
+    # Cap request bodies read into memory (DoS guard). Override via env.
+    _MAX_BODY_BYTES = int(os.environ.get("CHP_HOST_MAX_BODY_BYTES", str(8 * 1024 * 1024)))
+
     def _check_auth(self) -> bool:
-        """Return True if the request is authorized (or auth is not configured)."""
-        key = os.environ.get("CHP_HOST_API_KEY")
-        if not key:
-            return True
-        if self.headers.get("X-CHP-Key") == key:
-            return True
+        """Return True if the request is authorized (or auth is not configured).
+
+        Also records the *authenticated caller* on ``self._caller`` (a verified
+        principal name, or None for the anonymous shared-key / no-auth case) so
+        the invoke path can bind a VERIFIED subject to the evidence — the
+        difference between "claims to be agent X" and "is agent X".
+
+        Per-caller keys: ``CHP_HOST_API_KEYS="agent-a:key1,steward:key2"`` — a
+        match sets the caller to that name. ``CHP_HOST_API_KEY`` stays as the
+        anonymous shared-key fallback.
+        """
+        self._caller: str | None = None
+        presented = self.headers.get("X-CHP-Key", "")
+        named = os.environ.get("CHP_HOST_API_KEYS")
+        shared = os.environ.get("CHP_HOST_API_KEY")
+
+        if named:
+            for entry in named.split(","):
+                name, sep, k = entry.partition(":")
+                if sep and hmac.compare_digest(presented, k.strip()):
+                    self._caller = name.strip()
+                    return True
+        if shared and hmac.compare_digest(presented, shared):
+            return True  # anonymous authenticated (single shared key)
+        if not named and not shared:
+            return True  # no auth configured — open
+
         self._write_error(HTTPStatus.UNAUTHORIZED, "unauthorized", "Missing or invalid X-CHP-Key")
         return False
 
@@ -77,14 +121,14 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         # /health is always public — required for mesh probes and load balancers
         if path == "/" or path == "/health":
             host_desc = self._sync_discover()
-            cap_count = len(host_desc.get("capabilities", []))
+            # /health is unauthenticated — do not disclose live capability_count
+            # here (mesh-count privacy). It stays on the authed /host descriptor.
             self._write_json({
                 "status": "ok",
                 "host_id": host_desc.get("id") or host_desc.get("hosts", ["unknown"])[0],
                 "protocol": "chp",
                 "version": "0.1",
                 "host_version": _host_version(),
-                "capability_count": cap_count,
             })
             return
         if not self._check_auth():
@@ -92,6 +136,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if path == "/host":
             desc = self._sync_discover()
             desc.setdefault("host_version", _host_version())
+            for k, v in _host_assurance().items():
+                desc.setdefault(k, v)
             self._write_json(desc)
             return
         if path == "/capabilities":
@@ -186,6 +232,12 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             envelope_body["correlation"] = {
                 "correlation_id": envelope_body.pop("correlation_id")
             }
+        # Bind the VERIFIED caller as the subject — overriding any client-asserted
+        # subject — so evidence attributes the action to who actually authenticated,
+        # not to whatever the request body claimed. Accountability, not assertion.
+        caller = getattr(self, "_caller", None)
+        if caller is not None:
+            envelope_body["subject"] = {"id": caller, "type": "api_key", "verified": True}
         envelope = InvocationEnvelope.from_mapping(envelope_body)
         result = asyncio.run(self.server.chp_host.ainvoke_envelope(envelope))
         return result.to_dict()
@@ -320,6 +372,10 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         if length == 0:
             return {}
+        if length < 0 or length > self._MAX_BODY_BYTES:
+            # Reject negative (would become read-until-EOF) and oversized bodies
+            # before allocating — caught by do_POST and returned as 400.
+            raise ValueError(f"request body too large or invalid (Content-Length={length})")
         raw = self.rfile.read(length).decode("utf-8")
         value = json.loads(raw)
         if not isinstance(value, dict):

@@ -41,6 +41,23 @@
       "type": "object",
       "additionalProperties": true,
       "default": {}
+    },
+    "host_version": {
+      "type": "string",
+      "description": "Implementation version of the host software (distinct from protocol_version)."
+    },
+    "assurance": {
+      "type": "string",
+      "enum": ["none", "hash-chain", "signed"],
+      "description": "Declared evidence assurance tier (chp-v0.2.md §1). A verifier MUST reject a tier lower than it requires."
+    },
+    "key_id": {
+      "type": "string",
+      "description": "Short id of the host signing key (sha256(pubkey)[:16]); present when assurance is 'signed'."
+    },
+    "public_key": {
+      "type": "string",
+      "description": "base64 ed25519 public key; present when assurance is 'signed'."
     }
   }
 }

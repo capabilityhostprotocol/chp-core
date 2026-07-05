@@ -246,13 +246,12 @@ CHP v0.1 does not define:
 - a required network transport
 - a workflow language
 - an agent framework
-- a complete policy engine
-- enterprise RBAC
+- a standalone entitlement / enterprise-RBAC product — CHP *governs* at the boundary (policy, risk tier, invariants, safety, human approval, autonomy budgets) and records each decision as first-class signed evidence; it is not a separate policy-management product
 - hosted retention
-- cryptographic proof of evidence integrity
-- a replacement for MCP, OpenTelemetry, Temporal, Kafka, or API gateways
 
-These systems can integrate with CHP, but CHP v0.1 stays focused on the capability execution boundary.
+Note: cryptographic proof of evidence integrity is **not** a non-goal — it is delivered by the v0.2 `signed` assurance tier (hash chain + ed25519). It was out of scope for the v0.1 baseline only.
+
+CHP is complementary to MCP, OpenTelemetry, Temporal, Kafka, and API gateways and interoperates with them (e.g. exporting evidence as signed OpenTelemetry spans) — but it is not a re-skin of any of them: it is the one *governed, signed* plane, where those carry either tools without evidence, or execution telemetry without governance or integrity. CHP v0.1 stays focused on the capability execution boundary.
 
 ## 13. Versioning Strategy
 

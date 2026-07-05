@@ -29,6 +29,7 @@ from .codex import (
     register_codex_observation_capabilities,
 )
 from .otel import evidence_to_otel_span, replay_to_otel_spans
+from .prov import replay_to_prov
 from .metrics import aggregate_session_metrics, format_prometheus
 from .certification import assess_maturity
 from .memory import MemoryCapability, register_memory_capability
@@ -223,6 +224,7 @@ __all__ = [
     "register_hosted_capabilities",
     "register_trace_execution",
     "replay_to_otel_spans",
+    "replay_to_prov",
     "serve_http",
     "AgentSession",
     "AUTONOMY_EVIDENCE_TYPES",

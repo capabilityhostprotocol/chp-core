@@ -457,7 +457,6 @@ def register_retrieval_capability(
         top_k = int(payload.get("top_k", 5))
         filters = payload.get("filters")
 
-        ctx.emit("execution_started", {"capability_id": cap.capability_id}, redacted=False)
         ctx.emit("retrieval_started", {"query": query, "top_k": top_k}, redacted=False)
         t0 = time.perf_counter()
         try:
@@ -472,12 +471,10 @@ def register_retrieval_capability(
                 "source_refs": [r.to_dict() for r in result.source_refs],
             }
             ctx.emit("retrieval_completed", event_payload, redacted=False)
-            ctx.emit("execution_completed", {"outcome": "success"}, redacted=False)
             return result.to_dict()
         except Exception as exc:
             err: JSON = {"reason": str(exc), "exception_type": type(exc).__name__}
             ctx.emit("retrieval_failed", err, redacted=False)
-            ctx.emit("execution_failed", err, redacted=False)
             raise
 
     host.register(cap.as_capability_descriptor(), _query)

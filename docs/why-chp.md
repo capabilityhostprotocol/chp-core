@@ -26,9 +26,9 @@ Logs help, but logs are inconsistent, optional, and usually not a protocol contr
 
 ## The CHP Thesis
 
-Execution should be observable, governable, replayable, and provable at the capability boundary.
+At the capability boundary, execution should be observed, **governed**, replayed, and proved — on one record. CHP makes a human approval, an agent's action, and a system call the same *governed, tamper-evident event*: **what ran and what governed it — policy, risk tier, safety checks, human approval, autonomy budgets, denial — emit onto one signed, correlated, replayable plane.**
 
-v0.1 starts with observable and replayable. Governance comes later.
+Governance is present, not future. The policy engine, risk tiers, the safety evaluator, approval workflows, denial-as-evidence, and autonomy budgets are first-class today — signed together with the execution they govern. That single governed, signed plane is the differentiation: observability tools split execution across separate optional unsigned signals and carry no governance; CHP unifies both and proves them.
 
 ## What Makes A Capability Different From A Tool?
 

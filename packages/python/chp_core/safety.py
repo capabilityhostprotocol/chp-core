@@ -1,4 +1,8 @@
-"""Risk evaluation and guardrail capability for CHP §8.6."""
+"""Risk evaluation and guardrail capability for CHP.
+
+Risk-tier semantics and the safety event vocabulary are normative in
+spec/chp-governance-v0.2.md §3–§4.2.
+"""
 
 from __future__ import annotations
 
@@ -30,9 +34,16 @@ _SAFETY_EMITS = [
 ]
 
 _HIGH_RISK_CAP_PATTERNS = [
-    "*bash*", "*exec*", "*shell*", "*delete*", "*drop*", "*rm*", "*destroy*",
+    # NOTE: these match capability IDs (not shell text), so keep them specific. "*rm*" was removed —
+    # it false-matched "confo[rm]ance" (and "transform", etc.); the `rm -rf` shell command is caught by
+    # *bash*/*shell* on cap ids and the critical "rm -rf" payload keyword instead.
+    "*bash*", "*exec*", "*shell*", "*delete*", "*drop*", "*destroy*",
+    # Secrets + arbitrary subprocess/container execution (safety.assess previously rated these "allow").
+    "*secrets.set*", "*secrets.delete*", "*process.run*", "*process.exec*", "*process.spawn*",
+    "*container.run*", "*container.exec*",
     # Mesh control actions: remote update/restart/stop/install on a node's runtime.
     "*host.update*", "*host.restart*", "*host.stop*", "*host.install_adapter*",
+    "*launchd.start*", "*launchd.stop*", "*launchd.install*", "*launchd.uninstall*",
     # Inference-server lifecycle: spawning/killing model servers.
     "*start_server*", "*stop_server*",
 ]

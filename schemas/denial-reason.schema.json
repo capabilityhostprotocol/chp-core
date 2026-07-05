@@ -9,16 +9,17 @@
     "code": {
       "type": "string",
       "minLength": 1,
-      "description": "Stable denial code. Implementations SHOULD use the standard codes when applicable (spec §9).",
+      "description": "Stable denial code. A conforming host MUST use a reserved code when one applies (chp-governance-v0.2.md §2); vendor-specific codes MUST be reverse-DNS namespaced (e.g. 'com.acme.quota_exceeded').",
       "examples": [
         "capability_not_found",
         "capability_disabled",
         "unsupported_mode",
-        "invariant_failed",
+        "policy_blocked",
         "input_schema_validation_failed",
-        "policy_block_pattern_matched",
-        "risk_tier_exceeded",
-        "entitlement_denied"
+        "invariant_failed",
+        "budget_exceeded",
+        "approval_required",
+        "safety_blocked"
       ]
     },
     "message": {
