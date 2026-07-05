@@ -59,4 +59,4 @@ types emitted for the exercised call, in order.
 <start the host under test on PORT with the config above>
 python conformance/runner.py --url http://localhost:PORT --key <key> --suite wire
 ```
-A conforming host prints `[wire] 14/14`.
+A conforming host prints `[wire] 15/15`.

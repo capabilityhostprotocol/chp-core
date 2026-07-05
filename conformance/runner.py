@@ -1434,6 +1434,25 @@ async def check_safety_governance(host: Any) -> None:
     assert "execution_started" not in types, "blocked capability must not begin execution"
 
 
+async def check_identity_document(host: Any) -> None:
+    """v0.2 (spec §3.1): the host serves its public identity document at
+    /.well-known/chp-identity — unauthenticated, so a never-met verifier can
+    resolve the key. Declares an assurance tier; at the signed tier the
+    self-attestation must verify (and any anchors ride inside it)."""
+    doc = host.identity()
+    assert doc.get("assurance") in ("none", "hash-chain", "signed"), (
+        f"identity doc must declare an assurance tier: {doc}"
+    )
+    if doc.get("assurance") == "signed":
+        assert doc.get("key_id") and doc.get("public_key"), f"signed tier must expose the key: {doc}"
+        att = doc.get("host_identity")
+        if att:
+            from chp_core.signing import verify_attestation
+            assert verify_attestation(att, public_key=doc["public_key"]), (
+                "identity attestation does not verify under the presented key"
+            )
+
+
 async def check_wire_verify(host: Any) -> None:
     """v0.2 over the wire: after an invocation, GET /verify/{corr} confirms the
     host's own chain is intact (or, in gateway mode, says so honestly)."""
@@ -1519,6 +1538,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("risk-tier governance (v0.2)", check_risk_tier_governance),
     ("safety-guardrail governance (v0.2)", check_safety_governance),
     ("chain verification over /verify", check_wire_verify),
+    ("identity document (v0.2 §3.1)", check_identity_document),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

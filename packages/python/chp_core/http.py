@@ -652,6 +652,10 @@ class RemoteCapabilityHost:
         """Return the /health response from the remote host."""
         return self._get("/health")
 
+    def identity(self) -> JSON:
+        """The host's public identity document (spec §3.1 — unauthenticated)."""
+        return self._get("/.well-known/chp-identity")
+
     def verify(self, correlation_id: str) -> JSON:
         """Return the SHA256 chain verification result for *correlation_id*.
 

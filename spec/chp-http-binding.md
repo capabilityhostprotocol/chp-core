@@ -54,6 +54,7 @@ balancers; every other route requires auth (§2).
 | Method | Path | Auth | Request | Response |
 |---|---|---|---|---|
 | GET | `/health` (= `/`) | public | — | `{status:"ok", host_id, protocol:"chp", version, host_version}` |
+| GET | `/.well-known/chp-identity` | public | — | identity document `{assurance, key_id?, public_key?, host_identity?, key_history?, revoked_keys?}` (chp-v0.2.md §3.1–3.2) |
 | GET | `/host` | required | — | `HostDescriptor` (+ `host_version`, and `assurance`/`key_id`/`public_key` when signed) |
 | GET | `/capabilities` | required | — | `{capabilities: CapabilityDescriptor[]}` |
 | POST | `/invoke` | required | `InvocationEnvelope` | `InvocationResult` (see §1) |
@@ -68,6 +69,11 @@ balancers; every other route requires auth (§2).
 `/health` MUST NOT disclose the live capability count (it stays on the authed
 `/host` descriptor) — mesh-count privacy. `version` here is the protocol version;
 `host_version` is the implementation version.
+
+`/.well-known/chp-identity` is public by design: a never-met verifier must be
+able to resolve the host's key without credentials (its authority comes from
+the TLS origin serving it — chp-v0.2.md §3.1). It serves key/identity material
+only; capability data stays behind auth.
 
 A host MAY add non-normative routes (the reference host exposes an OpenAI-
 compatible `/v1/chat/completions` inference shim); a conforming client MUST NOT
