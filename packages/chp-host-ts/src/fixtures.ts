@@ -8,7 +8,7 @@ import { LocalCapabilityHost } from './host.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import type { Ctx, JsonValue } from './types.js';
 
-export function buildFixtureHost(signingKey?: HostKey): LocalCapabilityHost {
+export function buildFixtureHost(signingKey?: HostKey, domain?: string): LocalCapabilityHost {
   const evaluator = new RuleBasedSafetyEvaluator([
     {
       id: 'conformance-guardrail',
@@ -21,6 +21,7 @@ export function buildFixtureHost(signingKey?: HostKey): LocalCapabilityHost {
     policy: { max_risk_tier: 'medium' },
     safetyEvaluator: evaluator,
     signingKey,
+    domain,
   });
 
   const echo = async (_c: Ctx, payload: JsonValue) => ({ echo: (payload as { value?: JsonValue }).value ?? null });

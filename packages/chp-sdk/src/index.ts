@@ -25,5 +25,23 @@ export {
   buildBundle,
   signBundle,
 } from './signing.js';
-export { verifyBundle, type BundleVerification } from './verify.js';
+export {
+  verifyBundle,
+  verifyBundleResolved,
+  resolveHostIdentity,
+  domainAnchor,
+  didAnchor,
+  didAnchorMessage,
+  verifyDidAnchor,
+  WELL_KNOWN_IDENTITY_PATH,
+  type BundleVerification,
+} from './verify.js';
+export {
+  parseSshsig,
+  verifySshsig,
+  didKeyToRaw,
+  rawToDidKey,
+  DID_ANCHOR_NAMESPACE,
+  type ParsedSshsig,
+} from './sshsig.js';
 export { RemoteCapabilityHost, type InvocationResult } from './client.js';

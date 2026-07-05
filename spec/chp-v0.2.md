@@ -111,8 +111,8 @@ A host at the `signed` tier MUST support exporting a correlation as a bundle:
   present, check that its `host_id`/`public_key` match the bundle and its
   signature verifies under `public_key`. This is the trust *floor* (the key
   self-asserts its host_id — TOFU/`mesh.py:pin_or_check_key` pins it on first
-  contact); anchoring `public_key` to a resolvable external identity (e.g. a
-  Radicle DID) is the ceiling and is OPTIONAL.
+  contact); **Anchors** (§3.1) upgrade the floor by binding the key to an
+  external trust root a never-met verifier can resolve.
 - A verifier MUST check: per-event hash recompute, chain continuity, root hash,
   the header signature, and (when present) the host-identity attestation. A
   verifier offered an `expected_key_id` MUST reject a bundle signed by any other
@@ -124,14 +124,110 @@ within its validity window) **before** trust-on-first-use pinning it — rather 
 pinning whatever `/host` self-reports. This is the same offline
 `verify_attestation` check the bundle path uses.
 
-Key rotation uses `valid_from`/`valid_until` in the `host_identity` attestation;
-a rotated key is a new identity. A verifier MUST reject a signed bundle whose
-`created_at` falls outside the attestation's `[valid_from, valid_until]` window
-(the key had expired when it signed) — enforced offline against `created_at`, so
-no wall clock or revocation infrastructure is required at this tier. `null`
-bounds are unbounded. Chained rotation (a new key countersigned by the old) and
-a published key-transparency registry are deliberately out of scope until
-cross-organization verification is a live requirement.
+Key rotation uses `valid_from`/`valid_until` in the `host_identity` attestation.
+A verifier MUST reject a signed bundle whose `created_at` falls outside the
+attestation's `[valid_from, valid_until]` window (the key had expired when it
+signed) — enforced offline against `created_at`, so no wall clock is required.
+`null` bounds are unbounded. Chained rotation and revocation are specified in
+§3.2.
+
+### 3.1 Anchors — cross-org trust
+
+An **anchor** binds the signing key to an external trust root a never-met
+verifier can resolve, upgrading a bundle from *integrity* (TOFU floor) to
+*provenance* ("root R vouches for key P"). Anchors are an OPTIONAL list inside
+the **signed attestation claim**:
+
+```json
+"host_identity": {
+  "host_id": "…", "public_key": "…", "key_id": "…",
+  "valid_from": "…", "valid_until": null,
+  "anchors": [ {"type": "domain", "domain": "acme.example"} ],
+  "signature": "base64…"
+}
+```
+
+- **Omit-when-empty (byte rule).** The `anchors` key MUST be omitted from the
+  claim entirely when there are no anchors — never emitted as `[]` or `null`.
+  A no-anchor attestation is thus byte-identical to the pre-anchor format
+  (`spec/test-vectors/signed-bundle.json` is the compatibility gate). A verifier
+  reconstructs the claim with the same conditional: `anchors` participates in
+  the signed bytes exactly when the attestation carries it. Because anchors are
+  inside the signed claim, **stripping** one (downgrade) or **stapling** one on
+  (forgery) breaks the self-signature. Anchor values MUST NOT contain
+  non-integer numbers (§2 rule 6); array order is preserved as built.
+- **The anchor is the trust root; `host_id` is a local label.** A verifier MUST
+  surface *which root vouched* (e.g. the resolved domain) as the answer to
+  "whose?", and MUST NOT treat `host_id` as trusted. An attacker-controlled
+  anchor "verifies" — against *the attacker's root*; the trust decision belongs
+  to the caller reading the surfaced root.
+- **`domain` anchor.** Proves: "the entity in administrative control of the
+  domain (DNS + TLS certificate + server) asserts key P is its CHP signing
+  key" — the Web-PKI chain, the RFC 8615 / MTA-STS pattern. The host MUST serve
+  its identity document at `GET /.well-known/chp-identity` **without
+  authentication** (`{assurance, key_id, public_key, host_identity}` — key
+  material only; capabilities stay behind auth). A resolving verifier MUST
+  fetch over `https://` only and MUST NOT follow redirects; it confirms the
+  bundle's `public_key` appears in the resolved document. Resolution proves
+  *current* control of the anchor; the attestation window proves *validity at
+  signing time* — the two are distinct and both recorded. Unknown anchor types
+  MUST be skipped (forward compatibility); if resolution was requested and no
+  anchor type is understood, the result is *unverifiable provenance*, never
+  success. A no-anchor bundle under a resolving verifier remains valid at the
+  visibly-TOFU floor.
+- **`did` anchor.** Proves: "the holder of the ed25519 identity behind
+  `did:key:z6Mk…` countersigned this CHP key" — fully **offline**, no CA/DNS.
+  Shape: `{"type": "did", "did": "did:key:z6Mk…", "countersignature": "<armored
+  SSHSIG>"}`. The countersignature is an OpenSSH **SSHSIG** (`ssh-keygen -Y
+  sign`) with namespace **`chp-host-anchor`** over the message
+  `chp-stable-v1({"chp_public_key": <base64 CHP key>, "host_id": <host_id>})`.
+  The DID is multibase(base58btc) of multicodec(`0xed01`) + the raw 32-byte
+  ed25519 public key (for a Radicle node, byte-identical to `"did:key:" + NID`).
+  A verifier MUST decode the DID to the raw key, pin the SSHSIG signer to it,
+  and verify the SSHSIG payload (`SSHSIG || namespace || reserved || hash_alg ||
+  H(message)`). `spec/test-vectors/did-anchored-bundle.json` is the fixture
+  (produced by a real `ssh-keygen -Y sign` with a fixed-seed key). Verification
+  is offline and MUST run whenever a `did` anchor is present.
+- A host MAY carry multiple anchors so verifiers choose their preferred root;
+  further anchor types extend the same list.
+- **Stated tradeoff:** the `domain` anchor deliberately leans on Web-PKI
+  (CA + DNS) as the buildable, standards-aligned floor-above-TOFU; the `did`
+  anchor is the decentralized ceiling that removes that dependency.
+
+### 3.2 Key lifecycle — rotation with continuity, revocation
+
+Rotation MUST NOT destroy the old key (archive it) and MUST NOT be
+indistinguishable from impersonation. On rotation the **old** key signs a
+self-contained **continuity statement**:
+
+```json
+{ "old_key_id": "…", "old_public_key": "…", "new_key_id": "…",
+  "new_public_key": "…", "rotated_at": "…", "signature": "<by the OLD key>" }
+```
+
+The host publishes its lineage as `key_history` (an ordered list of continuity
+statements) on the identity document / `/host`. A verifier holding a pinned key
+that encounters a changed key MUST accept it **only** by walking the continuity
+chain from its own pinned key — each hop verified under the key trusted *so
+far*, starting from the verifier's pin, never from the remote's self-published
+`old_public_key` — and re-pin with trust `rotated`. A change with no valid
+chain remains a hard mismatch. (The remote's history cannot vouch for itself.)
+
+**Revocation** is a self-signed statement by the revoked key
+(`{revoked_key_id, revoked_public_key, revoked_at, reason, signature}`)
+published as `revoked_keys` on the identity document. A resolving verifier
+(`resolve=True`) MUST reject a bundle signed by a key the resolved document
+revokes (`not_revoked` check). **Offline verifiers cannot see revocations** —
+a stated limit of this tier; there is no global revocation infrastructure.
+
+**Identity evidence.** The lifecycle is recorded on the host's **own**
+hash-chained store via the reserved host-self event family
+`IDENTITY_EVIDENCE_TYPES` = {`key_generated`, `key_rotated`, `key_revoked`,
+`identity_anchored`} (governance §4.4) under the correlation
+`host-identity-<host_id>`. The chain's append-only, tamper-evident ordering
+makes it the host's **key-transparency log**, exportable and verifiable like
+any evidence bundle. This is the first evidence family that describes the host
+itself rather than a capability invocation.
 
 ## 4. Retention (all tiers)
 

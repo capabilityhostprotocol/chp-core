@@ -313,6 +313,34 @@ def check_alignment(repo_root: Path) -> JSON:
             {"drifted": drifted, "hint": "regenerate spec/test-vectors/canon/cases.json"},
         )
 
+    # Anchors (spec §3.1): the anchored vector must still verify (guards the
+    # omit-when-empty conditional in build/verify), and the spec must define
+    # the anchor mechanism + the well-known route.
+    anchored_path = repo_root / "spec" / "test-vectors" / "signed-bundle-anchored.json"
+    if anchored_path.exists():
+        try:
+            from .signing import verify_bundle, _domain_anchor
+
+            anchored = read_json(anchored_path)
+            v = verify_bundle(anchored)
+            add_check(
+                checks,
+                "anchored_vector_verifies",
+                v.valid and _domain_anchor(anchored.get("host_identity") or {}) is not None,
+                {"valid": v.valid, "hint": "regenerate signed-bundle-anchored.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "anchored_vector_verifies", False, {"error": str(exc)})
+        spec_v02 = read_text(repo_root / "spec" / "chp-v0.2.md")
+        add_check(
+            checks,
+            "spec_defines_anchors",
+            "### 3.1 Anchors" in spec_v02
+            and "/.well-known/chp-identity" in spec_v02
+            and "Omit-when-empty" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
+
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
 

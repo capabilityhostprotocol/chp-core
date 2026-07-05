@@ -91,8 +91,12 @@ if (bundle.assurance === "signed") {
   // Host-identity attestation: the key must self-assert this host_id + public_key.
   const att = bundle.host_identity;
   if (att) {
+    // Conditional-anchors rule (spec §3 Anchors): "anchors" is in the signed
+    // bytes only when present — omit-when-empty keeps pre-anchor bundles
+    // byte-identical, and makes anchor strip/staple break the signature.
     const claim = { host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
-                    valid_from: att.valid_from, valid_until: att.valid_until };
+                    valid_from: att.valid_from, valid_until: att.valid_until,
+                    ...("anchors" in att ? { anchors: att.anchors } : {}) };
     // Temporal validity: created_at within [valid_from, valid_until] (ISO-8601 UTC
     // strings compare lexicographically; null = unbounded).
     const c = bundle.created_at;

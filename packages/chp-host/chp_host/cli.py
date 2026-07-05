@@ -1230,6 +1230,7 @@ def _cmd_mesh_verify_keys(args: argparse.Namespace) -> int:
         # attestation is a malformed/forged identity claim — refuse to pin it,
         # rather than blindly trusting whatever /host reports.
         att = h.get("host_identity")
+        trust = "tofu"
         if att is not None:
             from chp_core import signing as _signing
             from chp_core.types import utc_now as _utc_now
@@ -1240,8 +1241,25 @@ def _cmd_mesh_verify_keys(args: argparse.Namespace) -> int:
                 bad = True
                 print(f"{url:<32} {assurance:<12} {key_id:<18} ✗ INVALID attestation — not pinned")
                 continue
-        status, detail = pin_or_check_key(raw, key_id, h.get("public_key"))
-        mark = {"pinned": "✓ pinned (TOFU)", "ok": "✓ trusted",
+            # Anchored upgrade: if the attestation names a domain anchor and the
+            # domain's identity doc vouches for this key, pin as "anchored" —
+            # an external root confirmed it, not just first-contact TOFU.
+            # Resolution failure degrades to TOFU (never blocks), visibly.
+            domain = _signing._domain_anchor(att)
+            if domain:
+                try:
+                    doc = _signing.resolve_host_identity(domain)
+                    doc_keys = {doc.get("public_key"),
+                                (doc.get("host_identity") or {}).get("public_key")}
+                    if h.get("public_key") in doc_keys:
+                        trust = "anchored"
+                except _signing.AnchorResolutionError:
+                    pass
+        status, detail = pin_or_check_key(raw, key_id, h.get("public_key"), trust=trust,
+                                          key_history=h.get("key_history"))
+        mark = {"pinned": f"✓ pinned ({trust.upper()})",
+                "ok": "✓ trusted (anchored)" if trust == "anchored" else "✓ trusted",
+                "rotated": "✓ rotated (continuity verified) — re-pinned",
                 "mismatch": f"✗ CHANGED (was {detail})", "no-remote": "? not in manifest"}[status]
         if status == "mismatch":
             bad = True

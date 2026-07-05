@@ -56,6 +56,11 @@ export class RemoteCapabilityHost {
     return this.req('/health');
   }
 
+  /** The host's public identity document (unauth — spec §3 Anchors). */
+  async identity(): Promise<Record<string, JsonValue>> {
+    return this.req('/.well-known/chp-identity') as Promise<Record<string, JsonValue>>;
+  }
+
   async discover(): Promise<Record<string, JsonValue>> {
     return this.req('/host', { headers: this.headers() }) as Promise<Record<string, JsonValue>>;
   }

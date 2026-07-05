@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildBundle, signBundle, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, signBundle, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import type {
@@ -34,6 +34,7 @@ interface Registered { descriptor: CapabilityDescriptor; handler: Handler; enabl
 export class LocalCapabilityHost {
   readonly store = new InMemoryEvidenceStore();
   private readonly caps = new Map<string, Registered>();
+  private readonly attestation: JsonValue | null;
 
   constructor(
     readonly hostId = 'ts-chp-host',
@@ -41,22 +42,43 @@ export class LocalCapabilityHost {
       policy?: PolicyConfig;
       safetyEvaluator?: RuleBasedSafetyEvaluator;
       signingKey?: HostKey;
+      /** Domain anchor (spec §3 Anchors) — the trust root a never-met verifier resolves. */
+      domain?: string;
     } = {},
-  ) {}
+  ) {
+    // Built once — stable valid_from + anchors (never rebuilt per request).
+    this.attestation = opts.signingKey
+      ? buildAttestation(
+          hostId, opts.signingKey, nowIso(), null,
+          opts.domain ? [{ type: 'domain', domain: opts.domain }] : null,
+        )
+      : null;
+  }
 
   /** Declared evidence assurance tier (chp-v0.2.md §1). */
   private assurance(): Record<string, JsonValue> {
     const k = this.opts.signingKey;
     return k
-      ? { assurance: 'signed', key_id: k.keyId, public_key: k.publicKeyB64 }
+      ? {
+          assurance: 'signed', key_id: k.keyId, public_key: k.publicKeyB64,
+          ...(this.attestation ? { host_identity: this.attestation } : {}),
+        }
       : { assurance: 'hash-chain' };
+  }
+
+  /** The public identity document served on /.well-known/chp-identity. */
+  identityDoc(): Record<string, JsonValue> {
+    return this.assurance();
   }
 
   /** Export a correlation as a bundle — signed when the host holds a key (M3). */
   exportBundle(correlationId: string): Record<string, JsonValue> {
     const events = this.store.byCorrelation(correlationId);
     const bundle = buildBundle(this.hostId, events, nowIso());
-    return this.opts.signingKey ? signBundle(bundle, this.opts.signingKey) : bundle;
+    if (!this.opts.signingKey) return bundle;
+    return signBundle(bundle, this.opts.signingKey, {
+      anchors: this.opts.domain ? [{ type: 'domain', domain: this.opts.domain }] : null,
+    });
   }
 
   register(descriptor: CapabilityDescriptor, handler: Handler): void {

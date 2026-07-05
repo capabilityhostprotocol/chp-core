@@ -4,7 +4,15 @@
   "title": "EvidenceBundle",
   "description": "A portable, offline-verifiable export of a correlation's evidence (CHP v0.2). Signed bundles are tamper-evident; hash-chain bundles detect mutation/reordering.",
   "type": "object",
-  "required": ["host_id", "protocol_version", "created_at", "canonicalization", "assurance", "events", "root_hash"],
+  "required": [
+    "host_id",
+    "protocol_version",
+    "created_at",
+    "canonicalization",
+    "assurance",
+    "events",
+    "root_hash"
+  ],
   "additionalProperties": false,
   "properties": {
     "host_id": {
@@ -22,17 +30,24 @@
     "canonicalization": {
       "type": "string",
       "description": "Named canonicalization scheme for event hashes.",
-      "enum": ["chp-stable-v1"]
+      "enum": [
+        "chp-stable-v1"
+      ]
     },
     "assurance": {
       "type": "string",
       "description": "Assurance tier of this bundle.",
-      "enum": ["hash-chain", "signed"]
+      "enum": [
+        "hash-chain",
+        "signed"
+      ]
     },
     "events": {
       "type": "array",
       "description": "Ordered evidence events, each carrying its content_hash and prev_hash.",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
     },
     "root_hash": {
       "type": "string",
@@ -46,19 +61,96 @@
     "signature": {
       "type": "object",
       "description": "ed25519 signature over root_hash (present on signed bundles).",
-      "required": ["algorithm", "key_id", "signature"],
+      "required": [
+        "algorithm",
+        "key_id",
+        "signature"
+      ],
       "additionalProperties": false,
       "properties": {
-        "algorithm": { "type": "string", "enum": ["ed25519"] },
-        "key_id": { "type": "string" },
-        "signature": { "type": "string", "description": "Base64 signature bytes." }
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "ed25519"
+          ]
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string",
+          "description": "Base64 signature bytes."
+        }
+      }
+    },
+    "host_identity": {
+      "type": "object",
+      "description": "Self-signed host-identity attestation (chp-v0.2.md \u00a73). 'anchors' is omitted entirely when empty (\u00a73.1 byte rule).",
+      "required": [
+        "host_id",
+        "public_key",
+        "key_id",
+        "valid_from",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "public_key": {
+          "type": "string"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "valid_from": {
+          "type": "string"
+        },
+        "valid_until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "anchors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          },
+          "description": "External trust roots vouching for this key, e.g. {\"type\":\"domain\",\"domain\":\"acme.example\"}. MUST be omitted when empty."
+        },
+        "signature": {
+          "type": "string"
+        }
       }
     }
   },
   "allOf": [
     {
-      "if": { "properties": { "assurance": { "const": "signed" } } },
-      "then": { "required": ["public_key", "signature"] }
+      "if": {
+        "properties": {
+          "assurance": {
+            "const": "signed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "public_key",
+          "signature"
+        ]
+      }
     }
   ]
 }

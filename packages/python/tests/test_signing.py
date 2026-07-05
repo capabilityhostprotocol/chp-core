@@ -309,3 +309,109 @@ def test_published_vectors_match_current_canonicalization():
     assert signing.verify_bundle(gov).valid, "published governance-bundle vector no longer verifies"
     completed = next(e for e in gov["events"] if e["event_type"] == "safety_assessment_completed")
     assert isinstance(completed["payload"]["score"], str), "governed vector score must be string-encoded"
+
+
+# ── Anchors (cross-org trust, spec §3 Anchors) ────────────────────────────────
+
+def test_anchored_attestation_roundtrip_and_tamper(tmp_path):
+    key = signing.generate_keypair(tmp_path / "keys")
+    anchors = [{"type": "domain", "domain": "acme.example"}]
+    att = signing.build_attestation("h", key, valid_from="2026-01-01T00:00:00Z",
+                                    anchors=anchors)
+    assert att["anchors"] == anchors
+    assert signing.verify_attestation(att, public_key=key.public_key_b64)
+    # STRIP (downgrade): removing anchors breaks the self-signature.
+    stripped = {k: v for k, v in att.items() if k != "anchors"}
+    assert not signing.verify_attestation(stripped, public_key=key.public_key_b64)
+    # STAPLE (forgery): adding/altering an anchor breaks it too.
+    stapled = {**att, "anchors": [{"type": "domain", "domain": "evil.example"}]}
+    assert not signing.verify_attestation(stapled, public_key=key.public_key_b64)
+
+
+def test_no_anchor_attestation_bytes_unchanged(tmp_path):
+    # The omit-when-empty rule: anchors=None and anchors=[] MUST both produce
+    # the exact pre-anchor claim (no "anchors" key) — the byte-compat guarantee.
+    key = signing.generate_keypair(tmp_path / "keys")
+    a1 = signing.build_attestation("h", key, valid_from="2026-01-01T00:00:00Z")
+    a2 = signing.build_attestation("h", key, valid_from="2026-01-01T00:00:00Z", anchors=[])
+    assert "anchors" not in a1 and "anchors" not in a2
+    assert a1["signature"] == a2["signature"]
+
+
+def test_resolve_anchor_confirms_and_rejects(tmp_path):
+    import io, json as _json
+    from contextlib import contextmanager
+
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("h", events, created_at="2026-07-05T00:00:00Z"), key,
+    )
+    # sign_bundle builds the attestation without anchors; rebuild with one.
+    bundle["host_identity"] = signing.build_attestation(
+        "h", key, valid_from="2026-07-05T00:00:00Z",
+        anchors=[{"type": "domain", "domain": "acme.example"}],
+    )
+
+    def _doc_opener(doc):
+        @contextmanager
+        def _open(url, timeout=None):  # noqa: ARG001
+            yield io.BytesIO(_json.dumps(doc).encode())
+        return _open
+
+    good = {"assurance": "signed", "public_key": key.public_key_b64}
+    monkey = signing.resolve_host_identity
+    doc = signing.resolve_host_identity("acme.example", _urlopen=_doc_opener(good))
+    assert doc["public_key"] == key.public_key_b64
+
+    # Wire the injected resolver through verify_bundle via monkeypatching the
+    # module-level function (verify_bundle calls resolve_host_identity directly).
+    import chp_core.signing as S
+    orig = S.resolve_host_identity
+    try:
+        S.resolve_host_identity = lambda d, **kw: good
+        v = S.verify_bundle(bundle, resolve=True)
+        assert v.checks["anchor"] is True
+        assert v.anchored_domain == "acme.example"
+
+        S.resolve_host_identity = lambda d, **kw: {"public_key": "SOMEONE-ELSES-KEY"}
+        v2 = S.verify_bundle(bundle, resolve=True)
+        assert v2.checks["anchor"] is False and not v2.valid
+        assert v2.anchored_domain is None
+    finally:
+        S.resolve_host_identity = orig
+    assert monkey is S.resolve_host_identity
+
+
+def test_resolve_requires_https():
+    import pytest as _pytest
+    with _pytest.raises(signing.AnchorResolutionError, match="https"):
+        signing.resolve_host_identity("http://acme.example")
+
+
+def test_no_anchor_bundle_under_resolve_is_tofu_floor(tmp_path):
+    # resolve=True on an anchor-less bundle: no 'anchor' check appears — the
+    # caller can SEE it's TOFU-floor, and validity is unchanged.
+    host = _host_with_events(tmp_path)
+    key = signing.generate_keypair(tmp_path / "keys")
+    events = host.store.export_correlation(CORR)
+    bundle = signing.sign_bundle(
+        signing.build_bundle("h", events, created_at="2026-07-05T00:00:00Z"), key)
+    v = signing.verify_bundle(bundle, resolve=True)
+    assert v.valid and "anchor" not in v.checks and v.anchored_domain is None
+
+
+def test_load_or_build_attestation_is_stable_and_rebuilds_on_change(tmp_path):
+    key = signing.generate_keypair(tmp_path / "keys")
+    a1 = signing.load_or_build_attestation("h", key, None, key_dir=tmp_path / "keys")
+    a2 = signing.load_or_build_attestation("h", key, None, key_dir=tmp_path / "keys")
+    assert a1 == a2, "attestation must be persisted, not rebuilt per request"
+    # anchor config change → rebuild (new signature, anchors present)
+    a3 = signing.load_or_build_attestation(
+        "h", key, [{"type": "domain", "domain": "acme.example"}], key_dir=tmp_path / "keys")
+    assert a3 != a1 and a3["anchors"][0]["domain"] == "acme.example"
+    # and the anchored one is now stable too
+    a4 = signing.load_or_build_attestation(
+        "h", key, [{"type": "domain", "domain": "acme.example"}], key_dir=tmp_path / "keys")
+    assert a3 == a4

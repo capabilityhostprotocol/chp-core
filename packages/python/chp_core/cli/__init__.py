@@ -10,7 +10,10 @@ from ._core import (
     cmd_export_evidence,
     cmd_host,
     cmd_invoke,
+    cmd_anchor_did,
     cmd_keygen,
+    cmd_revoke_key,
+    cmd_rotate_key,
     cmd_replay,
     cmd_retention_apply,
     cmd_serve_demo,
@@ -627,6 +630,33 @@ def build_parser() -> argparse.ArgumentParser:
     keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
     keygen_p.add_argument("--overwrite", action="store_true", help="Replace an existing key.")
     keygen_p.set_defaults(func=cmd_keygen)
+
+    anchor_did_p = subcommands.add_parser(
+        "anchor-did",
+        help="Anchor the host key to this node's Radicle DID (countersigned via ssh-agent).")
+    anchor_did_p.add_argument("--host-id", required=True, dest="host_id",
+                              help="The host_id the anchor binds (must match the serving host).")
+    anchor_did_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
+    anchor_did_p.add_argument("--ssh-key", default="~/.radicle/keys/radicle.pub", dest="ssh_key",
+                              help="The Radicle identity public key (private half via ssh-agent).")
+    anchor_did_p.set_defaults(func=cmd_anchor_did)
+
+    rotate_p = subcommands.add_parser(
+        "rotate-key", help="Rotate the host key with continuity (old key vouches for new).")
+    rotate_p.add_argument("--host-id", default="local-chp-host", dest="host_id")
+    rotate_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
+    rotate_p.add_argument("--store", default=None,
+                          help="Evidence store to record key_rotated on (the host's own chain).")
+    rotate_p.set_defaults(func=cmd_rotate_key)
+
+    revoke_p = subcommands.add_parser(
+        "revoke-key", help="Revoke the current host key (published in the identity document).")
+    revoke_p.add_argument("--host-id", default="local-chp-host", dest="host_id")
+    revoke_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
+    revoke_p.add_argument("--reason", default="", help="Reason recorded on the revocation.")
+    revoke_p.add_argument("--store", default=None,
+                          help="Evidence store to record key_revoked on.")
+    revoke_p.set_defaults(func=cmd_revoke_key)
 
     export_p = subcommands.add_parser("export-evidence", help="Export a correlation as a (signed) evidence bundle.")
     export_p.add_argument("session_id", help="Correlation/session ID to export.")

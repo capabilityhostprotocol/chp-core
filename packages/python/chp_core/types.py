@@ -54,6 +54,17 @@ AUTONOMY_EVIDENCE_TYPES = {
     "approval_denied",
 }
 
+# Host-SELF evidence (spec §3.2 / governance §4.4): the host's own key/identity
+# lifecycle, emitted on its own hash-chained store — which thereby serves as the
+# host's key-transparency log (tamper-evident, ordered, exportable like any
+# bundle). The first evidence family describing the host rather than an invocation.
+IDENTITY_EVIDENCE_TYPES = {
+    "key_generated",
+    "key_rotated",
+    "key_revoked",
+    "identity_anchored",
+}
+
 RETRIEVAL_EVIDENCE_TYPES = {
     "retrieval_started",
     "retrieval_completed",

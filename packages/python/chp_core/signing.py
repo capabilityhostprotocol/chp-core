@@ -85,14 +85,36 @@ class HostKey:
         return self._private is not None
 
 
+def _archive_keypair(key_dir: Path) -> str | None:
+    """Move the current keypair to ``<key_dir>/archive/<key_id>/``. Returns the
+    archived key_id, or None if there was no key. Overwrite/rotation MUST never
+    destroy a key — old signatures stay attributable to their key lineage."""
+    pub_path = key_dir / _PUBLIC_NAME
+    priv_path = key_dir / _PRIVATE_NAME
+    if not pub_path.exists():
+        return None
+    old_key_id = key_id_for(base64.b64decode(pub_path.read_bytes()))
+    dest = key_dir / "archive" / old_key_id
+    dest.mkdir(parents=True, exist_ok=True)
+    pub_path.rename(dest / _PUBLIC_NAME)
+    if priv_path.exists():
+        priv_path.rename(dest / _PRIVATE_NAME)
+    return old_key_id
+
+
 def generate_keypair(key_dir: str | Path = DEFAULT_KEY_DIR, *, overwrite: bool = False) -> HostKey:
-    """Create an ed25519 keypair under *key_dir* (private 0600, dir 0700)."""
+    """Create an ed25519 keypair under *key_dir* (private 0600, dir 0700).
+
+    ``overwrite=True`` ARCHIVES the existing pair to ``archive/<key_id>/``
+    (never destroys it). For rotation with continuity use ``rotate_keypair``."""
     ed25519 = _load_backend()
     key_dir = Path(key_dir)
     priv_path = key_dir / _PRIVATE_NAME
     pub_path = key_dir / _PUBLIC_NAME
     if priv_path.exists() and not overwrite:
         raise FileExistsError(f"key already exists at {priv_path}; pass overwrite=True to replace")
+    if overwrite:
+        _archive_keypair(key_dir)
 
     key_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -157,22 +179,32 @@ def bundle_header(bundle: dict) -> dict:
 
 
 def build_attestation(host_id: str, host_key: HostKey, *, valid_from: str,
-                      valid_until: str | None = None) -> dict:
+                      valid_until: str | None = None,
+                      anchors: list[dict] | None = None) -> dict:
     """Self-signed statement binding host_id <-> public_key.
 
     key_id = sha256(pubkey)[:16] only binds a key to itself; host_id is a free
     string anyone can label a bundle with. This puts the identity claim inside a
     signature by the key, so a verifier checks host_id is asserted by the keyholder
-    (the TOFU trust floor, now cryptographic rather than a bare string)."""
+    (the TOFU trust floor, now cryptographic rather than a bare string).
+
+    ``anchors`` upgrades the floor: a list of external trust roots that vouch for
+    this key (spec/chp-v0.2.md §3 Anchors), e.g. ``{"type": "domain", "domain":
+    "acme.com"}``. Anchors live INSIDE the signed claim so they can be neither
+    stripped (downgrade) nor stapled on (forgery) without breaking the signature.
+    CRITICAL: the key is omitted entirely when empty — emitting ``"anchors": []``
+    would change the canonical bytes and break every published test vector."""
     if not host_key.can_sign:
         raise SigningUnavailable("host key has no private component; cannot attest")
-    claim = {
+    claim: dict[str, Any] = {
         "host_id": host_id,
         "public_key": host_key.public_key_b64,
         "key_id": host_key.key_id,
         "valid_from": valid_from,
         "valid_until": valid_until,
     }
+    if anchors:
+        claim["anchors"] = anchors
     return {**claim, "signature": _sign(host_key._private, _canon(claim))}
 
 
@@ -229,13 +261,15 @@ def build_bundle(
     }
 
 
-def sign_bundle(bundle: dict, host_key: HostKey, *, valid_until: str | None = None) -> dict:
+def sign_bundle(bundle: dict, host_key: HostKey, *, valid_until: str | None = None,
+                anchors: list[dict] | None = None) -> dict:
     """Sign a bundle's canonical header, promoting it to the `signed` tier.
 
     Signs the header (host_id/created_at/protocol_version/canonicalization +
     root_hash), not just root_hash, so a stranger cannot relabel the origin
     without breaking the signature. Attaches a self-signed host-identity
-    attestation binding host_id <-> public_key."""
+    attestation binding host_id <-> public_key (with ``anchors`` when the key
+    is anchored to an external trust root — spec §3 Anchors)."""
     if not host_key.can_sign:
         raise SigningUnavailable("host key has no private component; cannot sign")
     signed = dict(bundle)
@@ -244,6 +278,7 @@ def sign_bundle(bundle: dict, host_key: HostKey, *, valid_until: str | None = No
     signed["host_identity"] = build_attestation(
         signed["host_id"], host_key,
         valid_from=signed.get("created_at", ""), valid_until=valid_until,
+        anchors=anchors,
     )
     signed["signature"] = {
         "algorithm": SIGNATURE_ALGORITHM,
@@ -281,9 +316,265 @@ def verify_attestation(
             return False
         if vu is not None and at_time > vu:
             return False
-    claim = {k: attestation.get(k) for k in
-             ("host_id", "public_key", "key_id", "valid_from", "valid_until")}
+    # Reconstruct the claim with the SAME conditional-anchors rule as
+    # build_attestation: "anchors" participates in the signed bytes only when
+    # present. This is what makes anchors strip/staple-proof, and what keeps a
+    # no-anchor attestation byte-identical to the pre-anchor format.
+    keys = ("host_id", "public_key", "key_id", "valid_from", "valid_until") + (
+        ("anchors",) if "anchors" in attestation else ()
+    )
+    claim = {k: attestation.get(k) for k in keys}
     return _verify_sig(att_pub, _canon(claim), attestation.get("signature", ""))
+
+
+def _domain_anchor(attestation: dict) -> str | None:
+    """The first ``{"type": "domain"}`` anchor's domain, or None. Pure/offline."""
+    for anchor in attestation.get("anchors") or []:
+        if isinstance(anchor, dict) and anchor.get("type") == "domain" and anchor.get("domain"):
+            return str(anchor["domain"])
+    return None
+
+
+def _did_anchor(attestation: dict) -> dict | None:
+    """The first ``{"type": "did"}`` anchor, or None. Pure/offline."""
+    for anchor in attestation.get("anchors") or []:
+        if isinstance(anchor, dict) and anchor.get("type") == "did" and anchor.get("did"):
+            return anchor
+    return None
+
+
+def did_anchor_message(chp_public_key_b64: str, host_id: str) -> bytes:
+    """The exact bytes a DID key countersigns to anchor a CHP key (§3.1):
+    chp-stable-v1 of {chp_public_key, host_id}, SSHSIG namespace
+    ``chp-host-anchor``. Shared by the producer and both verifiers."""
+    return _canon({"chp_public_key": chp_public_key_b64, "host_id": host_id})
+
+
+def verify_did_anchor(anchor: dict, chp_public_key_b64: str, host_id: str) -> bool:
+    """Offline-verify a ``did`` anchor: the DID's ed25519 key (decoded from
+    did:key) must have countersigned THIS CHP key + host_id via SSHSIG."""
+    from . import sshsig  # noqa: PLC0415
+    try:
+        raw_pub = sshsig.did_key_to_raw(str(anchor.get("did", "")))
+    except sshsig.SshsigError:
+        return False
+    return sshsig.verify_sshsig(
+        str(anchor.get("countersignature", "")),
+        did_anchor_message(chp_public_key_b64, host_id),
+        expected_raw_pubkey=raw_pub,
+    )
+
+
+# --------------------------------------------------------------------------
+# Key lifecycle: rotation with continuity, history, revocation (spec §3.2)
+# --------------------------------------------------------------------------
+
+def rotate_keypair(key_dir: str | Path = DEFAULT_KEY_DIR) -> tuple[HostKey, dict]:
+    """Rotate the host keypair WITH CONTINUITY: the OLD key signs a statement
+    vouching for the new one, so a verifier that pinned the old key can follow
+    the lineage instead of treating rotation as impersonation.
+
+    Returns (new_key, continuity_statement). The statement is self-contained
+    (carries old_public_key) and appended to ``<key_dir>/key_history.json``;
+    the old pair is archived; the persisted attestation is invalidated so the
+    next serve rebuilds under the new key."""
+    key_dir = Path(key_dir)
+    old = load_host_key(key_dir)
+    if old is None or not old.can_sign:
+        raise SigningUnavailable("no signing-capable key to rotate; run keygen first")
+    from .types import utc_now  # noqa: PLC0415
+
+    new = generate_keypair(key_dir, overwrite=True)  # archives the old pair
+    claim = {
+        "old_key_id": old.key_id,
+        "old_public_key": old.public_key_b64,
+        "new_key_id": new.key_id,
+        "new_public_key": new.public_key_b64,
+        "rotated_at": utc_now(),
+    }
+    statement = {**claim, "signature": _sign(old._private, _canon(claim))}
+    history = load_key_history(key_dir)
+    history.append(statement)
+    (key_dir / "key_history.json").write_text(json.dumps(history, indent=2, sort_keys=True) + "\n")
+    att = key_dir / "attestation.json"
+    if att.exists():
+        att.unlink()
+    return new, statement
+
+
+def verify_continuity(statement: dict) -> bool:
+    """Verify a rotation continuity statement: signed by the OLD key it names.
+    Self-contained — but a verifier holding an independently-pinned old key
+    SHOULD check ``old_public_key`` against its pin before trusting it."""
+    claim = {k: statement.get(k) for k in
+             ("old_key_id", "old_public_key", "new_key_id", "new_public_key", "rotated_at")}
+    old_pub = statement.get("old_public_key")
+    if not old_pub:
+        return False
+    return _verify_sig(old_pub, _canon(claim), statement.get("signature", ""))
+
+
+def load_key_history(key_dir: str | Path = DEFAULT_KEY_DIR) -> list[dict]:
+    path = Path(key_dir) / "key_history.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def revoke_key(key_dir: str | Path = DEFAULT_KEY_DIR, *, reason: str = "") -> dict:
+    """Revoke the CURRENT key: a self-signed revocation statement persisted to
+    ``<key_dir>/revocations.json`` and served in the identity document.
+    Resolution-time verifiers see it; offline verifiers cannot (documented
+    limit — no global revocation infrastructure at this tier)."""
+    key = load_host_key(key_dir)
+    if key is None or not key.can_sign:
+        raise SigningUnavailable("no signing-capable key to revoke")
+    from .types import utc_now  # noqa: PLC0415
+
+    claim = {"revoked_key_id": key.key_id, "revoked_public_key": key.public_key_b64,
+             "revoked_at": utc_now(), "reason": reason}
+    statement = {**claim, "signature": _sign(key._private, _canon(claim))}
+    path = Path(key_dir) / "revocations.json"
+    existing = []
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except Exception:
+            existing = []
+    existing.append(statement)
+    path.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n")
+    return statement
+
+
+def verify_revocation(statement: dict) -> bool:
+    """A revocation statement is self-signed by the key it revokes (a signed
+    'do not trust me' — unforgeable by a third party, and an attacker gains
+    nothing by forging one against their own stolen key's interests)."""
+    claim = {k: statement.get(k) for k in
+             ("revoked_key_id", "revoked_public_key", "revoked_at", "reason")}
+    pub = statement.get("revoked_public_key")
+    if not pub:
+        return False
+    return _verify_sig(pub, _canon(claim), statement.get("signature", ""))
+
+
+def load_revocations(key_dir: str | Path = DEFAULT_KEY_DIR) -> list[dict]:
+    path = Path(key_dir) / "revocations.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def load_configured_anchors(key_dir: str | Path = DEFAULT_KEY_DIR) -> list[dict]:
+    """Anchors configured on this host (``<key_dir>/anchors.json``) — e.g. a
+    did anchor produced by ``chp anchor-did``. Merged with any CHP_HOST_DOMAIN
+    domain anchor by the serving layer."""
+    path = Path(key_dir) / "anchors.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def save_configured_anchors(anchors: list[dict],
+                            key_dir: str | Path = DEFAULT_KEY_DIR) -> None:
+    path = Path(key_dir) / "anchors.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(anchors, indent=2, sort_keys=True) + "\n")
+
+
+def load_or_build_attestation(host_id: str, host_key: HostKey,
+                              anchors: list[dict] | None = None,
+                              key_dir: str | Path = DEFAULT_KEY_DIR) -> dict:
+    """The host's persistent attestation: load from disk if it still matches
+    (same host_id, same key, same anchors, signature verifies), else build,
+    persist, and return a fresh one.
+
+    Persistence matters: rebuilding per request (the old /host behavior) makes
+    valid_from drift to "now" on every fetch, so validity windows and anchors
+    were never stable — which breaks anchored resolution and (later) rotation."""
+    from .types import utc_now  # noqa: PLC0415
+
+    path = Path(key_dir) / "attestation.json"
+    if path.exists():
+        try:
+            att = json.loads(path.read_text())
+            if (
+                att.get("host_id") == host_id
+                and att.get("public_key") == host_key.public_key_b64
+                and (att.get("anchors") if "anchors" in att else None) == (anchors or None)
+                and verify_attestation(att, public_key=host_key.public_key_b64)
+            ):
+                return att
+        except Exception:
+            pass  # unreadable/stale → rebuild below
+    att = build_attestation(host_id, host_key, valid_from=utc_now(), anchors=anchors)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(att, indent=2, sort_keys=True) + "\n")
+    return att
+
+
+class AnchorResolutionError(RuntimeError):
+    """Raised when a host identity document cannot be resolved (DNS, TLS,
+    non-2xx, oversized, or non-JSON). Distinct from a verification failure —
+    resolution errors mean "could not check", never "checked and matched"."""
+
+
+_IDENTITY_DOC_MAX_BYTES = 64 * 1024
+WELL_KNOWN_IDENTITY_PATH = "/.well-known/chp-identity"
+
+
+def resolve_host_identity(domain_or_url: str, *, timeout: float = 5.0,
+                          _urlopen: Any = None) -> dict:
+    """Fetch a host's identity document from its well-known endpoint.
+
+    Trust model (spec/chp-v0.2.md §3 Anchors): the document's authority comes
+    from being served over TLS by the anchor domain — the Web-PKI chain (CA +
+    DNS + domain control) vouches "this domain asserts key P is its CHP signing
+    key". Therefore https is REQUIRED and redirects are refused (a redirect to
+    http would silently break the chain). ``_urlopen`` is test injection only.
+    """
+    import urllib.request  # noqa: PLC0415
+    import urllib.error  # noqa: PLC0415
+
+    url = domain_or_url if "://" in domain_or_url else f"https://{domain_or_url}"
+    if not url.startswith("https://"):
+        raise AnchorResolutionError(f"identity resolution requires https, got: {url}")
+    if WELL_KNOWN_IDENTITY_PATH not in url:
+        url = url.rstrip("/") + WELL_KNOWN_IDENTITY_PATH
+
+    opener = _urlopen
+    if opener is None:
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a: Any, **k: Any) -> None:  # noqa: ARG002
+                return None  # refuse ALL redirects — the origin must serve it
+
+        opener = urllib.request.build_opener(_NoRedirect()).open
+    try:
+        with opener(url, timeout=timeout) as resp:  # type: ignore[operator]
+            raw = resp.read(_IDENTITY_DOC_MAX_BYTES + 1)
+    except Exception as exc:
+        raise AnchorResolutionError(f"could not resolve {url}: {exc}") from exc
+    if len(raw) > _IDENTITY_DOC_MAX_BYTES:
+        raise AnchorResolutionError(f"identity document too large (> {_IDENTITY_DOC_MAX_BYTES} bytes)")
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise AnchorResolutionError(f"identity document is not JSON: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise AnchorResolutionError("identity document is not a JSON object")
+    return doc
 
 
 @dataclass
@@ -292,14 +583,28 @@ class BundleVerification:
     assurance: str
     checks: dict[str, bool]
     reason: str | None = None
+    # Which external trust root vouched for the signing key. The ROOT is the
+    # answer to "whose?" — host_id is a local label and must never be treated
+    # as the trust root (spec §3.1 Anchors). anchored_domain requires
+    # resolve=True (network); anchored_did verifies offline.
+    anchored_domain: str | None = None
+    anchored_did: str | None = None
 
 
-def verify_bundle(bundle: dict, *, expected_key_id: str | None = None) -> BundleVerification:
+def verify_bundle(bundle: dict, *, expected_key_id: str | None = None,
+                  resolve: bool = False) -> BundleVerification:
     """Offline-verify an exported bundle: per-event hashes, chain continuity,
     root hash, and (for signed bundles) the ed25519 signature.
 
     ``expected_key_id`` pins the signer — a bundle signed by a different key is
-    rejected (defends against a valid signature from an untrusted key)."""
+    rejected (defends against a valid signature from an untrusted key).
+
+    ``resolve=True`` additionally resolves the attestation's domain anchor (if
+    any) over https and checks the bundle's key against the domain's published
+    identity document — provenance from a host you've never met, rooted in the
+    anchor domain. Default False keeps verification fully offline (unchanged
+    behavior for existing callers); a no-anchor bundle under resolve=True simply
+    has no ``anchor`` check — visibly TOFU-floor, never silently 'verified'."""
     checks: dict[str, bool] = {}
     events = bundle.get("events") or []
 
@@ -324,6 +629,8 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None) -> Bundle
 
     assurance = bundle.get("assurance", "none")
     sig = bundle.get("signature")
+    anchored_domain: str | None = None
+    anchored_did: str | None = None
 
     # 3. Signature (only for signed bundles).
     if assurance == "signed":
@@ -352,8 +659,48 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None) -> Bundle
                 at_time=bundle.get("created_at"),
             )
 
+        # DID anchor (offline — no network, no CA/DNS): the Radicle identity key
+        # countersigned this CHP key. Verified whenever present; a bad
+        # countersignature means a forged provenance claim.
+        if att:
+            did_anchor = _did_anchor(att)
+            if did_anchor is not None:
+                checks["did_anchor"] = verify_did_anchor(
+                    did_anchor, pub, str(bundle.get("host_id", "")))
+                if checks["did_anchor"]:
+                    anchored_did = str(did_anchor["did"])
+
+        # Domain-anchor resolution (opt-in): the signed attestation names an
+        # external trust root; confirm the root actually vouches for THIS key.
+        # Resolution proves CURRENT control of the anchor; the attestation window
+        # (above) proves validity at signing time — both recorded, distinct.
+        if resolve and att:
+            domain = _domain_anchor(att)
+            if domain is not None:
+                try:
+                    doc = resolve_host_identity(domain)
+                    doc_keys = {doc.get("public_key"),
+                                (doc.get("host_identity") or {}).get("public_key")}
+                    checks["anchor"] = pub in doc_keys
+                    if checks["anchor"]:
+                        anchored_domain = domain
+                    # Revocation (§3.2): a resolving verifier sees revocations the
+                    # host publishes; a bundle signed by a revoked key is rejected.
+                    # Offline verifiers cannot see this — a documented tier limit.
+                    revoked = {r.get("revoked_public_key")
+                               for r in doc.get("revoked_keys") or []
+                               if verify_revocation(r)}
+                    if pub in revoked:
+                        checks["not_revoked"] = False
+                except AnchorResolutionError as exc:
+                    checks["anchor"] = False
+                    return BundleVerification(False, assurance, checks,
+                                              f"anchor resolution failed: {exc}")
+
     valid = all(checks.values())
     reason = None if valid else "one or more integrity checks failed: " + ", ".join(
         k for k, v in checks.items() if not v
     )
-    return BundleVerification(valid=valid, assurance=assurance, checks=checks, reason=reason)
+    return BundleVerification(valid=valid, assurance=assurance, checks=checks,
+                              reason=reason, anchored_domain=anchored_domain,
+                              anchored_did=anchored_did)

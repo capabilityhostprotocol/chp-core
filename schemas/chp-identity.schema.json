@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/chp-identity.schema.json",
+  "title": "ChpIdentityDocument",
+  "description": "Public host identity document served unauthenticated at /.well-known/chp-identity (chp-v0.2.md \u00a73.1). Its authority comes from the TLS origin serving it.",
+  "type": "object",
+  "required": [
+    "assurance"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "assurance": {
+      "type": "string",
+      "enum": [
+        "none",
+        "hash-chain",
+        "signed"
+      ]
+    },
+    "key_id": {
+      "type": "string"
+    },
+    "public_key": {
+      "type": "string"
+    },
+    "host_identity": {
+      "type": "object",
+      "description": "Self-signed host-identity attestation (chp-v0.2.md \u00a73). 'anchors' is omitted entirely when empty (\u00a73.1 byte rule).",
+      "required": [
+        "host_id",
+        "public_key",
+        "key_id",
+        "valid_from",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "public_key": {
+          "type": "string"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "valid_from": {
+          "type": "string"
+        },
+        "valid_until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "anchors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          },
+          "description": "External trust roots vouching for this key, e.g. {\"type\":\"domain\",\"domain\":\"acme.example\"}. MUST be omitted when empty."
+        },
+        "signature": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

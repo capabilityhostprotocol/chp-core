@@ -130,6 +130,84 @@ def mark_stats(url: str, stats: dict) -> None:
             return
 
 
+def pin_or_check_key(url: str, key_id: str, public_key: str | None,
+                     trust: str = "tofu",
+                     key_history: list | None = None) -> tuple[str, str | None]:
+    """Trust-on-first-use for a remote's signing key (ssh known_hosts model).
+
+    Returns (status, detail):
+      - ("pinned", key_id)     first time we've seen a key for this remote — recorded.
+      - ("ok", key_id)         the presented key matches the pinned one.
+      - ("rotated", key_id)    the key changed BUT a valid continuity chain (each
+                               hop signed by the key we already trusted) links the
+                               pinned key to the presented one — re-pinned.
+      - ("mismatch", pinned)   the key CHANGED with no valid continuity — a hard
+                               error; needs manual reset.
+      - ("no-remote", None)    url not in the mesh manifest.
+
+    ``trust`` records HOW the key earned the pin: "tofu" (first-seen, unverified
+    beyond the self-attestation), "anchored" (an external trust root vouched),
+    or "rotated" (followed a continuity chain from a previously-pinned key).
+    An anchored confirmation upgrades a tofu pin; never downgraded automatically.
+
+    ``key_history`` is the remote's published rotation lineage (spec §3.2): a
+    list of continuity statements, each signed by the OLD key it names. The
+    chain walk trusts each hop only if it verifies under the key we ALREADY
+    trust — the remote's self-published history cannot vouch for itself.
+    """
+    from chp_core.signing import verify_continuity
+
+    data = load_mesh()
+    for r in data.get("agent_remotes") or []:
+        if r.get("url") != url:
+            continue
+        pinned = r.get("key_id")
+        if not pinned:
+            r["key_id"] = key_id
+            if public_key:
+                r["public_key"] = public_key
+            r["trust"] = trust
+            save_mesh(data)
+            return ("pinned", key_id)
+        if pinned == key_id:
+            if trust == "anchored" and r.get("trust") != "anchored":
+                r["trust"] = "anchored"
+                save_mesh(data)
+            return ("ok", key_id)
+        # Rotation path: walk the continuity chain pinned → presented, each hop
+        # verified under the key trusted so far (starting from OUR pinned pubkey).
+        trusted_id, trusted_pub = pinned, r.get("public_key")
+        for stmt in key_history or []:
+            if (stmt.get("old_key_id") == trusted_id
+                    and stmt.get("old_public_key") == trusted_pub
+                    and verify_continuity(stmt)):
+                trusted_id = stmt.get("new_key_id")
+                trusted_pub = stmt.get("new_public_key")
+                if trusted_id == key_id:
+                    r["key_id"] = key_id
+                    r["public_key"] = trusted_pub
+                    r["trust"] = "rotated"
+                    save_mesh(data)
+                    return ("rotated", key_id)
+        return ("mismatch", pinned)
+    return ("no-remote", None)
+
+
+def reset_key(url: str) -> bool:
+    """Clear a remote's pinned key so the next verify re-pins (TOFU). Deliberate."""
+    data = load_mesh()
+    changed = False
+    for r in data.get("agent_remotes") or []:
+        if r.get("url") == url:
+            r.pop("key_id", None)
+            r.pop("public_key", None)
+            changed = True
+            break
+    if changed:
+        save_mesh(data)
+    return changed
+
+
 def mark_verified(url: str) -> None:
     """Stamp ``last_verified`` (UTC now) on the remote, if present.
 

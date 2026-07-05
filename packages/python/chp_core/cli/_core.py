@@ -287,6 +287,145 @@ def cmd_keygen(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_anchor_did(args: argparse.Namespace) -> int:
+    """Anchor the CHP host key to this node's Radicle DID (spec §3.1).
+
+    The Radicle identity key (a standard OpenSSH ed25519 key, held in ssh-agent)
+    countersigns the CHP public key via `ssh-keygen -Y sign` (SSHSIG). A verifier
+    who trusts the DID transitively trusts the CHP key — offline, no CA/DNS."""
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path as _Path
+    from .. import signing, sshsig
+
+    key_dir = args.key_dir or signing.DEFAULT_KEY_DIR
+    key = signing.load_host_key(key_dir)
+    if key is None:
+        print("no host key found; run `chp keygen` first", file=sys.stderr)
+        return 1
+
+    # The node's DID (did:key:z6Mk… = "did:key:" + NID).
+    try:
+        did = subprocess.run(["rad", "self", "--did"], check=True, capture_output=True,
+                             text=True).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        print(f"could not read the Radicle DID (`rad self --did`): {exc}", file=sys.stderr)
+        return 1
+    try:
+        did_raw_pub = sshsig.did_key_to_raw(did)
+    except sshsig.SshsigError as exc:
+        print(f"unexpected DID format {did!r}: {exc}", file=sys.stderr)
+        return 1
+
+    ssh_pub = _Path(args.ssh_key).expanduser()
+    message = signing.did_anchor_message(key.public_key_b64, args.host_id)
+    with tempfile.TemporaryDirectory() as tmp:
+        msgfile = _Path(tmp) / "chp-anchor-msg"
+        msgfile.write_bytes(message)
+        # Signs via ssh-agent — the Radicle key must be loaded (`ssh-add -l`).
+        proc = subprocess.run(
+            ["ssh-keygen", "-Y", "sign", "-f", str(ssh_pub),
+             "-n", sshsig.DID_ANCHOR_NAMESPACE, str(msgfile)],
+            capture_output=True, text=True)
+        if proc.returncode != 0:
+            print("ssh-keygen -Y sign failed (is the Radicle key loaded in "
+                  f"ssh-agent? `ssh-add -l`): {proc.stderr.strip()}", file=sys.stderr)
+            return 1
+        armored = (msgfile.parent / (msgfile.name + ".sig")).read_text()
+
+    # Verify our own product before persisting — never save a bad anchor.
+    if not sshsig.verify_sshsig(armored, message, expected_raw_pubkey=did_raw_pub):
+        print("produced countersignature does not verify against the DID — "
+              "is the ssh key the Radicle identity key?", file=sys.stderr)
+        return 1
+
+    anchors = [a for a in signing.load_configured_anchors(key_dir) if a.get("type") != "did"]
+    anchors.append({"type": "did", "did": did, "countersignature": armored})
+    signing.save_configured_anchors(anchors, key_dir)
+    # Invalidate the persisted attestation so the next serve rebuilds with the anchor.
+    att_path = _Path(key_dir) / "attestation.json"
+    if att_path.exists():
+        att_path.unlink()
+    print(json.dumps({"did": did, "key_id": key.key_id, "host_id": args.host_id,
+                      "anchors_file": str(_Path(key_dir) / "anchors.json")}, indent=2))
+    return 0
+
+
+def _record_identity_event(store_path: str | None, host_id: str,
+                           event_type: str, payload: dict) -> str | None:
+    """Append a host-SELF identity event (IDENTITY_EVIDENCE_TYPES) to the
+    evidence store — the host's own hash-chain is its key-transparency log."""
+    if store_path is None:
+        return None
+    from ..store import SQLiteEvidenceStore
+    from ..types import CorrelationContext, ExecutionEvidence, new_id
+
+    store = SQLiteEvidenceStore(store_path)
+    try:
+        ev = ExecutionEvidence(
+            event_id=new_id("evt"),
+            event_type=event_type,
+            invocation_id=new_id("inv"),
+            capability_id="chp.host.identity",
+            capability_version=None,
+            host_id=host_id,
+            correlation=CorrelationContext(correlation_id=f"host-identity-{host_id}"),
+            payload=payload,
+            redacted=False,
+        )
+        store.append(ev)
+        return ev.event_id
+    finally:
+        store.close()
+
+
+def cmd_rotate_key(args: argparse.Namespace) -> int:
+    """Rotate the host key WITH CONTINUITY (spec §3.2): archive the old pair,
+    old key signs a statement vouching for the new, emit key_rotated evidence."""
+    import sys
+    from .. import signing
+
+    key_dir = args.key_dir or signing.DEFAULT_KEY_DIR
+    try:
+        new_key, statement = signing.rotate_keypair(key_dir)
+    except signing.SigningUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    evt = _record_identity_event(args.store, args.host_id, "key_rotated", {
+        "old_key_id": statement["old_key_id"],
+        "new_key_id": statement["new_key_id"],
+        "rotated_at": statement["rotated_at"],
+    })
+    print(json.dumps({"rotated": True, "old_key_id": statement["old_key_id"],
+                      "new_key_id": new_key.key_id,
+                      "continuity_verified": signing.verify_continuity(statement),
+                      "evidence_id": evt}, indent=2))
+    return 0
+
+
+def cmd_revoke_key(args: argparse.Namespace) -> int:
+    """Revoke the current host key (spec §3.2). Served in the identity document;
+    resolution-time verifiers see it (offline verifiers cannot — tier limit)."""
+    import sys
+    from .. import signing
+
+    key_dir = args.key_dir or signing.DEFAULT_KEY_DIR
+    try:
+        statement = signing.revoke_key(key_dir, reason=args.reason or "")
+    except signing.SigningUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    evt = _record_identity_event(args.store, args.host_id, "key_revoked", {
+        "revoked_key_id": statement["revoked_key_id"],
+        "revoked_at": statement["revoked_at"],
+        "reason": statement["reason"],
+    })
+    print(json.dumps({"revoked_key_id": statement["revoked_key_id"],
+                      "evidence_id": evt}, indent=2))
+    return 0
+
+
 def cmd_export_evidence(args: argparse.Namespace) -> int:
     import sys
     from .. import signing

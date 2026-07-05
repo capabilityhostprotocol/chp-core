@@ -118,6 +118,17 @@ invocation is the point, not only the blocks.
 named. Redaction/purge events are how retention (v0.2 §4) stays auditable: the
 act of removing evidence is itself evidence.
 
+### 4.4 Host Identity (`IDENTITY_EVIDENCE_TYPES`)
+
+- `key_generated` / `key_rotated` / `key_revoked` — the host's signing-key
+  lifecycle (chp-v0.2.md §3.2), including the rotation continuity link
+  (`old_key_id`/`new_key_id`).
+- `identity_anchored` — an external trust root was bound to the key (§3.1).
+
+These are **host-self** events: they describe the host, not an invocation, and
+ride the host's own hash chain under correlation `host-identity-<host_id>` —
+which thereby serves as the host's key-transparency log.
+
 ## 5. Namespacing & Extension
 
 To let independent implementations extend the vocabulary without colliding:

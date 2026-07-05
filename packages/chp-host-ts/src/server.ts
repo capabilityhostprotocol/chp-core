@@ -70,6 +70,11 @@ export function createHostServer(host: LocalCapabilityHost, opts: { apiKey?: str
         status: 'ok', host_id: d.id, protocol: 'chp', version: '0.1', host_version: HOST_VERSION,
       });
     }
+    // Public: the identity document — a never-met verifier resolves the key
+    // without credentials (spec §3 Anchors); capabilities stay behind auth.
+    if (method === 'GET' && path === '/.well-known/chp-identity') {
+      return sendJson(res, 200, host.identityDoc());
+    }
 
     if (!authed(req)) return err(res, 401, 'unauthorized', 'Missing or invalid X-CHP-Key');
 

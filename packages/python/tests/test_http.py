@@ -399,5 +399,30 @@ def test_authenticated_subject_overrides_client_asserted(monkeypatch) -> None:
         thread.join(timeout=2)
 
 
+def test_well_known_identity_is_public_while_host_is_gated(monkeypatch) -> None:
+    # A never-met verifier must be able to resolve the identity doc WITHOUT
+    # credentials (spec §3 Anchors) — while /host stays auth-gated.
+    monkeypatch.setenv("CHP_HOST_API_KEY", "s3cret")
+    host = LocalCapabilityHost("wk-host", store=SQLiteEvidenceStore(":memory:"))
+    server = create_http_server(host, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        doc = json.loads(urlopen(f"{base}/.well-known/chp-identity", timeout=5).read())
+        assert "assurance" in doc  # public, no X-CHP-Key needed
+        if doc["assurance"] == "signed":
+            assert doc.get("public_key") and doc.get("key_id")
+        try:
+            urlopen(f"{base}/host", timeout=5)
+            assert False, "expected 401 on /host without key"
+        except Exception as exc:
+            assert getattr(exc, "code", None) == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 if __name__ == "__main__":
     unittest.main()

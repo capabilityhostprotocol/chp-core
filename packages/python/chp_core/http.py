@@ -61,9 +61,25 @@ def _host_assurance(host_id: str | None = None) -> JSON:
     out: JSON = {"assurance": "signed", "key_id": key.key_id, "public_key": key.public_key_b64}
     if host_id and key.can_sign:
         try:
-            from .signing import build_attestation
-            from .types import utc_now
-            out["host_identity"] = build_attestation(host_id, key, valid_from=utc_now())
+            from .signing import load_configured_anchors, load_or_build_attestation
+            # Anchors (spec §3.1): configured anchors (e.g. a did anchor from
+            # `chp anchor-did`) + a CHP_HOST_DOMAIN domain anchor. These become
+            # the trust roots a never-met verifier can check. None → TOFU floor.
+            anchors = list(load_configured_anchors())
+            domain = os.environ.get("CHP_HOST_DOMAIN")
+            if domain and not any(a.get("type") == "domain" for a in anchors):
+                anchors.append({"type": "domain", "domain": domain})
+            # Persisted, not rebuilt per request — stable valid_from + anchors.
+            out["host_identity"] = load_or_build_attestation(host_id, key, anchors or None)
+            # Key lifecycle (spec §3.2): rotation lineage + revocations, so a
+            # resolving verifier can follow continuity and see revoked keys.
+            from .signing import load_key_history, load_revocations
+            history = load_key_history()
+            if history:
+                out["key_history"] = history
+            revocations = load_revocations()
+            if revocations:
+                out["revoked_keys"] = revocations
         except Exception:
             pass
     return out
@@ -142,6 +158,15 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 "version": "0.1",
                 "host_version": _host_version(),
             })
+            return
+        if path == "/.well-known/chp-identity":
+            # PUBLIC (like /health): a never-met verifier must be able to resolve
+            # this host's key without credentials — the doc's authority comes from
+            # the TLS origin serving it, not from auth (spec §3 Anchors). Serves
+            # only key/identity material; capability data stays behind auth.
+            desc = self._sync_discover()
+            host_id = desc.get("id") or (desc.get("hosts") or [None])[0]
+            self._write_json(_host_assurance(host_id))
             return
         if not self._check_auth():
             return

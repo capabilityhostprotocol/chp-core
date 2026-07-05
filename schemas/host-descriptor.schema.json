@@ -3,7 +3,14 @@
   "$id": "https://chp.dev/schemas/v0.1/host-descriptor.schema.json",
   "title": "HostDescriptor",
   "type": "object",
-  "required": ["id", "version", "protocol_version", "kind", "capabilities", "evidence"],
+  "required": [
+    "id",
+    "version",
+    "protocol_version",
+    "kind",
+    "capabilities",
+    "evidence"
+  ],
   "additionalProperties": false,
   "properties": {
     "id": {
@@ -30,11 +37,18 @@
     },
     "evidence": {
       "type": "object",
-      "required": ["store", "append_only"],
+      "required": [
+        "store",
+        "append_only"
+      ],
       "additionalProperties": true,
       "properties": {
-        "store": { "type": "string" },
-        "append_only": { "type": "boolean" }
+        "store": {
+          "type": "string"
+        },
+        "append_only": {
+          "type": "boolean"
+        }
       }
     },
     "metadata": {
@@ -48,8 +62,12 @@
     },
     "assurance": {
       "type": "string",
-      "enum": ["none", "hash-chain", "signed"],
-      "description": "Declared evidence assurance tier (chp-v0.2.md §1). A verifier MUST reject a tier lower than it requires."
+      "enum": [
+        "none",
+        "hash-chain",
+        "signed"
+      ],
+      "description": "Declared evidence assurance tier (chp-v0.2.md \u00a71). A verifier MUST reject a tier lower than it requires."
     },
     "key_id": {
       "type": "string",
@@ -58,6 +76,58 @@
     "public_key": {
       "type": "string",
       "description": "base64 ed25519 public key; present when assurance is 'signed'."
+    },
+    "host_identity": {
+      "type": "object",
+      "description": "Self-signed host-identity attestation (chp-v0.2.md \u00a73). 'anchors' is omitted entirely when empty (\u00a73.1 byte rule).",
+      "required": [
+        "host_id",
+        "public_key",
+        "key_id",
+        "valid_from",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "public_key": {
+          "type": "string"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "valid_from": {
+          "type": "string"
+        },
+        "valid_until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "anchors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          },
+          "description": "External trust roots vouching for this key, e.g. {\"type\":\"domain\",\"domain\":\"acme.example\"}. MUST be omitted when empty."
+        },
+        "signature": {
+          "type": "string"
+        }
+      }
     }
   }
 }

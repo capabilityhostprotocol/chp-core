@@ -77,16 +77,21 @@ export function buildAttestation(
   key: HostKey,
   validFrom: string,
   validUntil: string | null = null,
+  anchors: JsonValue[] | null = null,
 ): JsonValue {
   if (!key.privateKey) throw new Error('host key has no private component; cannot attest');
-  const claim: JsonValue = {
+  const claim: Record<string, JsonValue> = {
     host_id: hostId,
     public_key: key.publicKeyB64,
     key_id: key.keyId,
     valid_from: validFrom,
     valid_until: validUntil,
   };
-  return { ...(claim as object), signature: signCanon(key.privateKey, claim) } as JsonValue;
+  // Omit-when-empty (spec §3 Anchors): emitting "anchors": [] would change the
+  // canonical bytes and break every published vector. Anchors live INSIDE the
+  // signed claim so they can be neither stripped nor stapled on.
+  if (anchors && anchors.length > 0) claim.anchors = anchors;
+  return { ...claim, signature: signCanon(key.privateKey, claim as JsonValue) } as JsonValue;
 }
 
 export function buildBundle(
@@ -109,7 +114,7 @@ export function buildBundle(
 export function signBundle(
   bundle: Record<string, JsonValue>,
   key: HostKey,
-  opts: { validUntil?: string | null } = {},
+  opts: { validUntil?: string | null; anchors?: JsonValue[] | null } = {},
 ): Record<string, JsonValue> {
   if (!key.privateKey) throw new Error('host key has no private component; cannot sign');
   const signed: Record<string, JsonValue> = { ...bundle, assurance: 'signed', public_key: key.publicKeyB64 };
@@ -118,6 +123,7 @@ export function signBundle(
     key,
     (signed.created_at as string) ?? '',
     opts.validUntil ?? null,
+    opts.anchors ?? null,
   );
   signed.signature = {
     algorithm: SIGNATURE_ALGORITHM,
