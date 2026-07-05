@@ -1,0 +1,48 @@
+name: Publish TS packages (SDK + host)
+
+# One-click publish for the TypeScript second implementation. Uses the same
+# NPM_TOKEN secret as release.yml (server-side token → no interactive 2FA).
+# Independent of the coordinated release-tag flow: the SDK/host version their
+# own package.json (alpha), so trigger this on demand.
+on:
+  workflow_dispatch:
+    inputs:
+      dist_tag:
+        description: "npm dist-tag to publish under"
+        required: false
+        default: "alpha"
+
+jobs:
+  publish:
+    name: Build + publish @capabilityhostprotocol/sdk and /host
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # npm install (not ci) — tolerant of lock drift for the newly-added workspaces
+      - name: Install workspaces
+        run: npm install --no-audit --no-fund
+
+      # Build sdk first so the host can resolve it via the workspace symlink.
+      - name: Build sdk
+        run: npm run build --workspace @capabilityhostprotocol/sdk
+
+      - name: Publish sdk
+        run: npm publish --workspace @capabilityhostprotocol/sdk --access public --tag "${{ github.event.inputs.dist_tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Build host
+        run: npm run build --workspace @capabilityhostprotocol/host
+
+      - name: Publish host
+        run: npm publish --workspace @capabilityhostprotocol/host --access public --tag "${{ github.event.inputs.dist_tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

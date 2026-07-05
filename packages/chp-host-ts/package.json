@@ -1,7 +1,7 @@
 {
   "name": "@capabilityhostprotocol/host",
   "version": "0.1.0-alpha.0",
-  "description": "A conformance-grade Capability Host Protocol (CHP) host in TypeScript — governed invocation pipeline + HTTP binding.",
+  "description": "A conformance-grade Capability Host Protocol (CHP) host in TypeScript \u2014 governed invocation pipeline + HTTP binding.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -26,7 +26,13 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "keywords": ["chp", "capability-host-protocol", "evidence", "governance", "typescript"],
+  "keywords": [
+    "chp",
+    "capability-host-protocol",
+    "evidence",
+    "governance",
+    "typescript"
+  ],
   "author": "Capability Host Protocol Contributors",
   "license": "Apache-2.0",
   "repository": {
@@ -43,6 +49,7 @@
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "@types/node": "^22.0.0"
   }
 }

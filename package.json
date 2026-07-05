@@ -1,9 +1,13 @@
 {
   "name": "capabilityhostprotocol",
   "private": true,
-  "workspaces": ["packages/ts-types"],
+  "workspaces": [
+    "packages/ts-types",
+    "packages/chp-sdk",
+    "packages/chp-host-ts"
+  ],
   "scripts": {
-    "typecheck": "npm run typecheck --workspace @capabilityhostprotocol/types",
-    "build": "npm run build --workspace @capabilityhostprotocol/types"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
   }
 }
