@@ -117,3 +117,61 @@ async def test_safety_via_host():
         store.close()
     finally:
         os.unlink(path)
+
+
+# ── Safety as a first-class invocation gate (host-wired, not the capability) ──
+
+def _safety_host(tmp_path, guardrails):
+    import asyncio
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+
+    host = LocalCapabilityHost(
+        "safety-gate", store=SQLiteEvidenceStore(str(tmp_path / "ev.sqlite")),
+        safety_evaluator=RuleBasedSafetyEvaluator(guardrails=guardrails),
+    )
+
+    async def _h(_ctx, _p):
+        return {"ok": True}
+
+    host.register(CapabilityDescriptor(id="gate.act", version="1.0.0", description=""), _h)
+    return host, asyncio
+
+
+def test_safety_gate_blocks_with_reserved_code_and_events(tmp_path):
+    g = GuardrailDefinition(id="g", capability_id_pattern="gate.act",
+                            max_risk_level="critical", requires_human_for=["gate.act"])
+    host, asyncio = _safety_host(tmp_path, [g])
+    r = asyncio.run(host.ainvoke("gate.act", {}, correlation={"correlation_id": "c"}))
+    assert r.outcome == "denied"
+    assert r.denial.code == "safety_blocked"
+    types = [e["event_type"] for e in host.replay("c")]
+    assert "safety_assessment_started" in types
+    assert "safety_assessment_completed" in types
+    assert "safety_action_blocked" in types
+    assert "execution_started" not in types  # blocked before execution
+
+
+def test_safety_gate_records_assessment_even_when_it_permits(tmp_path):
+    # No matching guardrail → permitted, but the assessment is still evidence.
+    host, asyncio = _safety_host(tmp_path, [])
+    r = asyncio.run(host.ainvoke("gate.act", {}, correlation={"correlation_id": "c"}))
+    assert r.success
+    types = [e["event_type"] for e in host.replay("c")]
+    assert "safety_assessment_started" in types
+    assert "safety_action_approved" in types
+    assert "execution_completed" in types
+
+
+def test_no_evaluator_means_no_safety_events(tmp_path):
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+    import asyncio
+
+    host = LocalCapabilityHost("plain", store=SQLiteEvidenceStore(str(tmp_path / "ev.sqlite")))
+
+    async def _h(_ctx, _p):
+        return {"ok": True}
+
+    host.register(CapabilityDescriptor(id="plain.act", version="1.0.0", description=""), _h)
+    asyncio.run(host.ainvoke("plain.act", {}, correlation={"correlation_id": "c"}))
+    types = [e["event_type"] for e in host.replay("c")]
+    assert not any(t.startswith("safety_") for t in types)

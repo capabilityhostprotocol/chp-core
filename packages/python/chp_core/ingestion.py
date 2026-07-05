@@ -197,11 +197,6 @@ def register_ingestion_capability(host: Any, cap: IngestionCapability) -> None:
         uri: str | None = payload.get("uri")
         content_type: str = payload.get("content_type", "text/plain")
 
-        ctx.emit(
-            "execution_started",
-            {"capability_id": cap.capability_id, "capability_version": cap.capability_version},
-            redacted=False,
-        )
         ctx.emit("ingestion_started", {"uri": uri, "content_type": content_type}, redacted=False)
 
         t0 = time.perf_counter()
@@ -220,7 +215,6 @@ def register_ingestion_capability(host: Any, cap: IngestionCapability) -> None:
                 {"error": str(exc), "latency_ms": latency_ms},
                 redacted=False,
             )
-            ctx.emit("execution_failed", {"error": str(exc)}, redacted=False)
             raise
 
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
@@ -233,11 +227,6 @@ def register_ingestion_capability(host: Any, cap: IngestionCapability) -> None:
                 "latency_ms": latency_ms,
                 "records": [r.to_dict() for r in result.records],
             },
-            redacted=False,
-        )
-        ctx.emit(
-            "execution_completed",
-            {"capability_id": cap.capability_id, "outcome": "success"},
             redacted=False,
         )
         return result.to_dict()

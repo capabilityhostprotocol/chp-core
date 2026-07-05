@@ -2,6 +2,21 @@
 
 CHP is early. Contributions should keep the v0.1 surface small, explicit, and testable.
 
+## Contributor License Agreement
+
+Before we can merge your contribution, you must sign the
+[Contributor License Agreement](CLA.md). You keep ownership of your work; the CLA
+lets Project Auxo, Inc. distribute and (re)license it so CHP stays durable. The
+process is automated: open a pull request and a bot will prompt you to sign by
+posting a one-line comment. You only sign once.
+
+## What's open vs. commercial
+
+This repository is the open core — Apache-2.0 (code) and CC BY 4.0 (spec/docs).
+Commercial components (the hosted evidence service, registry network, compliance
+products, and enterprise/regulated-system adapters) live in separate repositories
+and are **not** accepted here. See [`GOVERNANCE.md`](GOVERNANCE.md).
+
 ## Principles
 
 - Prefer local-first behavior over distributed assumptions.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import threading
 import traceback
 import warnings
@@ -14,12 +15,14 @@ MAX_REPLAY_LIMIT = 10_000
 
 from .store import SQLiteEvidenceStore
 from .decorators import adapt_callable, get_capability_descriptor
+from .policy import PolicyConfig, evaluate_policy, load_policy
 from .redaction import redact_payload
 from .types import (
     AssuranceMetadata,
     AutonomyProfile,
     AUTONOMY_EVIDENCE_TYPES,
     CapabilityDescriptor,
+    CORE_EVIDENCE_TYPES,
     ConversationEvent,
     CorrelationContext,
     DenialReason,
@@ -36,6 +39,25 @@ from .types import (
 )
 
 CapabilityHandler = Callable[["CapabilityExecutionContext", JSON], Any | Awaitable[Any]]
+
+
+def _stringify_floats(value: Any) -> Any:
+    """Represent every float in an evidence payload as its string form.
+
+    chp-stable-v1 (spec/chp-v0.2.md §2) forbids non-integer numbers in
+    canonicalized content: Python `json.dumps(0.0)` → `0.0` but an ECMAScript
+    `Number.toString` → `0`, so the same value would hash differently across
+    languages and silently break cross-language verification. `bool` (an `int`
+    subclass) and `int` pass through unchanged."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, dict):
+        return {k: _stringify_floats(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_stringify_floats(v) for v in value]
+    return value
 
 
 @dataclass(slots=True)
@@ -69,6 +91,20 @@ class CapabilityExecutionContext:
         outcome: str | None = None,
         redacted: bool = True,
     ) -> ExecutionEvidence:
+        # Host-owned lifecycle events (execution_started/completed/failed/
+        # denied/skipped) are emitted by the host wrapper around every
+        # invocation. A capability emitting them too produces duplicate,
+        # outcome-less terminal events (the "outcome: unknown" bug). Warn so the
+        # capability gets migrated to a domain event, but still record it —
+        # silently dropping a downstream consumer's events is a breaking change.
+        # (A future major version may drop instead.) chp-core's own capabilities
+        # no longer emit these; the audit adapter is robust to any that remain.
+        if event_type in CORE_EVIDENCE_TYPES:
+            warnings.warn(
+                f"capability emitted host-reserved lifecycle event {event_type!r}; "
+                "the host owns these — emit a domain-specific event instead.",
+                stacklevel=2,
+            )
         event = self.host.emit_evidence(
             event_type=event_type,
             envelope=self.envelope,
@@ -89,11 +125,21 @@ class CapabilityExecutionContext:
         *,
         subject: "JSON | None" = None,
     ) -> "InvocationResult":
-        """Invoke another capability governed through the host, propagating correlation."""
+        """Invoke another capability governed through the host, propagating correlation.
+
+        Records the causal edge: the child inherits the same correlation_id but
+        its ``causation_id`` points at THIS invocation, so the evidence stream is
+        a real call tree (group by invocation_id; child.causation_id == parent
+        invocation_id) — not just a flat sequence. Exports directly to OTel's
+        parent_span_id."""
+        from dataclasses import replace
+        child_corr = replace(
+            self.envelope.correlation, causation_id=self.envelope.invocation_id
+        )
         return await self.host.ainvoke(
             capability_id,
             payload,
-            correlation=self.envelope.correlation,
+            correlation=child_corr,
             subject=subject,
         )
 
@@ -113,6 +159,8 @@ class LocalCapabilityHost:
         version: str = "0.1.0",
         store: SQLiteEvidenceStore | None = None,
         metadata: JSON | None = None,
+        policy: PolicyConfig | None = None,
+        safety_evaluator: Any = None,
     ) -> None:
         self.host_id = host_id
         self.version = version
@@ -120,6 +168,14 @@ class LocalCapabilityHost:
         self.metadata = metadata or {}
         self._capabilities: dict[str, RegisteredCapability] = {}
         self._registry_lock = threading.RLock()
+        # Governance: enforce policy on every invocation path (not just the
+        # Claude Code hook). None → load from CHP_POLICY_FILE/.chp/~/.chp;
+        # still None (no policy file) means no enforcement.
+        self.policy = policy if policy is not None else load_policy()
+        # Safety: when a RuleBasedSafetyEvaluator is configured, every invocation
+        # is assessed (assessment events emitted as evidence) and its guardrails
+        # enforced. None (default) = no safety gate — opt-in, like policy.
+        self.safety_evaluator = safety_evaluator
 
     def register(
         self,
@@ -421,6 +477,26 @@ class LocalCapabilityHost:
                 ),
             )
 
+        # Governance gate — enforced on every invocation path (host.invoke,
+        # ctx.ainvoke, HTTP /invoke), not just the Claude Code hook. Blocks by
+        # allowlist / capability id / risk tier / input pattern.
+        if self.policy is not None:
+            verdict = evaluate_policy(
+                descriptor.id,
+                envelope.payload if isinstance(envelope.payload, dict) else {},
+                self.policy,
+                capability_risk=descriptor.risk,
+            )
+            if verdict.should_block:
+                return self._deny(
+                    envelope,
+                    DenialReason(
+                        code="policy_blocked",
+                        message=verdict.reason or "blocked by policy",
+                        retryable=False,
+                    ),
+                )
+
         invariant_denial = self._check_host_invariants(descriptor, envelope)
         if invariant_denial is not None:
             return self._deny(envelope, invariant_denial)
@@ -456,6 +532,10 @@ class LocalCapabilityHost:
                         details={"schema_id": descriptor.input_schema.get("$id")},
                     ),
                 )
+
+        safety_denial = self._check_safety(descriptor, envelope)
+        if safety_denial is not None:
+            return self._deny(envelope, safety_denial)
 
         started = self.emit_evidence(
             "execution_started",
@@ -495,7 +575,14 @@ class LocalCapabilityHost:
                     "type": exc.__class__.__name__,
                     "error_type": exc.__class__.__name__,
                     "message": str(exc),
-                    "traceback": traceback.format_exc(),
+                    # Full traceback is NOT persisted — it leaks local paths and
+                    # variable reprs (incl. secrets) into the evidence store and
+                    # /replay. Opt in for debugging only.
+                    **(
+                        {"traceback": traceback.format_exc()}
+                        if os.environ.get("CHP_EVIDENCE_TRACEBACKS") == "1"
+                        else {}
+                    ),
                 },
             )
             return InvocationResult(
@@ -531,7 +618,15 @@ class LocalCapabilityHost:
             correlation=envelope.correlation,
             timestamp=utc_now(),
             outcome=outcome,  # type: ignore[arg-type]
-            payload=redact_payload(payload or {}) if redacted else (payload or {}),
+            # chp-stable-v1 forbids floats in canonicalized (hashed) content —
+            # float serialization diverges across languages (Python 0.0 vs JS 0),
+            # which would silently break cross-language verification. Normalize any
+            # float to its string form at the single emission boundary so no
+            # emitter can produce unverifiable evidence. Non-hashed surfaces
+            # (InvocationResult.data, OTel attrs) keep the float.
+            payload=_stringify_floats(
+                redact_payload(payload or {}) if redacted else (payload or {})
+            ),
             redacted=redacted,
             error=error,
             denial=denial,
@@ -748,6 +843,64 @@ class LocalCapabilityHost:
                 details={"tier": autonomy.tier},
             )
 
+        return None
+
+    def _emit_safety_event(
+        self,
+        event_type: str,
+        envelope: InvocationEnvelope,
+        descriptor: CapabilityDescriptor,
+        *,
+        detail: JSON | None = None,
+    ) -> ExecutionEvidence:
+        payload: JSON = {"capability_uri": descriptor.capability_uri}
+        if detail:
+            payload.update(detail)
+        outcome = "denied" if event_type == "safety_action_blocked" else None
+        return self.emit_evidence(event_type, envelope, payload=payload, outcome=outcome)
+
+    def _check_safety(
+        self,
+        descriptor: CapabilityDescriptor,
+        envelope: InvocationEnvelope,
+    ) -> DenialReason | None:
+        """Assess the invocation and enforce safety guardrails, if an evaluator is
+        configured (chp-governance-v0.2.md §4.2). The assessment is ALWAYS recorded
+        as evidence (safety_assessment_started/completed) — a signed safety verdict
+        on every governed invocation is the differentiator; a guardrail block then
+        denies with the reserved 'safety_blocked' code. No evaluator → no-op."""
+        evaluator = self.safety_evaluator
+        if evaluator is None:
+            return None
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        self._emit_safety_event("safety_assessment_started", envelope, descriptor)
+        report = evaluator.report(descriptor.id, payload)
+        assessment = report.assessment
+        self._emit_safety_event(
+            "safety_assessment_completed", envelope, descriptor,
+            detail={"level": assessment.level, "score": assessment.score,
+                    "approved": report.approved},
+        )
+        if not report.approved:
+            self._emit_safety_event(
+                "safety_guardrail_triggered", envelope, descriptor,
+                detail={"reason": report.block_reason,
+                        "guardrails_evaluated": report.guardrails_evaluated},
+            )
+            self._emit_safety_event(
+                "safety_action_blocked", envelope, descriptor,
+                detail={"reason": report.block_reason},
+            )
+            return DenialReason(
+                code="safety_blocked",
+                message=report.block_reason or "blocked by safety guardrail",
+                retryable=False,
+                details={"level": assessment.level, "score": assessment.score},
+            )
+        self._emit_safety_event(
+            "safety_action_approved", envelope, descriptor,
+            detail={"level": assessment.level, "recommendation": assessment.recommendation},
+        )
         return None
 
     def _check_host_invariants(

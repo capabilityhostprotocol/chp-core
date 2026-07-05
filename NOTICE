@@ -1,5 +1,5 @@
 Capability Host Protocol (CHP)
-Copyright 2026 Auxo
+Copyright 2026 Project Auxo, Inc.
 
 This product includes software developed by the CHP project contributors.
 
@@ -9,3 +9,10 @@ the Apache License, Version 2.0. See LICENSE for the full text.
 Specification, schemas, and documentation (spec/, docs/, schemas/) are
 licensed under the Creative Commons Attribution 4.0 International License.
 See LICENSE-DOCS for the full text.
+
+Implementing the specification is additionally covered by a royalty-free
+patent grant. See PATENTS for the full text.
+
+"Capability Host Protocol", "CHP", "CHP-Certified", and the CHP logo are
+trademarks of Project Auxo, Inc. Trademark use is governed by TRADEMARK.md
+and is NOT granted by the code or documentation licenses above.

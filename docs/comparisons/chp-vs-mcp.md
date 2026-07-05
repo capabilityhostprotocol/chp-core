@@ -116,7 +116,7 @@ The repository now includes a dependency-light experimental prototype in `exampl
 
 At launch:
 
-- Position CHP as the execution evidence layer for MCP and non-MCP tools.
-- Ship the MCP bridge as an experimental prototype or separate package, not as part of the core spec.
-- Do not claim MCP equivalence or replacement.
-- Demonstrate one MCP-style tool wrapped by CHP evidence.
+- Position CHP as the governed, signed evidence plane that subsumes tool exposure — MCP and non-MCP — as one input: an MCP `tools/call` becomes a governed, tamper-evident, replayable CHP event (with denial, risk, and approval on the same record) that MCP itself does not carry.
+- The MCP bridge is real and shipping (`chp-adapter-mcp` records live MCP tool calls as signed CHP evidence; `chp-host` exposes CHP capabilities over MCP) — lead with it as the flagship integration.
+- Do not claim MCP equivalence or replacement — CHP complements MCP by governing and proving the execution MCP exposes.
+- Demonstrate an MCP tool call producing a signed, denial-capable CHP bundle that `chp verify-evidence --bundle` validates.

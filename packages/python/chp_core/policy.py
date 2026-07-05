@@ -30,11 +30,18 @@ Policy file format:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+class PolicyError(ValueError):
+    """A policy file exists but could not be parsed — treated as fail-closed."""
 
 
 RISK_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -83,8 +90,11 @@ def load_policy(path: str | None = None) -> PolicyConfig | None:
             try:
                 with candidate.open() as f:
                     return _parse_policy(json.load(f))
-            except (json.JSONDecodeError, KeyError, TypeError):
-                pass
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                # Fail closed: a policy file that exists but can't be parsed must
+                # not silently disable all blocking. Surface it loudly.
+                logger.error("policy file %s is unparseable: %s", candidate, exc)
+                raise PolicyError(f"unparseable policy file {candidate}: {exc}") from exc
 
     return None
 
@@ -139,27 +149,32 @@ def evaluate_policy(
         should_block = True
         reason = f"capability blocked by policy: {capability_id}"
 
-    # Risk tier: block if capability risk exceeds the configured maximum
-    if not should_block and policy.max_risk_tier is not None and capability_risk is not None:
-        cap_order = RISK_ORDER.get(capability_risk, -1)
+    # Risk tier: block if capability risk exceeds the configured maximum.
+    # Unmapped/unknown capability risk defaults to "medium" so the gate still
+    # bites rather than silently passing an uncharacterised capability.
+    if not should_block and policy.max_risk_tier is not None:
+        effective_risk = capability_risk if capability_risk in RISK_ORDER else "medium"
+        cap_order = RISK_ORDER.get(effective_risk, 1)
         max_order = RISK_ORDER.get(policy.max_risk_tier, 99)
         if cap_order > max_order:
             should_block = True
             reason = (
-                f"capability risk '{capability_risk}' exceeds "
+                f"capability risk '{effective_risk}' exceeds "
                 f"max_risk_tier '{policy.max_risk_tier}'"
             )
 
-    # Pattern match on tool input fields
+    # Pattern match on tool input fields. Case-insensitive so trivial casing
+    # ("RM -RF /") can't slip past a lowercase rule; patterns are
+    # defense-in-depth, not a sandbox.
     if not should_block:
         for bp in policy.block_patterns:
             if bp.capability_id != capability_id:
                 continue
             value = str(tool_input.get(bp.field, ""))
             try:
-                matched = bool(re.search(bp.pattern, value))
+                matched = bool(re.search(bp.pattern, value, re.IGNORECASE))
             except re.error:
-                matched = bp.pattern in value
+                matched = bp.pattern.lower() in value.lower()
             if matched:
                 should_block = True
                 reason = bp.reason

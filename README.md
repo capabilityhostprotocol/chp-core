@@ -1,12 +1,12 @@
 # Capability Host Protocol
 
-CHP is an open protocol for making agent, tool, and system execution visible, replayable, and ready for governance.
+CHP is the open protocol for declaring, **governing**, and **proving** what agents, tools, and systems do — the single signed plane where a human approval, an agent's action, and a system call become the same governed, tamper-evident, replayable event.
 
-The first launch goal is simple:
+The hook is simple:
 
-> See what your agents and tools actually did.
+> See what your agents and tools actually did — and what governed it.
 
-CHP is not another agent framework, tool protocol, or workflow engine. It is an execution evidence layer at the capability boundary.
+CHP is not another agent framework, tool protocol, or workflow engine. It is the **governed evidence plane** at the capability boundary: what ran *and* what governed it (policy, risk tier, safety checks, human approval, autonomy budgets, denial) emit onto one signed, correlated record. Observability tools split execution across separate, optional, unsigned signals and carry no governance; CHP unifies both and proves them.
 
 ## What CHP Defines
 
@@ -162,4 +162,12 @@ Guiding rule:
 
 ## License
 
-MIT. See `LICENSE`.
+CHP is dual-licensed by asset:
+
+- **Code** (`packages/`, `conformance/`, `examples/`, `scripts/`): Apache License 2.0 — see [`LICENSE`](LICENSE).
+- **Specification, schemas & docs** (`spec/`, `schemas/`, `docs/`): Creative Commons Attribution 4.0 (CC BY 4.0) — see [`LICENSE-DOCS`](LICENSE-DOCS). Implementing the specification is additionally covered by a royalty-free patent grant — see [`PATENTS`](PATENTS).
+- **Trademarks**: "CHP" and "CHP-Certified" — see [`TRADEMARK.md`](TRADEMARK.md).
+
+Contributions are accepted under the [Contributor License Agreement](CLA.md); see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+Copyright © 2026 Project Auxo, Inc. See [`NOTICE`](NOTICE).

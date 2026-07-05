@@ -1377,6 +1377,22 @@ _CHECK_ALIASES: dict[str, list[str]] = {
     ],
     "alignment": ["python", "-m", "chp_core.cli", "work", "check-alignment", "--repo-root", "."],
     "conformance": ["python", "conformance/runner.py"],
+    # Cross-package gate: run the DOWNSTREAM suites (chp-host, chp-agent) against
+    # the working-tree (candidate) chp-core, so a chp-core change that breaks a
+    # consumer fails HERE — not by luck after ship, as happened with the 0.9.0
+    # ctx.emit drop (123 chp-agent failures) and the /health change (chp-host).
+    # Deselects the known env-drift test_serve class (76 adapters installed vs
+    # its hardcoded set — tracked separately). chp-agent is a sibling repo;
+    # skipped cleanly when absent (e.g. CI without it checked out).
+    "crosspkg": [
+        "bash", "-c",
+        "set -e; "
+        "python -m pytest packages/chp-host/tests/ --no-cov -q -W ignore "
+        "-k 'not TestBuildAdapterHost'; "  # env-drift: 76 installed adapters vs its hardcoded set
+        "if [ -d ../chp-agent/tests ]; then "
+        "python -m pytest ../chp-agent/tests/ --no-cov -q -W ignore; "
+        "else echo 'chp-agent absent — cross-package agent suite skipped'; fi",
+    ],
     "schemas": [
         "python", "-c",
         "import json,glob,sys; files=sorted(glob.glob('schemas/*.json'));"

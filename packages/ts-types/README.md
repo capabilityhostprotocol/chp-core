@@ -1,4 +1,4 @@
-# @auxo/ts-types
+# @capabilityhostprotocol/types
 
 TypeScript protocol types for CHP v0.1.
 
@@ -12,9 +12,9 @@ older internal mesh/governance model.
 ## Installation
 
 ```bash
-npm install @auxo/ts-types
+npm install @capabilityhostprotocol/types
 # or
-pnpm add @auxo/ts-types
+pnpm add @capabilityhostprotocol/types
 ```
 
 ## Usage
@@ -28,7 +28,7 @@ import type {
   InvocationEnvelope,
   InvocationResult,
   ReplayResult,
-} from '@auxo/ts-types';
+} from '@capabilityhostprotocol/types';
 ```
 
 ```typescript
@@ -69,7 +69,7 @@ import {
   type Evidence,
   type RiskClass,
   type AssuranceTier,
-} from '@auxo/ts-types/legacy';
+} from '@capabilityhostprotocol/types/legacy';
 
 // Create a subject
 const subject = createSubjectContext({
@@ -100,7 +100,7 @@ const evidence = createEvidence({
 
 ## Type Correspondence
 
-| CHP v0.1 Concept | Python `chp_core` | TypeScript `@auxo/ts-types` |
+| CHP v0.1 Concept | Python `chp_core` | TypeScript `@capabilityhostprotocol/types` |
 |---|---|---|
 | Capability descriptor | `CapabilityDescriptor` | `CapabilityDescriptor` |
 | Host descriptor | `HostDescriptor` | `HostDescriptor` |
@@ -114,10 +114,10 @@ const evidence = createEvidence({
 ## Verification
 
 ```bash
-npm run typecheck --workspace @auxo/ts-types
-npm run build --workspace @auxo/ts-types
+npm run typecheck --workspace @capabilityhostprotocol/types
+npm run build --workspace @capabilityhostprotocol/types
 ```
 
 ## License
 
-MIT
+Apache-2.0. See the repository `LICENSE`. Copyright © 2026 Project Auxo, Inc.

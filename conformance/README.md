@@ -1,37 +1,81 @@
-# CHP v0.1 Conformance
+# CHP Conformance Kit
 
-The conformance suite verifies the minimum behaviors of a CHP-compatible host:
+How anyone — in any language — proves their Capability Host Protocol
+implementation is conformant. There are two independent surfaces:
 
-1. Capability declaration
-2. Capability discovery
-3. Invocation through an envelope-compatible boundary
-4. Correlation propagation
-5. Evidence emission on success
-6. Evidence emission on failure
-7. Evidence emission on denial
-8. Replay by correlation ID
-9. Optional representation of skipped execution, where the host supports disabled or skipped capabilities
+1. **Wire conformance** — your *host* behaves correctly over the HTTP binding.
+2. **Canonicalization + signing interop** — your *bytes* match the reference.
 
-Run the passing reference host:
+A reference second implementation (TypeScript: `packages/chp-sdk`,
+`packages/chp-host`) passes both and is the worked example.
 
-```bash
-python conformance/runner.py
-```
+## 1. Wire conformance (host under test)
 
-Run a deliberately broken host:
+Register the fixture profile ([FIXTURES.md](FIXTURES.md)) and serve your host
+over the [HTTP binding](../spec/chp-http-binding.md). Then run the reference
+black-box runner against it:
 
 ```bash
-python conformance/runner.py --sample failing-no-evidence
+python conformance/runner.py --url http://localhost:PORT --key <key> --suite wire
 ```
 
-The runner currently ships with built-in sample hosts. External host adapters
-should implement `discover()`, `invoke(...)` or async `ainvoke(...)`, and
-`replay(correlation_id)`.
+A conforming host prints **`[wire] 14/14`**. The 14 checks: capability
+declaration + discovery, envelope invocation, correlation propagation, evidence
+on success / failure / denial, replay by correlation, standard denial codes, the
+four governance gates (approval-required, budget-exceeded, risk-tier,
+safety-guardrail), and chain verification over `/verify`.
 
-The development host also exposes the conformance matrix as a CHP capability:
+The runner drives your host purely over HTTP through the reference client. What
+it asserts (outcomes, reserved denial codes, event sequences, the 200-for-denied
+rule) is specified in [FIXTURES.md](FIXTURES.md) +
+[chp-invocation-pipeline.md](../spec/chp-invocation-pipeline.md) — so you
+implement from the spec, not from reading a reference.
+
+*Worked example:* `node packages/chp-host-ts/dist/bin/serve.js --port 8899 --key k`
+then `python conformance/runner.py --url http://localhost:8899 --key k --suite wire`.
+
+## 2. Canonicalization + signing interop (bytes under test)
+
+Your `chp-stable-v1` implementation must reproduce the published bytes exactly,
+and a bundle you sign must verify under a *different* implementation.
+
+- **Canonicalization golden set:** for every case in
+  [`spec/test-vectors/canon/cases.json`](../spec/test-vectors/canon/cases.json),
+  `canon(input)` MUST equal `expected_canon` byte-for-byte (surrogate pairs,
+  control chars, unicode key-sort, no floats — see
+  [chp-v0.2.md §2](../spec/chp-v0.2.md)).
+- **Verify reference bundles:** your verifier MUST accept the Python-signed
+  `signed-bundle.json` and the *governed* `governance-bundle.json`, and MUST
+  reject a tampered or relabelled bundle.
+- **Cross-verify your signature:** a bundle *you* sign MUST verify under the
+  stdlib Node reference verifier and Python:
 
 ```bash
-chp work conformance-matrix
+node spec/test-vectors/verify.mjs your-signed-bundle.json          # → VALID
+python -c "import sys; sys.path.insert(0,'packages/python'); \
+  from chp_core.signing import verify_bundle; import json; \
+  print(verify_bundle(json.load(open('your-signed-bundle.json'))).valid)"   # → True
 ```
 
-This records matrix results as CHP evidence under the provided correlation ID.
+*Worked example:* the TS SDK reproduces the golden set byte-for-byte, produces a
+**byte-identical** signature to Python for the same input, and a fresh TS-signed
+governed bundle verifies VALID under both `verify.mjs` and Python.
+
+## Reference runner internals
+
+The runner ships built-in sample hosts for local development:
+
+```bash
+python conformance/runner.py                         # the passing reference host
+python conformance/runner.py --sample failing-no-evidence   # a deliberately broken host
+python conformance/runner.py --suite normative       # spec MUSTs (in-process)
+```
+
+Suites: `normative` (spec MUSTs, in-process) · `reference` (bundled capability
+library) · `wire` (black-box HTTP, needs `--url`) · `all`.
+
+## Claiming conformance
+
+A host that prints `14/14` on suite `wire` **and** passes the §2 interop checks
+is CHP-conformant at the tier it declares in `/host` (`assurance`:
+`hash-chain` or `signed`). Record the runner output as your evidence.

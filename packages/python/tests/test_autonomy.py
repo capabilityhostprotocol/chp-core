@@ -279,7 +279,10 @@ def test_spend_limit_payload_has_spend_so_far(tmp_path: Path) -> None:
     host.invoke("test.noop", correlation=_corr(corr))
     host.invoke("test.noop", correlation=_corr(corr))
     ev = next(e for e in _events(store_path, corr) if e["event_type"] == "budget_exceeded")
-    assert ev["payload"]["spend_so_far"] == 2.0
+    # Floats are string-encoded in hashed evidence (chp-stable-v1 §2 forbids
+    # floats in canonicalized content — cross-language hash portability).
+    assert ev["payload"]["spend_so_far"] == "2.0"
+    assert float(ev["payload"]["spend_so_far"]) == 2.0
 
 
 def test_spend_limit_payload_has_spend_limit_and_spend_units(tmp_path: Path) -> None:
@@ -289,8 +292,10 @@ def test_spend_limit_payload_has_spend_limit_and_spend_units(tmp_path: Path) -> 
     for _ in range(3):
         host.invoke("test.noop", correlation=_corr(corr))
     ev = next(e for e in _events(store_path, corr) if e["event_type"] == "budget_exceeded")
-    assert ev["payload"]["spend_limit"] == 5.0
-    assert ev["payload"]["spend_units"] == 2.5
+    # String-encoded in hashed evidence (chp-stable-v1 §2), numeric on parse.
+    assert ev["payload"]["spend_limit"] == "5.0"
+    assert ev["payload"]["spend_units"] == "2.5"
+    assert (float(ev["payload"]["spend_limit"]), float(ev["payload"]["spend_units"])) == (5.0, 2.5)
 
 
 def test_spend_limit_not_retryable(tmp_path: Path) -> None:

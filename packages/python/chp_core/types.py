@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
 JSON = dict[str, Any]
@@ -592,6 +592,22 @@ class DenialReason:
     invariant_id: str | None = None
     retryable: bool = False
     details: JSON = field(default_factory=dict)
+
+    # Normative registry: the reserved denial codes a conforming host emits at the
+    # governed boundary (spec/chp-governance-v0.2.md §2). The runtime, the schema
+    # examples, and the spec MUST agree on this set — guarded by protocol_checks.
+    # Vendor-specific codes MUST be reverse-DNS namespaced (e.g. "com.acme.quota").
+    RESERVED_CODES: ClassVar[frozenset[str]] = frozenset({
+        "capability_not_found",           # no capability with that id/version
+        "capability_disabled",            # registered but disabled by the host
+        "unsupported_mode",               # invoke mode the host doesn't support
+        "policy_blocked",                 # PolicyConfig rule (pattern or risk tier) blocked it
+        "input_schema_validation_failed", # payload failed the capability's input schema
+        "invariant_failed",               # a declared invariant did not hold
+        "budget_exceeded",                # AutonomyProfile budget (calls/tokens/cost) exhausted
+        "approval_required",              # human approval gate not satisfied
+        "safety_blocked",                 # a safety guardrail blocked the invocation
+    })
 
     def to_dict(self) -> JSON:
         return asdict(self)

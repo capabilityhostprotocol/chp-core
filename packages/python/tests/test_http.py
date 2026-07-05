@@ -358,5 +358,46 @@ class HTTPServerEdgeCaseTests(unittest.TestCase):
             self.assertIn(exc.code, (400, 422, 500))
 
 
+def test_authenticated_subject_overrides_client_asserted(monkeypatch) -> None:
+    # A verified caller's identity must REPLACE any client-asserted subject —
+    # evidence attributes the action to who authenticated, not to what the body
+    # claimed ("is agent X", not "claims to be agent X").
+    import os
+    monkeypatch.setenv("CHP_HOST_API_KEYS", "agent-a:s3cret")
+    host = LocalCapabilityHost("auth-subj-host", store=SQLiteEvidenceStore(":memory:"))
+
+    async def noop(_ctx, _p):
+        return {"ok": True}
+
+    host.register(CapabilityDescriptor(id="x.cap", version="1.0.0", description=""), noop)
+    server = create_http_server(host, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = json.dumps({
+            "capability_id": "x.cap", "payload": {},
+            "subject": {"id": "ATTACKER-spoof", "type": "user"},
+            "correlation": {"correlation_id": "c1"},
+        }).encode()
+        req = Request(f"http://127.0.0.1:{server.server_port}/invoke", data=body,
+                      headers={"X-CHP-Key": "s3cret", "Content-Type": "application/json"}, method="POST")
+        result = json.loads(urlopen(req, timeout=5).read())
+        assert result["outcome"] == "success"
+        subjects = {json.dumps(e.get("subject")) for e in host.store.all() if e.get("subject")}
+        assert subjects == {'{"id": "agent-a", "type": "api_key", "verified": true}'}, subjects
+        # a wrong key is rejected outright
+        bad = Request(f"http://127.0.0.1:{server.server_port}/invoke", data=body,
+                      headers={"X-CHP-Key": "wrong"}, method="POST")
+        try:
+            urlopen(bad, timeout=5)
+            assert False, "expected 401"
+        except Exception as exc:
+            assert getattr(exc, "code", None) == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 if __name__ == "__main__":
     unittest.main()

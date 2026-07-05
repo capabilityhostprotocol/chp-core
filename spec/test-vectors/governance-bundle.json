@@ -1,0 +1,119 @@
+{
+  "assurance": "signed",
+  "canonicalization": "chp-stable-v1",
+  "created_at": "2026-01-01T00:00:00Z",
+  "events": [
+    {
+      "capability_id": "conformance.unsafe",
+      "content_hash": "1424fae3aba218597a6bcf32e99a7dba140f14b0a0bbb600c87f75940674ae2b",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "gov_corr"
+      },
+      "event_id": "evt_gov0001",
+      "event_type": "safety_assessment_started",
+      "host_id": "vector-host",
+      "invocation_id": "inv_gov0001",
+      "outcome": null,
+      "payload": {
+        "capability_uri": "conformance.unsafe:1.0.0"
+      },
+      "prev_hash": null,
+      "timestamp": "2026-01-01T00:00:00Z"
+    },
+    {
+      "capability_id": "conformance.unsafe",
+      "content_hash": "23b02a22661d9e720a4652090a3f54fc4ad3ad9a9d8588da982a8139c924d55e",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "gov_corr"
+      },
+      "event_id": "evt_gov0002",
+      "event_type": "safety_assessment_completed",
+      "host_id": "vector-host",
+      "invocation_id": "inv_gov0001",
+      "outcome": null,
+      "payload": {
+        "approved": false,
+        "capability_uri": "conformance.unsafe:1.0.0",
+        "level": "low",
+        "score": "0.0"
+      },
+      "prev_hash": "1424fae3aba218597a6bcf32e99a7dba140f14b0a0bbb600c87f75940674ae2b",
+      "timestamp": "2026-01-01T00:00:00Z"
+    },
+    {
+      "capability_id": "conformance.unsafe",
+      "content_hash": "ea1fb64199a3da8fe0561297be20e486f05ce8f13c7e9a719c08d81caf361a27",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "gov_corr"
+      },
+      "event_id": "evt_gov0003",
+      "event_type": "safety_guardrail_triggered",
+      "host_id": "vector-host",
+      "invocation_id": "inv_gov0001",
+      "outcome": null,
+      "payload": {
+        "capability_uri": "conformance.unsafe:1.0.0",
+        "reason": "guardrail 'g': requires human approval"
+      },
+      "prev_hash": "23b02a22661d9e720a4652090a3f54fc4ad3ad9a9d8588da982a8139c924d55e",
+      "timestamp": "2026-01-01T00:00:00Z"
+    },
+    {
+      "capability_id": "conformance.unsafe",
+      "content_hash": "b1b0c32598b5da9b30935cffda5f6e1daa03d3830d22cbc6490200e2ebce218e",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "gov_corr"
+      },
+      "event_id": "evt_gov0004",
+      "event_type": "safety_action_blocked",
+      "host_id": "vector-host",
+      "invocation_id": "inv_gov0001",
+      "outcome": "denied",
+      "payload": {
+        "capability_uri": "conformance.unsafe:1.0.0",
+        "reason": "guardrail 'g': requires human approval"
+      },
+      "prev_hash": "ea1fb64199a3da8fe0561297be20e486f05ce8f13c7e9a719c08d81caf361a27",
+      "timestamp": "2026-01-01T00:00:00Z"
+    },
+    {
+      "capability_id": "conformance.unsafe",
+      "content_hash": "c2d0d45eaa51d945916b43ea5451e3be20694d0309eb5c6de8a8b7e147075189",
+      "correlation": {
+        "causation_id": null,
+        "correlation_id": "gov_corr"
+      },
+      "event_id": "evt_gov0005",
+      "event_type": "execution_denied",
+      "host_id": "vector-host",
+      "invocation_id": "inv_gov0001",
+      "outcome": "denied",
+      "payload": {
+        "reason": "safety_blocked"
+      },
+      "prev_hash": "b1b0c32598b5da9b30935cffda5f6e1daa03d3830d22cbc6490200e2ebce218e",
+      "timestamp": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "host_id": "vector-host",
+  "host_identity": {
+    "host_id": "vector-host",
+    "key_id": "56475aa75463474c",
+    "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+    "signature": "Tfsj5Su5RD/IpDWm6LLAfZ5rNmP6gDf/V2efNZZcqYMeWJg7ZWHRBSmcBGyp0km9NajWcOTKAoSLdC3+gWpvBw==",
+    "valid_from": "2026-01-01T00:00:00Z",
+    "valid_until": null
+  },
+  "protocol_version": "0.2",
+  "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "root_hash": "d4f0202dfb3e5dc0f52fbf9b151c2259c4b350b45e600cbf3782d1c02c9bb23f",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "56475aa75463474c",
+    "signature": "mzq5wzuGfhNFbELkaQqK7PPeKQl4akemlDmPz1WRS3t7dVG4KGgF2mSrlcXKG8k3Bs45oT36P2dPa4HIeND9Cw=="
+  }
+}

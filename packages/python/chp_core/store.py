@@ -409,11 +409,14 @@ class SQLiteEvidenceStore:
                 pass
         return result
 
-    def verify_chain(self, correlation_id: str) -> ChainVerificationResult:
+    def verify_chain(self, correlation_id: str, *, strict: bool = False) -> ChainVerificationResult:
         """Walk stored events in sequence order and verify the SHA256 hash chain.
 
         Events without a stored hash (legacy, written before v0.2.6) are counted
-        separately and do not break the chain.
+        separately. In lenient mode (default) they don't break the chain; in
+        strict mode the first such event fails verification — an unhashed event
+        is an integrity gap that a `signed`/`hash-chain` assurance tier must not
+        silently accept.
         """
         with self._lock:
             rows = self._conn.execute(
@@ -437,6 +440,8 @@ class SQLiteEvidenceStore:
 
             if stored_hash is None:
                 unverified_count += 1
+                if strict and first_broken is None:
+                    first_broken = int(row["sequence"])
                 # Don't advance expected_prev — legacy events break the chain tracking
                 continue
 
@@ -465,6 +470,28 @@ class SQLiteEvidenceStore:
             valid=first_broken is None,
             first_broken_sequence=first_broken,
         )
+
+    def export_correlation(self, correlation_id: str) -> list[JSON]:
+        """Ordered events for a correlation, each with its stored content_hash /
+        prev_hash / sequence attached — the raw material for a signed bundle."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT sequence, event_json, content_hash, prev_hash
+                FROM evidence_events
+                WHERE correlation_id = ?
+                ORDER BY sequence ASC
+                """,
+                (correlation_id,),
+            ).fetchall()
+        out: list[JSON] = []
+        for row in rows:
+            event = json.loads(row["event_json"])
+            event["sequence"] = int(row["sequence"])
+            event["content_hash"] = row["content_hash"]
+            event["prev_hash"] = row["prev_hash"]
+            out.append(event)
+        return out
 
     def count_by_correlation(self, correlation_id: str) -> int:
         with self._lock:
