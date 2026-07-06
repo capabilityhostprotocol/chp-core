@@ -1435,6 +1435,23 @@ async def check_safety_governance(host: Any) -> None:
     assert "execution_started" not in types, "blocked capability must not begin execution"
 
 
+async def check_export_bundle(host: Any) -> None:
+    """v0.2 (binding §4a): GET /export/{corr} returns this host's evidence
+    bundle for the correlation, offline-verifiable — signed when the host holds
+    a key, hash-chain tier otherwise. The export IS the federation primitive:
+    task bundles aggregate exactly these."""
+    corr = "conf-export-001"
+    await invoke_host(host, "conformance.echo", {"value": "x"},
+                      correlation={"correlation_id": corr})
+    bundle = host.export_bundle(corr)
+    assert bundle.get("events"), f"exported bundle has no events: {list(bundle)}"
+    assert bundle.get("canonicalization") == "chp-stable-v1", bundle.get("canonicalization")
+    from chp_core.signing import verify_bundle
+    v = verify_bundle(bundle)
+    assert v.valid, f"exported bundle does not verify: {v.reason}"
+    assert v.assurance in ("hash-chain", "signed"), v.assurance
+
+
 async def check_identity_document(host: Any) -> None:
     """v0.2 (spec §3.1): the host serves its public identity document at
     /.well-known/chp-identity — unauthenticated, so a never-met verifier can
@@ -1540,6 +1557,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("safety-guardrail governance (v0.2)", check_safety_governance),
     ("chain verification over /verify", check_wire_verify),
     ("identity document (v0.2 §3.1)", check_identity_document),
+    ("export bundle verifies (v0.2 §4a)", check_export_bundle),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

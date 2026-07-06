@@ -19,13 +19,14 @@ black-box runner against it:
 python conformance/runner.py --url http://localhost:PORT --key <key> --suite wire
 ```
 
-A conforming host prints **`[wire] 15/15`**. The 15 checks: capability
+A conforming host prints **`[wire] 16/16`**. The 16 checks: capability
 declaration + discovery, envelope invocation, correlation propagation, evidence
 on success / failure / denial, replay by correlation, standard denial codes, the
 four governance gates (approval-required, budget-exceeded, risk-tier,
-safety-guardrail), chain verification over `/verify`, and the public identity
+safety-guardrail), chain verification over `/verify`, the public identity
 document at `/.well-known/chp-identity` (spec §3.1 — assurance tier declared;
-at the signed tier the self-attestation must verify).
+at the signed tier the self-attestation must verify), and the export route
+(binding §4a — the exported bundle must verify offline at the declared tier).
 
 The runner drives your host purely over HTTP through the reference client. What
 it asserts (outcomes, reserved denial codes, event sequences, the 200-for-denied
@@ -78,6 +79,6 @@ library) · `wire` (black-box HTTP, needs `--url`) · `all`.
 
 ## Claiming conformance
 
-A host that prints `15/15` on suite `wire` **and** passes the §2 interop checks
+A host that prints `16/16` on suite `wire` **and** passes the §2 interop checks
 is CHP-conformant at the tier it declares in `/host` (`assurance`:
 `hash-chain` or `signed`). Record the runner output as your evidence.
