@@ -1,6 +1,6 @@
 # Capability Host Protocol v0.1
 
-Status: draft for open-source launch
+Status: **stable** (v0.1, released 2026-07-06). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md).
 
 Key words MUST, MUST NOT, SHOULD, MAY are to be interpreted as described in
 RFC 2119. See [README.md](README.md) for the full specification index and

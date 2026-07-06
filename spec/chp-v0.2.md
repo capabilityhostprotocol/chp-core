@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: draft. **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (2026-07-06). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 

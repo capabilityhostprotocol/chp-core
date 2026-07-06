@@ -5,7 +5,7 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
-## [0.2] — additive over 0.1 (2026-06 → 2026-07)
+## [0.2] — additive over 0.1 — **released 2026-07-06**
 
 ### Added
 - **Cross-host ordering `chp-causal-order-v1`** (chp-v0.2.md §7): deterministic
@@ -69,7 +69,7 @@ gate.
   must verify unchanged under `verify.mjs` after any canonicalization-adjacent
   change.
 
-## [0.1] — 2026-05/06
+## [0.1] — 2026-05/06 — **stable 2026-07-06**
 
 Initial draft: capability/host descriptors, invocation envelopes, execution
 evidence, correlation requirements, replay semantics, outcome model
