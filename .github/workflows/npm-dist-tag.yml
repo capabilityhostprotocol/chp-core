@@ -1,0 +1,32 @@
+name: npm dist-tag
+
+# Retag an already-published npm version (e.g. point `latest` at the newest
+# alpha). Uses the same NPM_TOKEN automation token as the publish workflows,
+# so no interactive OTP is needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package (e.g. @capabilityhostprotocol/sdk)"
+        required: true
+      version:
+        description: "Existing published version (e.g. 0.1.0-alpha.3)"
+        required: true
+      tag:
+        description: "Dist-tag to set"
+        required: true
+        default: "latest"
+
+jobs:
+  dist-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm dist-tag add "${{ inputs.package }}@${{ inputs.version }}" "${{ inputs.tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm view "${{ inputs.package }}" dist-tags
