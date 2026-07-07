@@ -1,0 +1,174 @@
+{
+  "aggregator": {
+    "host_id": "agg-gateway",
+    "host_identity": {
+      "host_id": "agg-gateway",
+      "key_id": "68894d58f18f2c34",
+      "public_key": "F0VTtFbd38aQjsqxwQH+arIeK6oGF3lbfUOmNIKZP9U=",
+      "signature": "NaMML7xXHAJKDxSl9EVfawj8YQeX92fz9QK730UkJ3xPLBoD7n7bNml0oA69oKjM4hXfcUAgK3RtZw97Jp4OBA==",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": null
+    },
+    "public_key": "F0VTtFbd38aQjsqxwQH+arIeK6oGF3lbfUOmNIKZP9U=",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "68894d58f18f2c34",
+      "signature": "VJeowNljCvp0P1axASiQWpEOvQ6/lt0hlUd1BmhwKW3VN5P5RkM3wg1X83WudM5rHcqqSBywTifMTHpmLVdfDg=="
+    }
+  },
+  "assurance": "signed",
+  "bundles": [
+    {
+      "assurance": "signed",
+      "canonicalization": "chp-stable-v1",
+      "created_at": "2026-01-01T00:00:00Z",
+      "events": [
+        {
+          "capability_id": "demo.cap",
+          "content_hash": "e45b19ad931d36bd4d127c3919007849e3790ceea65ac613b80263b6c246c7dc",
+          "correlation": {
+            "causation_id": null,
+            "correlation_id": "agg_corr"
+          },
+          "event_id": "evt_ag1",
+          "event_type": "execution_started",
+          "host_id": "agg-host-a",
+          "invocation_id": "inv-ag1",
+          "outcome": null,
+          "payload": {
+            "n": 1
+          },
+          "prev_hash": null,
+          "sequence": 1,
+          "timestamp": "2026-01-01T00:00:00Z"
+        },
+        {
+          "capability_id": "demo.cap",
+          "content_hash": "936ac6746fa6610e49e0a12992c30f0dcdaeb3ee897809b9ac1147c5459b5b8f",
+          "correlation": {
+            "causation_id": null,
+            "correlation_id": "agg_corr"
+          },
+          "event_id": "evt_ag2",
+          "event_type": "task_participants_declared",
+          "host_id": "agg-host-a",
+          "invocation_id": "inv-ag1",
+          "outcome": null,
+          "payload": {
+            "participants": [
+              "agg-host-a",
+              "agg-host-b"
+            ]
+          },
+          "prev_hash": "e45b19ad931d36bd4d127c3919007849e3790ceea65ac613b80263b6c246c7dc",
+          "sequence": 2,
+          "timestamp": "2026-01-01T00:00:00Z"
+        },
+        {
+          "capability_id": "demo.cap",
+          "content_hash": "7510205f50f540ad85d91ba1818e827b8fe0e67a3ebf93151885c2db257e4d12",
+          "correlation": {
+            "causation_id": null,
+            "correlation_id": "agg_corr"
+          },
+          "event_id": "evt_ag3",
+          "event_type": "execution_completed",
+          "host_id": "agg-host-a",
+          "invocation_id": "inv-ag1",
+          "outcome": "success",
+          "payload": {
+            "n": 3
+          },
+          "prev_hash": "936ac6746fa6610e49e0a12992c30f0dcdaeb3ee897809b9ac1147c5459b5b8f",
+          "sequence": 3,
+          "timestamp": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "host_id": "agg-host-a",
+      "host_identity": {
+        "host_id": "agg-host-a",
+        "key_id": "56475aa75463474c",
+        "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        "signature": "+fypAxzTU4JJ4Gn8E2PmgqR2ynKHN6XQKhKUPXZ+2s1AN9WwEneyM6gqN2MklW5pxHqsAn4C20UvG4A4HYomDA==",
+        "valid_from": "2026-01-01T00:00:00Z",
+        "valid_until": null
+      },
+      "protocol_version": "0.2",
+      "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+      "root_hash": "adb61dde095304147e0c1351733b79d11b03eb8d83f3bfdf77f6a39abf3836a6",
+      "signature": {
+        "algorithm": "ed25519",
+        "key_id": "56475aa75463474c",
+        "signature": "qvYJE1zNh7fwsjY8/8wX05jhssxWiMoTjUF5oee6ZPi2SKmgy+kMBzmJdizD5p5w2hbFk/AY87cfbUbRjRr+AA=="
+      }
+    },
+    {
+      "assurance": "signed",
+      "canonicalization": "chp-stable-v1",
+      "created_at": "2026-01-01T00:00:00Z",
+      "events": [
+        {
+          "capability_id": "demo.cap",
+          "content_hash": "43db86a4118ff428034242c79a3d4d17f588b2a33a87d66b6c2c70754d2eeffa",
+          "correlation": {
+            "causation_id": "inv-ag1",
+            "correlation_id": "agg_corr"
+          },
+          "event_id": "evt_bg1",
+          "event_type": "execution_started",
+          "host_id": "agg-host-b",
+          "invocation_id": "inv-bg1",
+          "outcome": null,
+          "payload": {
+            "n": 1
+          },
+          "prev_hash": null,
+          "sequence": 1,
+          "timestamp": "2026-01-01T00:00:00Z"
+        },
+        {
+          "capability_id": "demo.cap",
+          "content_hash": "3fc9b93cbc85ed67c81caf7e48de41c418e190222e9ff192578e08f75ea08e41",
+          "correlation": {
+            "causation_id": "inv-ag1",
+            "correlation_id": "agg_corr"
+          },
+          "event_id": "evt_bg2",
+          "event_type": "execution_completed",
+          "host_id": "agg-host-b",
+          "invocation_id": "inv-bg1",
+          "outcome": "success",
+          "payload": {
+            "n": 2
+          },
+          "prev_hash": "43db86a4118ff428034242c79a3d4d17f588b2a33a87d66b6c2c70754d2eeffa",
+          "sequence": 2,
+          "timestamp": "2026-01-01T00:00:00Z"
+        }
+      ],
+      "host_id": "agg-host-b",
+      "host_identity": {
+        "host_id": "agg-host-b",
+        "key_id": "03396219237f75a6",
+        "public_key": "JUO5L/EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0=",
+        "signature": "4e7PzosMDNB+xtFcBZ9qAtGtQ5x7dUNP1PuZVSRlUA4S5H/7NTixbsfe67HNl+BgmRhmSVTSHqmbLTRsNT0RCw==",
+        "valid_from": "2026-01-01T00:00:00Z",
+        "valid_until": null
+      },
+      "protocol_version": "0.2",
+      "public_key": "JUO5L/EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0=",
+      "root_hash": "d9eb6eb19c4980ebee257b5090d5e6cab86e4e65505d553f94308a8ce4efbaca",
+      "signature": {
+        "algorithm": "ed25519",
+        "key_id": "03396219237f75a6",
+        "signature": "kjWuL2hHLkKx+fLr7p+GhBtYhNAq4+Ty3srb+QLaJXXRRIbPm933A8b5A8evZE0kTzvuRzeDKVzoMlddzrB4AA=="
+      }
+    }
+  ],
+  "canonicalization": "chp-stable-v1",
+  "correlation_id": "agg_corr",
+  "created_at": "2026-01-01T00:00:00Z",
+  "kind": "task-bundle",
+  "protocol_version": "0.2",
+  "task_root_hash": "85204b6724917e722992c8d4bf58745c5173005b867cd2ab98e0ddcb9c3e7dc0"
+}
