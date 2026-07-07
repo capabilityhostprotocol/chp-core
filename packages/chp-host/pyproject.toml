@@ -5,9 +5,31 @@ build-backend = "hatchling.build"
 [project]
 name = "chp-host"
 version = "0.8.20"
-description = "CHP multi-host router and config-driven adapter host server"
+description = "CHP multi-host router, config-driven adapter host server, and portable onboarding wizard"
+readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["chp-core>=0.7.0", "mcp>=1.0"]
+license = { text = "Apache-2.0" }
+authors = [{ name = "Project Auxo, Inc." }]
+keywords = ["chp", "capability-host-protocol", "agents", "governance", "evidence", "mesh", "onboarding"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+]
+# chp-host tracks chp-core's protocol surface (the router signs task bundles and
+# resolves per-host keys — APIs introduced in 0.10.0). Bumped in lockstep.
+dependencies = ["chp-core>=0.10.0", "mcp>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/capabilityhostprotocol/chp-core"
+Documentation = "https://github.com/capabilityhostprotocol/chp-core/tree/main/docs"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
 
 [project.scripts]
 chp-host = "chp_host.cli:main"

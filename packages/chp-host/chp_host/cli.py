@@ -1665,11 +1665,6 @@ def _cmd_mesh_audit(args: argparse.Namespace) -> int:
 # chp-host update
 # ---------------------------------------------------------------------------
 
-_GH_RELEASE_LINKS = (
-    "https://github.com/capabilityhostprotocol/chp-core/releases/expanded_assets/v0.8.0"
-)
-
-
 def _installed_chp_packages() -> list[str]:
     """chp-core + chp-host + every installed chp-adapter-* distribution name."""
     import importlib.metadata as im
@@ -1748,10 +1743,9 @@ def _cmd_update(args: argparse.Namespace) -> int:
     # Only pin core+host to an explicit version; adapters aren't lock-stepped.
     targets = [f"{p}=={pin}" if (pin and p in ("chp-core", "chp-host")) else p for p in pkgs]
 
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade"]
-    if getattr(args, "channel", "github") != "pypi":
-        cmd += ["--find-links", _GH_RELEASE_LINKS]
-    cmd += targets
+    # All CHP packages resolve from PyPI as of the 0.10.0 coordinated release;
+    # the old GitHub-release --find-links page was never populated by release.yml.
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", *targets]
 
     _log(f"==> Updating {len(targets)} CHP packages (from chp-host {before})"
          f"{f' → pin {pin}' if pin else ''}...")
@@ -1884,8 +1878,7 @@ def _cmd_install_adapter(args: argparse.Namespace) -> int:
         pin = getattr(args, "version", None)
         spec = f"{args.package}=={pin}" if pin else args.package
         target = f"{spec}[{extras}]" if extras else spec
-        # CHP adapters live on the GitHub release (not PyPI) → --find-links fallback.
-        cmd = base + ["--find-links", _GH_RELEASE_LINKS, target]
+        cmd = base + [target]  # adapters resolve from PyPI (0.10.0+)
 
     _log(f"==> Installing adapter {target}{f' (+extras: {extras})' if extras else ''}...")
     if subprocess.run(cmd).returncode != 0:
@@ -2034,7 +2027,7 @@ def build_parser() -> argparse.ArgumentParser:
         "update", help="Trigger a governed remote update on a mesh node (it self-updates + restarts).")
     mesh_update.add_argument("url", help="URL of the node to update.")
     mesh_update.add_argument("--version", help="Pin chp-core/chp-host to this version on the node.")
-    mesh_update.add_argument("--channel", choices=["github", "pypi"], help="Install source on the node.")
+    mesh_update.add_argument("--channel", choices=["github", "pypi"], help="Deprecated no-op (everything resolves from PyPI as of 0.10.0).")
     mesh_update.add_argument("--wait", action="store_true",
                              help="Poll until the node restarts on a new version (verifies the push).")
     mesh_update.set_defaults(func=_cmd_mesh_update)
@@ -2132,7 +2125,7 @@ def build_parser() -> argparse.ArgumentParser:
     update_cmd = sub.add_parser(
         "update", help="Upgrade CHP packages on this node and restart its services.")
     update_cmd.add_argument("--version", help="Pin chp-core/chp-host to this version (enables rollback).")
-    update_cmd.add_argument("--channel", choices=["github", "pypi"], default="github",
+    update_cmd.add_argument("--channel", choices=["github", "pypi"], default="pypi",  # deprecated no-op
                             help="Install source (default: github release + PyPI fallback).")
     update_cmd.add_argument("--no-restart", dest="restart", action="store_false",
                             help="Upgrade only; do not restart services.")

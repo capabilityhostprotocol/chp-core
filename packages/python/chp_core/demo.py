@@ -10,6 +10,22 @@ from .types import InvariantDescriptor
 
 
 @capability(
+    id="demo.echo",
+    version="0.1.0",
+    description="Echo the payload back — the zero-friction first invoke.",
+    input_schema={
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "additionalProperties": True,
+    },
+    output_schema={"type": "object"},
+    tags=["demo", "tool"],
+)
+def echo(text: str = "hello"):
+    return {"echo": text}
+
+
+@capability(
     id="demo.search_information",
     version="0.1.0",
     description="Return deterministic search notes for a query.",
@@ -75,6 +91,7 @@ def build_demo_host(store_path: str = ":memory:") -> LocalCapabilityHost:
         },
     )
     register_builtin_capabilities(host)
+    host.register(echo)
     host.register(search_information)
     host.register(deploy_preview)
     return host

@@ -469,12 +469,22 @@ class LocalCapabilityHost:
 
         entry = self._resolve(envelope.capability_id, envelope.version)
         if entry is None:
+            # A governed denial that also TEACHES: closest registered ids ride
+            # in details (wire-safe — DenialReason.details serializes today).
+            import difflib
+            registered = sorted({rc.descriptor.id for rc in self._capabilities.values()})
+            suggestions = difflib.get_close_matches(
+                envelope.capability_id, registered, n=3, cutoff=0.4)
             return self._deny(
                 envelope,
                 DenialReason(
                     code="capability_not_found",
                     message=f"Capability not found: {envelope.capability_id}",
                     retryable=False,
+                    details={
+                        "suggestions": suggestions,
+                        "hint": "GET /capabilities lists every registered capability",
+                    },
                 ),
             )
 

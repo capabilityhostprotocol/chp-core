@@ -19,6 +19,15 @@ describe('governed invocation pipeline (spec/chp-invocation-pipeline.md)', () =>
     expect(r.denial?.code).toBe('capability_not_found');
   });
 
+  it('near-miss capability id → denial details carry suggestions', async () => {
+    const h = buildFixtureHost();
+    const r = await h.ainvokeEnvelope({ capability_id: 'conformance.ecoh', correlation: { correlation_id: 'c' } });
+    expect(r.outcome).toBe('denied');
+    const details = r.denial?.details as { suggestions?: string[]; hint?: string };
+    expect(details?.suggestions).toContain('conformance.echo');
+    expect(details?.hint).toMatch(/capabilities/);
+  });
+
   it('guarded {} → denied invariant_failed', async () => {
     const h = buildFixtureHost();
     const r = await h.ainvokeEnvelope({ capability_id: 'conformance.guarded', payload: {}, correlation: { correlation_id: 'c' } });

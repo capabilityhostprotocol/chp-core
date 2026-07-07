@@ -198,7 +198,28 @@ export class LocalCapabilityHost {
     // Gate 2: resolution
     const entry = this.caps.get(env.capability_id);
     if (!entry || (env.version && env.version !== entry.descriptor.version)) {
-      return this.deny(env, { code: 'capability_not_found', message: `Capability not found: ${env.capability_id}`, retryable: false });
+      // Teach, don't just deny: closest registered ids ride in details
+      // (wire-safe — conformance asserts the code, not details).
+      const wanted = env.capability_id.toLowerCase();
+      const score = (id: string): number => {
+        const c = id.toLowerCase();
+        if (c.includes(wanted) || wanted.includes(c)) return 1000;
+        let p = 0;
+        while (p < c.length && p < wanted.length && c[p] === wanted[p]) p++;
+        return p;
+      };
+      const suggestions = [...this.caps.keys()]
+        .map((id) => [id, score(id)] as const)
+        .filter(([, s]) => s >= 3)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([id]) => id);
+      return this.deny(env, {
+        code: 'capability_not_found',
+        message: `Capability not found: ${env.capability_id}`,
+        retryable: false,
+        details: { suggestions, hint: 'GET /capabilities lists every registered capability' },
+      });
     }
     const d = entry.descriptor;
     env.version = d.version;

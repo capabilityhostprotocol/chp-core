@@ -377,7 +377,7 @@ def test_cli_update_defaults():
     from chp_host.cli import build_parser
     args = build_parser().parse_args(["update"])
     assert args.restart is True
-    assert args.channel == "github"
+    assert args.channel == "pypi"  # deprecated no-op since 0.10.0 (PyPI is the only source)
     assert args.version is None
 
 

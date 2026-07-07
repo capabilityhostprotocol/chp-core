@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import threading
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from ..demo import build_demo_host
@@ -28,8 +31,23 @@ def cmd_host(args: argparse.Namespace) -> int:
 
 def cmd_serve_demo(args: argparse.Namespace) -> int:
     host = build_demo_host(args.store)
-    print(f"Serving CHP host {host.host_id} at http://{args.bind}:{args.port}")
+    base = f"http://{args.bind}:{args.port}"
+    print(f"Serving CHP host {host.host_id} at {base}")
     print("Routes: GET /host, GET /capabilities, POST /invoke, POST /replay, GET /replay/{correlation_id}")
+    print()
+    print("Try it (in another terminal):")
+    print(f"""  chp invoke demo.echo --url {base} --payload '{{"text":"hello"}}' --correlation-id first-run""")
+    print(f"  chp replay first-run --url {base}          # the evidence chain for that call")
+    print(f"  curl -s {base}/export/first-run            # offline-verifiable evidence bundle")
+    try:
+        from ..signing import load_host_key, resolve_key_dir
+        if load_host_key(resolve_key_dir(host.host_id)) is None:
+            print()
+            print("Evidence is at the hash-chain tier. Run `chp keygen` to sign bundles")
+            print("(the `signed` tier — spec/chp-v0.2.md §3), then restart this host.")
+    except Exception:  # the nudge must never break serving
+        pass
+    print(flush=True)
     try:
         serve_http(host, bind=args.bind, port=args.port)
     except KeyboardInterrupt:
@@ -533,8 +551,21 @@ def request_json(method: str, url: str, body: JSON | None = None) -> JSON:
         headers={"Content-Type": "application/json"},
         method=method,
     )
-    with urlopen(request, timeout=5) as response:
-        value = json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(request, timeout=5) as response:
+            value = json.loads(response.read().decode("utf-8"))
+    except HTTPError:
+        raise  # the server answered — let callers surface its error body
+    except (URLError, OSError) as exc:
+        base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+        reason = getattr(exc, "reason", exc)
+        print(
+            f"no CHP host responding at {base} ({reason}).\n"
+            "Start one:  chp serve-demo          # batteries-included demo host\n"
+            "       or:  chp serve-http --module your_app:create_host",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
     if not isinstance(value, dict):
         raise ValueError("expected JSON object response")
     return value

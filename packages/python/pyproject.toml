@@ -9,7 +9,7 @@ description = "Capability Host Protocol — local execution evidence for agents,
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Auxo" }]
+authors = [{ name = "Project Auxo, Inc." }]
 keywords = ["chp", "capability-host-protocol", "agents", "observability", "governance", "evidence", "replay"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -25,6 +25,12 @@ classifiers = [
     "Topic :: System :: Monitoring",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/capabilityhostprotocol/chp-core"
+Documentation = "https://github.com/capabilityhostprotocol/chp-core/tree/main/docs"
+Specification = "https://github.com/capabilityhostprotocol/chp-core/tree/main/spec"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
 
 [project.scripts]
 chp = "chp_core.cli:main"

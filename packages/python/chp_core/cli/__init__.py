@@ -115,8 +115,22 @@ from ._work import (
 __all__ = ["main", "build_parser"]
 
 
+_START_HERE = """\
+start here:
+  chp serve-demo                                      # 1. a governed demo host on :8765
+  chp invoke demo.echo --payload '{"text":"hello"}' \\
+      --correlation-id first-run                      # 2. first governed invocation
+  chp replay first-run                                # 3. its evidence chain
+  chp keygen                                          # 4. sign evidence (the `signed` tier)
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
+    import sys
     parser = build_parser()
+    if not (argv if argv is not None else sys.argv[1:]):
+        parser.print_help()
+        return 0
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
 
@@ -124,7 +138,9 @@ def main(argv: list[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chp",
-        description="CHP v0.1 local host utilities.",
+        description="CHP local host utilities — govern, evidence, and verify capability calls.",
+        epilog=_START_HERE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 

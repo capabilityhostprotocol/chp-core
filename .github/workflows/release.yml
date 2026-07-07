@@ -151,6 +151,8 @@ jobs:
           - chp-adapter-synology
           - chp-adapter-raspi
           - chp-adapter-release
+          - chp-adapter-mlx
+          - chp-adapter-host
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
