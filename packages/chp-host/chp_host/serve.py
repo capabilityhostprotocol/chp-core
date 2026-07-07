@@ -67,7 +67,41 @@ def build_adapter_host(
             result.skipped[name] = f"error: {exc}"
             warnings.warn(f"failed to register adapter {name!r}: {exc}", stacklevel=2)
 
+    _register_openapi_mounts(host, result)
     return host, result
+
+
+def _register_openapi_mounts(host: LocalCapabilityHost, result: AdapterBuildResult) -> None:
+    """Register an openapi-backed adapter per entry in ``~/.chp/openapi-mounts.json``:
+    ``[{"name": "anchore", "spec": "<local path or url>", "base_url": "..."}]``. This mounts a service's
+    OpenAPI spec as governed ``chp.adapters.openapi.<name>.*`` capabilities *as config* — no package per
+    service. Fail-soft; a no-op if the file or chp-adapter-openapi is absent."""
+    import json
+    import os
+
+    mounts_path = os.path.join(os.path.expanduser("~/.chp"), "openapi-mounts.json")
+    try:
+        mounts = json.loads(open(mounts_path, encoding="utf-8").read())
+    except Exception:
+        return
+    try:
+        from chp_adapter_openapi.adapter import OpenAPIAdapter, OpenAPIConfig
+    except Exception:
+        warnings.warn("openapi-mounts present but chp-adapter-openapi is not installed; skipping", stacklevel=2)
+        return
+    for m in (mounts if isinstance(mounts, list) else []):
+        name, spec = (m or {}).get("name"), (m or {}).get("spec")
+        if not name or not spec:
+            continue
+        label = f"openapi:{name}"
+        try:
+            register_adapter(host, OpenAPIAdapter(OpenAPIConfig(
+                name=name, spec=spec, base_url=m.get("base_url") or None,
+                methods=m.get("methods"), include=m.get("include"), max_ops=m.get("max_ops"))))
+            result.registered.append(label)
+        except Exception as exc:
+            result.skipped[label] = f"error: {exc}"
+            warnings.warn(f"failed to mount openapi {name!r}: {exc}", stacklevel=2)
 
 
 def available_adapters() -> list[str]:

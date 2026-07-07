@@ -73,10 +73,13 @@ class JobsAdapter(BaseAdapter):
             )
         return self._executor
 
-    def _run_job(self, job_id: str, capability_id: str, payload: dict) -> None:
+    def _run_job(self, job_id: str, capability_id: str, payload: dict, correlation: Any = None) -> None:
         self._store.mark_running(job_id)
         try:
-            result = asyncio.run(self._host.ainvoke(capability_id, payload))
+            # The job's evidence MUST ride the submitting correlation with a causal
+            # edge (chp-v0.2.md §7 — deferred execution) — a fresh correlation would
+            # sever the chain that governed the submit.
+            result = asyncio.run(self._host.ainvoke(capability_id, payload, correlation=correlation))
             success = bool(getattr(result, "success", False))
             self._store.mark_done(
                 job_id,
@@ -121,7 +124,10 @@ class JobsAdapter(BaseAdapter):
 
         job_id = "job_" + uuid.uuid4().hex[:16]
         self._store.create(job_id, capability_id)
-        self._ensure_executor().submit(self._run_job, job_id, capability_id, target_payload)
+        # Immutable CorrelationContext (not ctx itself) — safe to carry across
+        # the worker thread; causation_id = this submit invocation.
+        child = ctx.child_correlation()
+        self._ensure_executor().submit(self._run_job, job_id, capability_id, target_payload, child)
 
         ctx.emit("jobs_submitted", {"job_id": job_id, "capability_id": capability_id}, redacted=False)
         return {"job_id": job_id, "capability_id": capability_id, "status": "submitted"}

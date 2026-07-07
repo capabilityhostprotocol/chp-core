@@ -16,8 +16,12 @@ no dependency cycle.
 
 from __future__ import annotations
 
+import getpass
+import glob
 import os
 import platform
+import re
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -93,12 +97,87 @@ def _spawn_detached_cli(args: list[str], log_name: str) -> int:
     return proc.pid
 
 
+# ---------------------------------------------------------------------------
+# Node setup introspection (host.facts) — turns ad-hoc spelunking into one call.
+# ---------------------------------------------------------------------------
+
+def _facts_env() -> dict:
+    """Env with common tool dirs prepended to PATH (rad/claude/homebrew live off the bare PATH)."""
+    env = dict(os.environ)
+    extra = [os.path.expanduser(p) for p in
+             ("~/.radicle/bin", "~/.local/bin", "~/.npm-global/bin", "~/.cargo/bin")] + ["/opt/homebrew/bin"]
+    env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
+    return env
+
+
+def _facts_sh(args: list[str], timeout: int = 10) -> str:
+    """Run a command on the augmented PATH; return stripped stdout ('' on any failure)."""
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=_facts_env())
+        return (out.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _facts_tool(name: str) -> dict:
+    """Locate a binary on the augmented PATH + its version (best-effort)."""
+    path = shutil.which(name, path=_facts_env()["PATH"])
+    if not path:
+        return {"present": False}
+    info = {"present": True, "path": path}
+    ver = _facts_sh([path, "--version"], timeout=8)
+    if ver:
+        info["version"] = ver.splitlines()[0][:60]
+    return info
+
+
 class HostAdapter(BaseAdapter):
     adapter_id = "chp.adapters.host"
     adapter_name = "Host"
     adapter_description = "Report and update the CHP host runtime on this node."
     adapter_category = "infrastructure"
     adapter_tags = ["host", "update", "version", "infrastructure", "ops"]
+
+    def on_register(self, host: Any) -> None:
+        self._host = host  # for the capability catalog (host.discover)
+
+    @capability(
+        id="chp.adapters.host.discover",
+        version="1.0.0",
+        description="List this node's capability catalog (id, risk, category, adapter), with optional "
+                    "namespace/category/risk filters. Read-only — the mesh-invokable view of GET /capabilities.",
+        category="infrastructure",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string",
+                              "description": "Prefix filter on capability id, e.g. 'chp.adapters.git.'"},
+                "category": {"type": "string", "description": "Exact category filter."},
+                "risk": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+                "ids_only": {"type": "boolean", "description": "Return just the sorted capability id list."},
+            },
+            "additionalProperties": False,
+        },
+        emits=["host_catalog_reported"],
+        tags=["host", "discover", "catalog"],
+    )
+    async def discover(self, ctx: Any, payload: dict) -> dict:
+        host = getattr(self, "_host", None)
+        if host is None:
+            return {"error": "host catalog unavailable (adapter not registered to a host)"}
+        kwargs = {k: payload[k] for k in ("namespace", "category", "risk") if payload.get(k)}
+        desc = host.discover(**kwargs) or {}
+        caps = desc.get("capabilities", [])
+        adapters = sorted({c["id"].split(".")[2] for c in caps
+                           if c.get("id") and c["id"].count(".") >= 2})
+        ctx.emit("host_catalog_reported", {"count": len(caps), "adapters": len(adapters)})
+        if payload.get("ids_only"):
+            return {"count": len(caps), "adapters": adapters,
+                    "capability_ids": sorted(c.get("id") for c in caps if c.get("id"))}
+        slim = [{"id": c.get("id"), "risk": c.get("risk"), "category": c.get("category"),
+                 "description": (c.get("description") or "")[:120]} for c in caps]
+        return {"count": len(caps), "adapters": adapters, "capabilities": slim}
 
     @capability(
         id="chp.adapters.host.version",
@@ -119,6 +198,126 @@ class HostAdapter(BaseAdapter):
         }
         ctx.emit("host_version_reported", {"host_version": info["host_version"]})
         return info
+
+    @capability(
+        id="chp.adapters.host.facts",
+        version="1.0.0",
+        description="Introspect THIS node's setup in one call: host/arch/python, toolchain (claude/codex/rad/"
+                    "git paths+versions), launchd services, radicle identity/homes/node/seed-policies, and rad "
+                    "repo checkouts. The 'how is this node configured' view (Ansible-facts-shaped). Runs locally "
+                    "on whichever node it is routed to.",
+        category="infrastructure",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "sections": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["host", "tools", "services", "radicle", "repos"]},
+                    "description": "Subset of fact sections to gather (default: all).",
+                },
+            },
+            "additionalProperties": False,
+        },
+        emits=["host_facts_reported"],
+        tags=["host", "facts", "introspection", "setup", "ops"],
+    )
+    async def facts(self, ctx: Any, payload: dict) -> dict:
+        sections = set(payload.get("sections") or ["host", "tools", "services", "radicle", "repos"])
+        out: dict[str, Any] = {}
+
+        if "host" in sections:
+            try:
+                user = getpass.getuser()
+            except Exception:
+                user = os.environ.get("USER", "")
+            out["host"] = {
+                "hostname": platform.node(), "platform": platform.platform(),
+                "arch": platform.machine(), "user": user,
+                "python": sys.executable, "home": os.path.expanduser("~"),
+            }
+
+        if "tools" in sections:
+            out["tools"] = {n: _facts_tool(n) for n in ("claude", "codex", "gemini", "rad", "git", "node")}
+
+        if "services" in sections:
+            ll = _facts_sh(["launchctl", "list"])
+            out["services"] = sorted({
+                line.split()[-1] for line in ll.splitlines()
+                if line.split() and ("chp" in line.lower() or "rad" in line.lower())
+            })[:25]
+
+        if "radicle" in sections:
+            rad: dict[str, Any] = {}
+            for line in _facts_sh(["rad", "self"]).splitlines():
+                low = line.strip().lower()
+                if low.startswith("alias"):
+                    rad["alias"] = line.split(None, 1)[-1].strip()
+                elif low.startswith("did"):
+                    rad["did"] = line.split(None, 1)[-1].strip()  # did:key is a public id (NID not surfaced)
+            rad["homes"] = sorted(os.path.basename(p) for p in glob.glob(os.path.expanduser("~/.radicle*")))
+            node = _facts_sh(["rad", "node", "status"])
+            rad["node_running"] = "running" in node.lower() and "not running" not in node.lower()
+            seed = _facts_sh(["rad", "seed"])
+            rad["seeded_repos"] = sum(1 for line in seed.splitlines()
+                                      if line.strip().startswith("│") and "rad:" in line)
+            out["radicle"] = rad
+
+        if "repos" in sections:
+            repos = []
+            for line in _facts_sh(["rad", "ls"]).splitlines():
+                m = re.search(r"rad:[0-9a-zA-Z]+", line)
+                if m and line.strip().startswith("│"):
+                    name = line.strip("│").split()[0] if line.strip("│").split() else ""
+                    repos.append({"name": name, "rid": m.group(0)})
+            out["repos"] = repos[:40]
+
+        tools_present = sum(1 for t in out.get("tools", {}).values() if t.get("present"))
+        ctx.emit("host_facts_reported",
+                 {"sections": sorted(out.keys()), "tools_present": tools_present})
+        return out
+
+    @capability(
+        id="chp.adapters.host.topology",
+        version="1.0.0",
+        description="Mesh connectivity view from this node: the radicle peer graph (who it's connected to) "
+                    "+ Tailscale device status (which mesh nodes are online). 'Where the nodes are connected'.",
+        category="infrastructure",
+        risk="low",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        emits=["host_topology_reported"],
+        tags=["host", "topology", "mesh", "connectivity", "ops"],
+    )
+    async def topology(self, ctx: Any, payload: dict) -> dict:
+        # Radicle peer graph (connected = "✓" marker; address shown for reachable peers).
+        peers = []
+        for line in _facts_sh(["rad", "node", "status"]).splitlines():
+            if "│" not in line:
+                continue
+            nid = re.search(r"z6Mk[0-9A-Za-z]{20,}", line)
+            addr = re.search(r"\b(100\.\d+\.\d+\.\d+:\d+|[\w.-]+:\d{2,5})\b", line)
+            if nid:
+                peers.append({"nid": nid.group(0)[:14] + "…", "address": addr.group(0) if addr else "",
+                              "connected": "✓" in line})
+
+        # Tailscale device status (mesh-node reachability).
+        ts = _facts_sh(["tailscale", "status"]) or \
+            _facts_sh(["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "status"])
+        devices = []
+        for line in ts.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0].startswith("100."):
+                devices.append({"ip": parts[0], "name": parts[1],
+                                "os": parts[3] if len(parts) >= 4 else "",
+                                "online": "offline" not in line.lower()})
+
+        result = {"radicle_peers": peers,
+                  "radicle_connected": sum(1 for p in peers if p["connected"]),
+                  "tailscale_devices": devices[:50],
+                  "tailscale_online": sum(1 for d in devices if d["online"])}
+        ctx.emit("host_topology_reported",
+                 {"peers": len(peers), "devices": len(devices), "online": result["tailscale_online"]})
+        return result
 
     @capability(
         id="chp.adapters.host.stats",
@@ -196,7 +395,7 @@ class HostAdapter(BaseAdapter):
             "required": ["package"],
             "additionalProperties": False,
         },
-        emits=["host_adapter_install_scheduled"],
+        emits=["host_adapter_install_scheduled", "host_adapter_installed"],
         tags=["host", "adapter", "install", "ops"],
     )
     async def install_adapter(self, ctx: Any, payload: dict) -> dict:
@@ -204,6 +403,17 @@ class HostAdapter(BaseAdapter):
         if not package:
             raise ValueError("package is required")
         args = ["install-adapter", package]
+        # Deferred-evidence coordinates (chp-v0.2.md §7): the detached install
+        # appends `host_adapter_installed` (version + record_sha256 provenance)
+        # under THIS correlation with a causal edge to this invocation.
+        store_path = getattr(getattr(getattr(ctx, "host", None), "store", None), "path", None)
+        if store_path and store_path != ":memory:":
+            child = ctx.child_correlation()
+            args += ["--evidence-store", str(store_path),
+                     "--correlation-id", str(child.correlation_id),
+                     "--host-id", str(getattr(ctx.host, "host_id", "") or "unknown")]
+            if child.causation_id:
+                args += ["--causation-id", str(child.causation_id)]
         if payload.get("url"):
             args += ["--url", str(payload["url"])]
         elif payload.get("version"):

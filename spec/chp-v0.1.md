@@ -72,6 +72,14 @@ Recommended fields:
 
 The stable capability URI is `id:version`.
 
+**Version semantics** *(clarification, additive)*: `version` is a
+[semver](https://semver.org) string. Two versions with the same **major**
+component are compatible — a caller written against `1.2.0` MAY be served by
+any `1.x.y`; a major bump signals an incompatible input/output contract.
+Resolution of an unversioned invoke is defined by the invocation pipeline
+(gate 2: it resolves only when exactly one version is registered). Registry
+version specs (e.g. `>=1.0.0`) are interpreted under these semantics.
+
 Schema: `schemas/capability-descriptor.schema.json`
 
 ## 4. Host Descriptor

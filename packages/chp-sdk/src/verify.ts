@@ -9,7 +9,7 @@ import { verify as edVerify } from 'node:crypto';
 import { canon, type JsonValue } from './canon.js';
 import { rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
-import { bundleHeader, computeTaskRootHash, publicKeyFromB64 } from './signing.js';
+import { bundleHeader, computeTaskRootHash, publicKeyFromB64, taskBundleHeader } from './signing.js';
 import { didKeyToRaw, verifySshsig } from './sshsig.js';
 import { orderEvents } from './ordering.js';
 
@@ -225,6 +225,37 @@ export interface TaskBundleVerification {
   taskRootHash: string | null;
   hosts: Array<Record<string, JsonValue>>;
   reason?: string;
+  /** Who ASSEMBLED the set (null = unsigned assembly — surfaced, not hidden). */
+  aggregator?: Record<string, JsonValue> | null;
+}
+
+/** Verify an attestation claim against a public key + host_id at a time —
+ * shared by member bundles (host_identity) and the task aggregator. */
+function attestationOk(
+  att: Record<string, JsonValue>,
+  pub: string,
+  hostId: string,
+  atTime: string | null,
+): boolean {
+  const claim: Record<string, JsonValue> = {
+    host_id: att.host_id,
+    public_key: att.public_key,
+    key_id: att.key_id,
+    valid_from: att.valid_from,
+    valid_until: att.valid_until,
+  };
+  if ('anchors' in att) claim.anchors = att.anchors;
+  const vf = att.valid_from as string | null;
+  const vu = att.valid_until as string | null;
+  const temporalOk =
+    (vf === null || atTime === null || vf <= atTime) &&
+    (vu === null || atTime === null || atTime <= vu);
+  return (
+    att.host_id === hostId &&
+    att.public_key === pub &&
+    temporalOk &&
+    verifyCanon(pub, claim, att.signature as string)
+  );
 }
 
 const taskMemberKey = (b: Record<string, JsonValue>): string =>
@@ -293,6 +324,45 @@ export function verifyTaskBundle(task: Record<string, JsonValue>): TaskBundleVer
   });
   checks.causal_acyclic = acyclic;
 
+  // Participation manifest (§8): a declared member set (task_participants_declared,
+  // riding the declarer's signed chain) must be fully present. Absent → no check.
+  const declared = new Set<string>();
+  for (const e of allEvents) {
+    if (e.event_type === 'task_participants_declared') {
+      const ps = ((e.payload as Record<string, JsonValue> | undefined)?.participants as JsonValue[] | undefined) ?? [];
+      for (const p of ps) declared.add(String(p));
+    }
+  }
+  const missingParticipants = new Set<string>();
+  if (declared.size > 0) {
+    const memberIds = new Set(members.map((b) => String(b.host_id ?? '')));
+    for (const d of declared) if (!memberIds.has(d)) missingParticipants.add(d);
+    checks.participation = missingParticipants.size === 0;
+  }
+
+  // Aggregator signature (§8 `aggregated` layer): verified whenever present.
+  let aggregatorInfo: Record<string, JsonValue> | null = null;
+  const agg = task.aggregator as Record<string, JsonValue> | undefined;
+  if (agg) {
+    const sig = (agg.signature as Record<string, JsonValue> | undefined) ?? {};
+    const pub = String(agg.public_key ?? '');
+    const att = agg.host_identity as Record<string, JsonValue> | undefined;
+    let aggOk =
+      sig.algorithm === 'ed25519' &&
+      !!pub &&
+      verifyCanon(pub, taskBundleHeader(task), String(sig.signature ?? ''));
+    aggOk = aggOk && !!att
+      && attestationOk(att, pub, String(agg.host_id ?? ''), (task.created_at as string | null) ?? null);
+    checks.aggregator = aggOk;
+    aggregatorInfo = {
+      host_id: (agg.host_id ?? null) as JsonValue,
+      key_id: (sig.key_id ?? null) as JsonValue,
+      anchored_domain: att ? domainAnchor(att) : null,
+      anchored_did: att ? ((didAnchor(att)?.did as string | undefined) ?? null) : null,
+      valid: aggOk,
+    };
+  }
+
   const valid = Object.values(checks).every(Boolean);
   return {
     valid,
@@ -301,10 +371,12 @@ export function verifyTaskBundle(task: Record<string, JsonValue>): TaskBundleVer
     correlationId,
     taskRootHash: (task.task_root_hash as string | undefined) ?? null,
     hosts,
+    aggregator: aggregatorInfo,
     reason: valid
       ? undefined
       : 'task-bundle checks failed: '
         + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', ')
-        + (dangling.size ? ` (dangling: ${[...dangling].slice(0, 3).join(',')})` : ''),
+        + (dangling.size ? ` (dangling: ${[...dangling].slice(0, 3).join(',')})` : '')
+        + (missingParticipants.size ? ` (declared but missing: ${[...missingParticipants].slice(0, 3).join(',')})` : ''),
   };
 }

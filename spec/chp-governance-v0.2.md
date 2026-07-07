@@ -118,7 +118,17 @@ invocation is the point, not only the blocks.
 named. Redaction/purge events are how retention (v0.2 §4) stays auditable: the
 act of removing evidence is itself evidence.
 
-### 4.4 Host Identity (`IDENTITY_EVIDENCE_TYPES`)
+### 4.4 Declared emissions are a contract
+
+A capability descriptor MAY declare the event types it emits (`emits`). When
+declared, the set is a **contract**, not a hint: the capability MUST NOT emit
+an event type that is neither (a) in its declared set, (b) a core lifecycle
+event (`execution_*`), nor (c) reverse-DNS namespaced per §5. A consumer MAY
+reject or flag undeclared emissions. This is what makes `emits` usable for
+audit tooling (e.g. emission-drift reports): a declared set that the runtime
+can silently exceed would be decorative.
+
+### 4.5 Host Identity (`IDENTITY_EVIDENCE_TYPES`)
 
 - `key_generated` / `key_rotated` / `key_revoked` — the host's signing-key
   lifecycle (chp-v0.2.md §3.2), including the rotation continuity link
@@ -137,6 +147,16 @@ To let independent implementations extend the vocabulary without colliding:
   `execution_*` core and the `*_EVIDENCE_TYPES` families), all reserved denial
   codes (§2), and the `chp.*` capability-id prefix are **reserved**. An
   implementation MUST NOT redefine their meaning.
+- **The adapter namespace.** `chp.adapters.*` is the reserved namespace for
+  capabilities provided by adapters (pluggable capability providers). Ids under
+  it follow `chp.adapters.<adapter>.<capability>` — tooling MAY rely on that
+  three-segment structure (e.g. discovery grouping by the `<adapter>` segment).
+  In the Python ecosystem, adapters publish under the `chp.adapters`
+  entry-point group with the package convention `chp-adapter-<name>`; other
+  ecosystems MUST keep the capability-id structure even if their packaging
+  differs. Vendor adapters outside the reference set keep their capability ids
+  reverse-DNS namespaced as below — `chp.adapters.*` itself is reserved for
+  the protocol's adapter registry.
 - **Vendor extensions.** Custom event types, denial codes, and capability ids
   MUST be **reverse-DNS namespaced** under a domain the author controls —
   `com.acme.deploy_requested`, `com.acme.quota_exceeded`,

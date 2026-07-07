@@ -415,3 +415,104 @@ def test_load_or_build_attestation_is_stable_and_rebuilds_on_change(tmp_path):
     a4 = signing.load_or_build_attestation(
         "h", key, [{"type": "domain", "domain": "acme.example"}], key_dir=tmp_path / "keys")
     assert a3 == a4
+
+
+# ---------------------------------------------------------------------------
+# Per-host key custody (chp-v0.2.md §3 "Key custody")
+# ---------------------------------------------------------------------------
+
+class TestResolveKeyDir:
+    def test_env_override_wins(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CHP_KEY_DIR", str(tmp_path / "env-keys"))
+        assert signing.resolve_key_dir("any-host") == tmp_path / "env-keys"
+
+    def test_per_host_dir_used_when_it_holds_a_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CHP_KEY_DIR", raising=False)
+        monkeypatch.setattr(signing, "DEFAULT_KEY_DIR", tmp_path / "keys")
+        signing.generate_keypair(tmp_path / "keys" / "host-a")
+        assert signing.resolve_key_dir("host-a") == tmp_path / "keys" / "host-a"
+
+    def test_legacy_fallback_when_no_per_host_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CHP_KEY_DIR", raising=False)
+        monkeypatch.setattr(signing, "DEFAULT_KEY_DIR", tmp_path / "keys")
+        assert signing.resolve_key_dir("host-a") == tmp_path / "keys"
+        assert signing.resolve_key_dir(None) == tmp_path / "keys"
+
+    def test_unsafe_host_id_never_maps_to_per_host_dir(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CHP_KEY_DIR", raising=False)
+        monkeypatch.setattr(signing, "DEFAULT_KEY_DIR", tmp_path / "keys")
+        signing.generate_keypair(tmp_path / "keys" / "host-a")
+        assert signing.resolve_key_dir("../host-a") == tmp_path / "keys"
+        assert signing.resolve_key_dir("a/../../b") == tmp_path / "keys"
+
+    def test_two_hosts_sign_with_distinct_keys(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CHP_KEY_DIR", raising=False)
+        monkeypatch.setattr(signing, "DEFAULT_KEY_DIR", tmp_path / "keys")
+        ka = signing.generate_keypair(tmp_path / "keys" / "host-a")
+        kb = signing.generate_keypair(tmp_path / "keys" / "host-b")
+        assert ka.key_id != kb.key_id
+        assert signing.load_host_key(signing.resolve_key_dir("host-a")).key_id == ka.key_id
+        assert signing.load_host_key(signing.resolve_key_dir("host-b")).key_id == kb.key_id
+
+
+# ---------------------------------------------------------------------------
+# Aggregated task bundles + participation manifests (chp-v0.2.md §8)
+# ---------------------------------------------------------------------------
+
+class TestAggregatedTaskBundle:
+    def _task(self, tmp_path, declare=None):
+        import asyncio
+        from chp_core.types import utc_now
+        key = signing.generate_keypair(tmp_path / "k")
+
+        def member(host_id, corr):
+            store = SQLiteEvidenceStore(":memory:")
+            host = LocalCapabilityHost(host_id, store=store)
+            async def work(ctx, _p):
+                if declare and host_id == declare[0]:
+                    ctx.declare_participants(declare)
+                return {}
+            host.register(CapabilityDescriptor(id=f"{host_id}.w", version="1.0.0", description=""), work)
+            r = asyncio.run(host.ainvoke(f"{host_id}.w", {}, correlation={"correlation_id": corr}))
+            assert r.success
+            b = signing.build_bundle(host_id, store.export_correlation(corr), created_at=utc_now())
+            return signing.sign_bundle(b, key)
+
+        ba, bb = member("agg-a", "t-corr"), member("agg-b", "t-corr")
+        return signing.build_task_bundle("t-corr", [ba, bb], created_at=utc_now()), key
+
+    def test_unsigned_assembly_surfaces_null_aggregator(self, tmp_path):
+        task, _ = self._task(tmp_path)
+        v = signing.verify_task_bundle(task)
+        assert v.valid and "aggregator" not in v.checks and v.aggregator is None
+        assert "aggregator" not in task  # omit-when-empty: bytes unchanged
+
+    def test_signed_assembly_verifies_and_names_aggregator(self, tmp_path):
+        task, key = self._task(tmp_path)
+        signed = signing.sign_task_bundle(task, key, aggregator_host_id="gw-x")
+        v = signing.verify_task_bundle(signed)
+        assert v.valid and v.checks["aggregator"]
+        assert v.aggregator["host_id"] == "gw-x" and v.aggregator["valid"]
+
+    def test_reassembled_set_breaks_aggregator_signature(self, tmp_path):
+        task, key = self._task(tmp_path)
+        signed = signing.sign_task_bundle(task, key, aggregator_host_id="gw-x")
+        signed["bundles"] = signed["bundles"][:1]
+        signed["task_root_hash"] = signing.compute_task_root_hash(signed["bundles"])
+        v = signing.verify_task_bundle(signed)
+        assert not v.valid and v.checks["aggregator"] is False
+
+    def test_declared_participant_missing_fails_participation(self, tmp_path):
+        task, _ = self._task(tmp_path, declare=["agg-a", "agg-b"])
+        v = signing.verify_task_bundle(task)
+        assert v.valid and v.checks["participation"] is True
+        task["bundles"] = [b for b in task["bundles"] if b["host_id"] != "agg-b"]
+        task["task_root_hash"] = signing.compute_task_root_hash(task["bundles"])
+        v2 = signing.verify_task_bundle(task)
+        assert not v2.valid and v2.checks["participation"] is False
+        assert "declared but missing" in v2.reason
+
+    def test_no_manifest_means_no_participation_check(self, tmp_path):
+        task, _ = self._task(tmp_path)
+        v = signing.verify_task_bundle(task)
+        assert "participation" not in v.checks

@@ -161,3 +161,27 @@ def test_restart_schedules_detached(monkeypatch):
     assert "restart" in calls["cmd"] and "update" not in calls["cmd"]
     assert calls["kwargs"].get("start_new_session") is True
     assert calls["kwargs"].get("env", {}).get("HOME")
+
+
+def test_facts_capability():
+    result = _host().invoke("chp.adapters.host.facts", {"sections": ["host", "tools"]})
+    assert result.outcome == "success"
+    d = result.data
+    assert "host" in d and "tools" in d
+    assert d["host"]["python"]                      # interpreter path always present
+    assert isinstance(d["tools"]["git"], dict)      # each tool → {present, [path, version]}
+    assert "present" in d["tools"]["git"]
+
+
+def test_facts_unknown_field_denied():
+    result = _host().invoke("chp.adapters.host.facts", {"bogus": 1})
+    assert result.outcome == "denied"
+
+
+def test_topology_capability():
+    result = _host().invoke("chp.adapters.host.topology", {})
+    assert result.outcome == "success"
+    d = result.data
+    assert isinstance(d["radicle_peers"], list)
+    assert isinstance(d["tailscale_devices"], list)
+    assert "radicle_connected" in d and "tailscale_online" in d

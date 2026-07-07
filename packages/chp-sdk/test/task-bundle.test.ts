@@ -54,3 +54,57 @@ describe('task bundle (chp-v0.2.md §8) — cross-language vs the Python-generat
     expect(v.checks.task_root_hash).toBe(false);
   });
 });
+
+const aggPath = fileURLToPath(new URL('../../../spec/test-vectors/task-bundle-aggregated.json', import.meta.url));
+const loadAgg = (): Record<string, JsonValue> => JSON.parse(readFileSync(aggPath, 'utf8'));
+
+describe('aggregated task bundle (§8) — aggregator + participation, cross-language', () => {
+  it('verifies the published aggregated vector incl. aggregator + participation', () => {
+    const v = verifyTaskBundle(loadAgg());
+    expect(v.valid).toBe(true);
+    expect(v.checks.aggregator).toBe(true);
+    expect(v.checks.participation).toBe(true);
+    expect(v.aggregator?.host_id).toBe('agg-gateway');
+  });
+
+  it('unsigned assembly surfaces aggregator: null, no aggregator check', () => {
+    const t = loadAgg();
+    delete t.aggregator;
+    const v = verifyTaskBundle(t);
+    expect(v.valid).toBe(true);
+    expect('aggregator' in v.checks).toBe(false);
+    expect(v.aggregator).toBe(null);
+  });
+
+  it('dropping a DECLARED member fails participation (completeness limit closed)', () => {
+    const t = loadAgg();
+    delete t.aggregator; // isolate the participation check
+    const members = (t.bundles as Record<string, JsonValue>[]).filter((b) => b.host_id !== 'agg-host-b');
+    t.bundles = members as unknown as JsonValue;
+    t.task_root_hash = computeTaskRootHash(members);
+    const v = verifyTaskBundle(t);
+    expect(v.valid).toBe(false);
+    expect(v.checks.participation).toBe(false);
+    expect(v.reason).toMatch(/declared but missing/);
+  });
+
+  it('re-assembled (tampered) set fails the aggregator signature', () => {
+    const t = loadAgg();
+    const members = (t.bundles as Record<string, JsonValue>[]).filter((b) => b.host_id !== 'agg-host-b');
+    t.bundles = members as unknown as JsonValue;
+    t.task_root_hash = computeTaskRootHash(members); // attacker recomputes root...
+    const v = verifyTaskBundle(t);
+    expect(v.checks.aggregator).toBe(false); // ...but cannot re-sign the header
+  });
+
+  it('signTaskBundle round-trips in TS', async () => {
+    const { keypairFromSeed, signTaskBundle } = await import('../src/signing.js');
+    const t = loadAgg();
+    delete t.aggregator;
+    const key = keypairFromSeed(Buffer.alloc(32, 7));
+    const signed = signTaskBundle(t, key, 'ts-gateway');
+    const v = verifyTaskBundle(signed);
+    expect(v.checks.aggregator).toBe(true);
+    expect(v.aggregator?.host_id).toBe('ts-gateway');
+  });
+});

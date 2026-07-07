@@ -836,9 +836,10 @@ class _RealHFBackend:
         from huggingface_hub import HfApi
 
         api = HfApi(token=token or None)
+        # HfApi.list_models uses `pipeline_tag` for the task (not `task=`, which it rejects).
         models = list(api.list_models(
             filter=filter_tag or None,
-            task=task or None,
+            pipeline_tag=task or None,
             sort=sort,
             limit=limit,
             full=True,

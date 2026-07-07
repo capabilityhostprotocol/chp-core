@@ -215,6 +215,31 @@ def format_token_prometheus(report: TokenMetricsReport) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Process-lifetime integrity counters — verification outcomes as scrapeable
+# metrics, not only evidence. Incremented by the /verify route (http.py).
+_INTEGRITY_COUNTERS = {"verify_valid": 0, "verify_invalid": 0, "chain_breaks": 0}
+
+
+def record_verification(valid: bool, *, chain_break: bool = False) -> None:
+    _INTEGRITY_COUNTERS["verify_valid" if valid else "verify_invalid"] += 1
+    if chain_break:
+        _INTEGRITY_COUNTERS["chain_breaks"] += 1
+
+
+def format_integrity_prometheus() -> str:
+    """Prometheus text for the integrity counters (process lifetime)."""
+    c = _INTEGRITY_COUNTERS
+    return "\n".join([
+        "# HELP chp_verify_requests_total Chain/bundle verification requests by result (process lifetime).",
+        "# TYPE chp_verify_requests_total counter",
+        f'chp_verify_requests_total{{valid="true"}} {c["verify_valid"]}',
+        f'chp_verify_requests_total{{valid="false"}} {c["verify_invalid"]}',
+        "# HELP chp_chain_breaks_total Hash-chain breaks observed by /verify (process lifetime).",
+        "# TYPE chp_chain_breaks_total counter",
+        f"chp_chain_breaks_total {c['chain_breaks']}",
+    ]) + "\n"
+
+
 def format_prometheus(report: SessionMetricsReport) -> str:
     """Return Prometheus text exposition format with chp_invocations_* metric names."""
     lines: list[str] = []

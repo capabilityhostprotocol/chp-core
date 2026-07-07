@@ -28,6 +28,12 @@ returns **HTTP 200** with the outcome in the body (see
 [chp-http-binding.md](chp-http-binding.md) §1). Transport-level rejections
 (malformed request, failed auth, unknown route) are *not* processed invocations.
 
+For **deferred execution** (background jobs, queues): the gates run once, at
+submit time, against the submitting invocation — so the deferred execution's
+evidence MUST ride the submitting correlation with a causal edge
+([chp-v0.2.md](chp-v0.2.md) §7, "Deferred execution"). A fresh correlation
+would detach the executed work from the invocation the gates governed.
+
 ## 2. The pipeline (MUST be applied in this order)
 
 For each gate: **Trigger** is the exact predicate; **Outcome** is the

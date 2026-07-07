@@ -31,10 +31,11 @@ from typing import Any
 class RegistryEntry:
     id: str
     package: str | None = None
-    version: str | None = None
+    version: str | None = None  # semver spec, interpreted per chp-v0.1.md §3 version semantics
     enabled: bool = True
     tags: list[str] = field(default_factory=list)
-    # §11.4 certification fields (optional)
+    # Certification fields (optional; implementation-defined — from
+    # certification.py maturity assessment, not a spec'd protocol object)
     maturity_level: int | None = None
     certification_level: int | None = None
     certified_by: str | None = None

@@ -378,6 +378,23 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "task_bundle_vector_verifies", False, {"error": str(exc)})
 
+    # Aggregated task-bundle vector: aggregator signature + participation manifest.
+    agg_vec = repo_root / "spec" / "test-vectors" / "task-bundle-aggregated.json"
+    if agg_vec.exists():
+        try:
+            from .signing import verify_task_bundle
+
+            av = verify_task_bundle(read_json(agg_vec))
+            add_check(
+                checks,
+                "aggregated_task_bundle_vector_verifies",
+                av.valid and av.checks.get("aggregator", False)
+                and av.checks.get("participation", False),
+                {"checks": av.checks, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "aggregated_task_bundle_vector_verifies", False, {"error": str(exc)})
+
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
 

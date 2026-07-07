@@ -1791,6 +1791,72 @@ def _add_adapter_to_profile(profile_path: str, name: str) -> bool:
     return True
 
 
+def _installed_fingerprint(package: str) -> dict:
+    """Content fingerprint of an installed distribution: its version plus a
+    sha256 over the sorted per-file hashes pip wrote to RECORD — a stable
+    fingerprint of the adapter code actually on disk (provenance floor;
+    signed provenance statements are proposal 0001)."""
+    import hashlib
+    from importlib import metadata
+
+    dist = metadata.distribution(package)
+    record = dist.read_text("RECORD") or ""
+    lines = sorted(line for line in record.splitlines() if ",sha256=" in line)
+    digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+    return {"version": dist.version, "record_sha256": digest}
+
+
+def _record_install_provenance(args: argparse.Namespace, package: str,
+                               source: str, log) -> None:
+    """Post-install provenance: always append to ~/.chp/adapter-provenance.json;
+    when the scheduling capability passed evidence coordinates, also append a
+    `host_adapter_installed` event under the SUBMITTING correlation (deferred
+    execution rides the submitting chain — chp-v0.2.md §7)."""
+    try:
+        fp = _installed_fingerprint(package)
+    except Exception as exc:  # fingerprinting must never fail the install
+        log(f"WARNING: could not fingerprint {package}: {exc}")
+        return
+    entry = {"package": package, "source": source, **fp,
+             "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        prov_path = Path.home() / ".chp" / "adapter-provenance.json"
+        prov_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = json.loads(prov_path.read_text()) if prov_path.exists() else []
+        existing.append(entry)
+        prov_path.write_text(json.dumps(existing, indent=2))
+    except Exception as exc:
+        log(f"WARNING: could not write adapter-provenance.json: {exc}")
+    log(f"==> provenance: {package}=={fp['version']} record_sha256={fp['record_sha256'][:16]}…")
+
+    store_path = getattr(args, "evidence_store", None)
+    corr_id = getattr(args, "correlation_id", None)
+    if not store_path or not corr_id:
+        return
+    try:
+        from chp_core.store import SQLiteEvidenceStore
+        from chp_core.types import CorrelationContext, ExecutionEvidence, new_id
+
+        store = SQLiteEvidenceStore(store_path)
+        store.append(ExecutionEvidence(
+            event_id=new_id("evt"),
+            event_type="host_adapter_installed",
+            invocation_id=new_id("inv"),
+            capability_id="chp.adapters.host.install_adapter",
+            capability_version="1.0.0",
+            host_id=getattr(args, "host_id", None) or "unknown",
+            correlation=CorrelationContext(
+                correlation_id=corr_id,
+                causation_id=getattr(args, "causation_id", None) or None,
+            ),
+            payload=entry,
+            redacted=False,
+        ))
+        log(f"==> evidence: host_adapter_installed appended under {corr_id}")
+    except Exception as exc:
+        log(f"WARNING: could not append install evidence: {exc}")
+
+
 def _cmd_install_adapter(args: argparse.Namespace) -> int:
     """Install (pull) a CHP adapter onto this node, optionally register it in the
     profile, and restart. Run detached by host.install_adapter, or by an operator.
@@ -1825,6 +1891,8 @@ def _cmd_install_adapter(args: argparse.Namespace) -> int:
     if subprocess.run(cmd).returncode != 0:
         _log("ERROR: pip install failed — adapter not installed.")
         return 1
+
+    _record_install_provenance(args, args.package, url or target, _log)
 
     name = getattr(args, "adapter_name", None)
     profile = getattr(args, "profile", None)
@@ -2085,6 +2153,14 @@ def build_parser() -> argparse.ArgumentParser:
     install_adapter_cmd.add_argument("--profile", help="Host profile JSON to add the adapter to.")
     install_adapter_cmd.add_argument("--no-restart", dest="restart", action="store_false",
                                      help="Install only; do not restart services.")
+    # Deferred-evidence coordinates (chp-v0.2.md §7): when host.install_adapter
+    # schedules this detached install, the post-install provenance event is
+    # appended to the node's store under the SUBMITTING correlation.
+    install_adapter_cmd.add_argument("--evidence-store", dest="evidence_store",
+                                     help="SQLite evidence store to append the install event to.")
+    install_adapter_cmd.add_argument("--correlation-id", dest="correlation_id")
+    install_adapter_cmd.add_argument("--causation-id", dest="causation_id")
+    install_adapter_cmd.add_argument("--host-id", dest="host_id")
     install_adapter_cmd.set_defaults(func=_cmd_install_adapter, restart=True)
 
     svc_install = sub.add_parser(

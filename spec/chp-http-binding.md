@@ -43,6 +43,21 @@ configurations:
   governed/signed tiers). This is what makes "agent X did Y" *provable* rather
   than *asserted*.
 
+**Key rotation (overlap window).** The same caller name MAY appear with
+several keys simultaneously (`agent-a:new,agent-a:old`) — all entries
+authenticate as the same verified subject. Rotation is therefore add-new →
+drain → remove-old, with no authentication gap and no distinct rotation
+protocol. Every configured entry is compared in constant time.
+
+**Capability-scoped keys.** A named key MAY carry a capability scope —
+`name:key:scope1|scope2`, where each scope is an exact capability id or a
+trailing-`*` prefix (`chp.adapters.audit.*`). An invocation outside the key's
+scope is a **processed governance denial**: outcome `denied` with the reserved
+`policy_blocked` code, returned as HTTP `200` **with evidence emitted** (§1 —
+a scope decision is governance, never a bare transport 403). An unscoped key
+is unrestricted (today's behavior). Scope is enforced by the host that
+authenticates the caller.
+
 If no keys are configured the host MAY accept all callers (local-first default).
 Network-layer confidentiality (e.g. a private mesh) MAY substitute for TLS.
 
@@ -62,7 +77,7 @@ balancers; every other route requires auth (§2).
 | POST | `/replay` | required | `ReplayQuery` | `ReplayResult` |
 | GET | `/verify/{correlation_id}` | required | — | chain-verification result (§4) |
 | GET | `/export/{correlation_id}` | required | — | this host's (signed when keyed) evidence bundle; on a gateway, the assembled cross-host **task bundle** (§4a) |
-| GET | `/metrics` | required | — | Prometheus text (`text/plain; version=0.0.4`) |
+| GET | `/metrics` | required | — | Prometheus text (`text/plain; version=0.0.4`); MAY include integrity counters (`chp_verify_requests_total{valid}`, `chp_chain_breaks_total`) so verification failures are alertable, not only evidence |
 
 `/invoke` accepts a convenience form: a top-level `correlation_id` is lifted into
 `correlation.correlation_id`. Responses are JSON with sorted keys.
@@ -106,6 +121,16 @@ members with ≥1 event, sorts canonically, and aggregates — at request time,
 never storing evidence. If any member is unreachable the gateway MUST respond
 `503` listing the unreachable hosts: a silently-partial evidence bundle is the
 failure mode task bundles exist to prevent; the caller retries.
+
+### 4b. Federated replay is never silently partial
+
+A gateway `/replay` fans out to member hosts and merges the timeline
+(chp-causal-order-v1). Unlike `/export`, replay is a *read view*, so a partial
+result is permitted — but it MUST be disclosed: when any member could not
+contribute, the `ReplayResult` MUST carry `partial: true` and name the
+unreachable members in `missing_hosts`. A merged timeline that silently omits
+a member's events misrepresents the causal record; a consumer that requires
+completeness uses `/export` (which refuses partiality outright).
 
 ## 5. Conformance
 

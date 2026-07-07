@@ -161,6 +161,12 @@ the **signed attestation claim**:
   "whose?", and MUST NOT treat `host_id` as trusted. An attacker-controlled
   anchor "verifies" — against *the attacker's root*; the trust decision belongs
   to the caller reading the surfaced root.
+- **Key custody.** A deployment SHOULD provision a **distinct signing key per
+  `host_id`**. Nothing in the format forbids one key attesting several
+  host_ids, but shared custody collapses "which host signed this" into "which
+  key-holder signed this" — with a machine-wide key, per-host attribution is
+  only as strong as the machine boundary. (The reference implementation
+  resolves per-host key directories with a shared-key fallback.)
 - **`domain` anchor.** Proves: "the entity in administrative control of the
   domain (DNS + TLS certificate + server) asserts key P is its CHP signing
   key" — the Web-PKI chain, the RFC 8615 / MTA-STS pattern. The host MUST serve
@@ -223,7 +229,7 @@ a stated limit of this tier; there is no global revocation infrastructure.
 **Identity evidence.** The lifecycle is recorded on the host's **own**
 hash-chained store via the reserved host-self event family
 `IDENTITY_EVIDENCE_TYPES` = {`key_generated`, `key_rotated`, `key_revoked`,
-`identity_anchored`} (governance §4.4) under the correlation
+`identity_anchored`} (governance §4.5) under the correlation
 `host-identity-<host_id>`. The chain's append-only, tamper-evident ordering
 makes it the host's **key-transparency log**, exportable and verifiable like
 any evidence bundle. This is the first evidence family that describes the host
@@ -294,6 +300,16 @@ W3C trace-context trace id (the OTel exporter uses it and falls back to
 task's correlation to its spawning session — it is NOT part of
 chp-causal-order-v1, which operates within one `correlation_id`.
 
+**Deferred execution.** When an invocation defers work — a background job, a
+queued task, any execution that outlives the submitting request — the deferred
+execution MUST propagate the submitting invocation's correlation with a causal
+edge (same `correlation_id`, `causation_id` = the submitting `invocation_id`),
+exactly as a synchronous child would. Minting a fresh correlation for deferred
+work severs the evidence chain from the invocation that was governed at submit
+time: the pipeline's gates ran against the submit, so the execution's evidence
+MUST remain reachable from it. (The reference `chp.adapters.jobs` adapter is
+the canonical example.)
+
 ## 8. Task Bundles — cross-host verification
 
 A **task bundle** makes a task spanning N hosts verifiable **as a unit**. It
@@ -319,27 +335,53 @@ aggregates one correlation's per-host bundles, byte-untouched:
   task's single tamper-evident fingerprint: swapping, adding, or dropping any
   member changes it.
 - **`assurance`** MUST be the MINIMUM member tier — degradation is surfaced,
-  never hidden. There is no aggregator signature at this tier (member
-  signatures prove each part's origin); the format admits one later via the
-  omit-when-empty pattern.
+  never hidden. Member signatures prove each part's origin; the OPTIONAL
+  `aggregator` layer below additionally proves who assembled the set.
+
+**Aggregator signature (the `aggregated` layer, optional).** The assembling
+host MAY sign the assembly: an `aggregator` object carrying its `host_id`,
+`public_key`, its own `host_identity` attestation (§3, anchors included when
+anchored), and a `signature` over the canonical **task header**
+`{kind, correlation_id, protocol_version, created_at, canonicalization,
+task_root_hash}`. Because `task_root_hash` commits to every member root and
+member order is canonical, signing the header signs the assembly: re-assembling
+the set (adding, dropping, or swapping members) breaks the aggregator
+signature even if the attacker recomputes `task_root_hash`. **Omit-when-empty**:
+an unsigned task bundle is byte-identical to the pre-aggregator format — every
+published vector is unchanged. A verifier MUST verify the aggregator whenever
+present and MUST surface its absence (`aggregator: null`) rather than treat
+unsigned assembly as verified assembly. Vector:
+`test-vectors/task-bundle-aggregated.json`.
+
+**Participation manifest (optional).** An orchestrating host MAY declare the
+member set by emitting the reserved `task_participants_declared` event
+(payload: `{"participants": [host_id, …]}`, sorted) under the task's
+correlation — on its OWN signed chain, so the declaration inherits the
+declarer's signature and anchors. When any member's events include such a
+declaration, verification MUST check that **every declared `host_id` has a
+member bundle** (declarations union across events). This closes the leaf-
+omission gap below for declared sets: omitting a declared member now dangles
+against a signed expectation.
 
 **Verification** (all MUST pass): structure; canonical member order;
 `task_root_hash` recompute; every member verifies fully under §3 (chain, root,
 header signature, attestation, anchors); every event carries the task's
 `correlation_id`; member `host_id`s are pairwise distinct; **causal closure** —
 every non-null `causation_id` in any member resolves to an `invocation_id`
-present in the union of members (no dangling causal references); and the
-chp-causal-order-v1 edge set over the union is **acyclic**. The verifier MUST
-surface per-member identity (host_id, key_id, assurance, anchors) — who
-contributed what, under which trust root.
+present in the union of members (no dangling causal references); the
+chp-causal-order-v1 edge set over the union is **acyclic**; **participation**
+when a manifest is declared (above); and the **aggregator** signature when
+present (above). The verifier MUST surface per-member identity (host_id,
+key_id, assurance, anchors) — who contributed what, under which trust root.
 
 **Completeness limit (normative):** task-bundle verification proves the
 integrity of every included part, the cryptographic identity of every
 contributor, and causal closure. It does NOT prove the absence of evidence: a
 causal *ancestor* cannot be silently dropped (its children's `causation_id`s
-would dangle), but a *leaf* contributor — a host whose invocations nothing else
-references — can be omitted undetectably. Participation manifests /
-absence-proofs are out of scope at this tier.
+would dangle), and a **declared** member cannot be omitted (the participation
+check), but an *undeclared leaf* contributor — a host whose invocations
+nothing else references and no manifest names — can still be omitted
+undetectably. Absence-proofs beyond declared sets are out of scope.
 
 `spec/test-vectors/task-bundle.json` is the fixture (two fixed-seed hosts with
 cross-host causation); `verify.mjs` verifies it from these rules alone.

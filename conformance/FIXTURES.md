@@ -59,4 +59,9 @@ types emitted for the exercised call, in order.
 <start the host under test on PORT with the config above>
 python conformance/runner.py --url http://localhost:PORT --key <key> --suite wire
 ```
-A conforming host prints `[wire] 16/16`.
+A conforming host prints `[wire] 17/17`.
+
+The scoped-key check additionally needs a **scoped caller key** configured on
+the host under test — `conformance-scoped:<key>:conformance.echo` (binding §2
+`name:key:scope` form) — and the same `<key>` exported to the runner as
+`CHP_CONFORMANCE_SCOPED_KEY`.

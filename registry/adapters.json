@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated": "2026-06-22",
+  "generated": "2026-07-03",
   "categories": [
     "network",
     "filesystem",
@@ -555,6 +555,70 @@
       "pypi": "chp-adapter-mlx",
       "category": "ai",
       "description": "Apple Silicon native text generation via a local mlx_lm server",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-devloop",
+      "pypi": "chp-adapter-devloop",
+      "category": "platform",
+      "description": "bounded recursive self-improvement (propose + gate new capabilities)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-flywheel",
+      "pypi": "chp-adapter-flywheel",
+      "category": "platform",
+      "description": "the recursive flywheel's decision steps (curate + promotion gate + evaluate_and_gate)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-matrix",
+      "pypi": "chp-adapter-matrix",
+      "category": "messaging",
+      "description": "Matrix messaging + human-in-the-loop approvals as governed CHP capabilities (composes through chp.adapters.http)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-capscan",
+      "pypi": "chp-adapter-capscan",
+      "category": "platform",
+      "description": "Codebase capability scanner \u2014 surfaces candidate adapters & capabilities (powers onboarding)",
+      "status": "experimental",
+      "tier": 1
+    },
+    {
+      "id": "chp-adapter-stewards",
+      "pypi": "chp-adapter-stewards",
+      "category": "platform",
+      "description": "Run the offline steward fleet (emission/conformance/doc/onboarding/demand) on-demand",
+      "status": "experimental",
+      "tier": 1
+    },
+    {
+      "id": "chp-adapter-anchore",
+      "pypi": "chp-adapter-anchore",
+      "category": "cloud",
+      "description": "CHP adapter \u2014 anchore.io API as governed capabilities (openapi-backed, generated)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-telemetry",
+      "pypi": "chp-adapter-telemetry",
+      "category": "platform",
+      "description": "emit agent/LLM runs as standard OpenTelemetry GenAI spans",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-wiremock",
+      "pypi": "chp-adapter-wiremock",
+      "category": "code",
+      "description": "CHP adapter \u2014 WireMock admin API as governed capabilities (openapi-backed; test the factory)",
       "status": "experimental",
       "tier": 2
     }

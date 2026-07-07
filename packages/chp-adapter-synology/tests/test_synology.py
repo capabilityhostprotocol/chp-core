@@ -184,54 +184,70 @@ def test_evidence_recorded_for_all_ops():
 
 
 # ---------------------------------------------------------------------------
-# _DSMBackend version negotiation (the code-104 fix) — httpx mock transport
+# _DSMBackend version negotiation (the code-104 fix) — fake http-adapter ctx
 # ---------------------------------------------------------------------------
+#
+# The live backend composes through chp.adapters.http via ctx.ainvoke, so we mock
+# the http adapter (not a raw client): a fake ctx whose ainvoke routes the request
+# dict to a handler returning (status_code, json) — exactly the {status_code, json}
+# shape chp.adapters.http.request returns in result.data.
 
-def _dsm_with_mock(handler):
-    import httpx
+import asyncio
+
+
+class _FakeResult:
+    def __init__(self, data: dict) -> None:
+        self.success = True
+        self.data = data
+        self.error = None
+
+
+class _FakeHttpCtx:
+    """Stands in for the capability ctx: ainvoke(http_cap, req) -> result.data."""
+
+    def __init__(self, handler) -> None:
+        self._handler = handler
+
+    async def ainvoke(self, cap: str, req: dict):
+        status, js = self._handler(req)
+        return _FakeResult({"status_code": status, "json": js})
+
+
+def _dsm_with_handler(handler):
     from chp_adapter_synology.adapter import _DSMBackend
 
     backend = _DSMBackend(SynologyConfig(base_url="http://nas:5000", username="u", password="p"))
     backend._sid = "SID"  # skip auth round-trip
-    orig_client = backend._client
-
-    def _client():
-        return httpx.Client(base_url="http://nas:5000", transport=httpx.MockTransport(handler))
-
-    backend._client = _client  # type: ignore[assignment]
-    return backend
+    return backend, _FakeHttpCtx(handler)
 
 
 def test_resolve_version_clamps_to_max_supported():
     """Container Manager advertises a lower max than we prefer → clamp down (no code 104)."""
-    import json as _json
-    import httpx
-
     seen: dict = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        if "query.cgi" in request.url.path:
+    def handler(req: dict):
+        url = req["url"]
+        params = req.get("params") or {}
+        if "query.cgi" in url:
             # SYNO.Docker.Container only goes up to v1 on this DSM.
-            return httpx.Response(200, json={
+            return 200, {
                 "success": True,
                 "data": {"SYNO.Docker.Container": {"minVersion": 1, "maxVersion": 1, "path": "entry.cgi"}},
-            })
-        seen["version"] = request.url.params.get("version")
-        return httpx.Response(200, json={"success": True, "data": {"containers": []}})
+            }
+        seen["version"] = params.get("version")
+        return 200, {"success": True, "data": {"containers": []}}
 
-    backend = _dsm_with_mock(handler)
-    backend.container_list()  # prefers version=2 in code
+    backend, ctx = _dsm_with_handler(handler)
+    asyncio.run(backend.container_list(ctx))  # prefers version=2 in code
     assert seen["version"] == "1", "should negotiate down to the max the NAS supports"
 
 
 def test_resolve_version_falls_back_when_info_unavailable():
-    import httpx
+    def handler(req: dict):
+        if "query.cgi" in req["url"]:
+            return 500, None  # info endpoint down / non-JSON
+        return 200, {"success": True, "data": {"total": 0, "tasks": []}}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        if "query.cgi" in request.url.path:
-            return httpx.Response(500, text="boom")
-        return httpx.Response(200, json={"success": True, "data": {"total": 0, "tasks": []}})
-
-    backend = _dsm_with_mock(handler)
+    backend, ctx = _dsm_with_handler(handler)
     # Should not raise — falls back to the preferred version.
-    assert backend.task_list() == {"total": 0, "tasks": []}
+    assert asyncio.run(backend.task_list(ctx)) == {"total": 0, "tasks": []}

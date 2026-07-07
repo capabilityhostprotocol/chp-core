@@ -184,3 +184,32 @@ class TestConformance:
 
         violations = check_source_file(inspect.getfile(mod))
         assert not violations, f"JobsAdapter has conformance violations: {violations}"
+
+
+class TestCorrelationContinuity:
+    """A job's evidence MUST ride the submitting correlation with a causal edge
+    (chp-v0.2.md §7, deferred execution) — never a fresh correlation."""
+
+    def test_job_evidence_rides_submitter_correlation(self):
+        host = _make_host()
+        r = asyncio.get_event_loop().run_until_complete(
+            host.ainvoke(
+                "chp.adapters.jobs.submit",
+                {"capability_id": "chp.adapters.work.echo", "payload": {"text": "hi"}},
+                correlation={"correlation_id": "corr-continuity"},
+            )
+        )
+        assert r.success
+        assert _wait_for(host, r.data["job_id"]) == "completed"
+
+        events = host.store.by_correlation("corr-continuity")
+        target = [e for e in events if e["capability_id"] == "chp.adapters.work.echo"]
+        assert target, "job evidence not linked to the submitting correlation"
+
+        submit_inv = next(
+            e["invocation_id"] for e in events
+            if e["capability_id"] == "chp.adapters.jobs.submit"
+        )
+        assert all(e["correlation"]["causation_id"] == submit_inv for e in target), (
+            "job evidence missing the causal edge to the submit invocation"
+        )

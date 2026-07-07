@@ -77,12 +77,24 @@ class FileBackend:
 
     def _load(self) -> None:
         if self._path.exists():
+            # Plaintext secrets at rest must not be group/world-readable.
+            # Tighten perms on any pre-existing loose file we encounter.
+            try:
+                if (self._path.stat().st_mode & 0o077) != 0:
+                    os.chmod(self._path, 0o600)
+            except OSError:
+                pass
             with open(self._path) as fh:
                 self._data = json.load(fh)
 
     def _save(self) -> None:
-        with open(self._path, "w") as fh:
+        # Create with 0600 from the start (umask can't loosen an explicit
+        # open-flags mode); never leave a window where secrets are 0644.
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self._path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
             json.dump(self._data, fh, indent=2)
+        os.chmod(self._path, 0o600)
 
     def get(self, key: str) -> str | None:
         return self._data.get(key)
@@ -127,8 +139,8 @@ class KeychainBackend:
             raise OSError("KeychainBackend requires macOS")
         self._index = Path(index_path or Path.home() / ".chp" / "keychain-index.json")
 
-    def _security(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["security", *args], capture_output=True, text=True)
+    def _security(self, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(["security", *args], capture_output=True, text=True, input=stdin)
 
     def _load_index(self) -> list[str]:
         if self._index.exists():
@@ -150,8 +162,13 @@ class KeychainBackend:
         return value if value else None
 
     def set(self, key: str, value: str) -> None:
-        # -U: update if the item already exists (macOS 10.9+)
-        r = self._security("add-generic-password", "-U", "-a", key, "-s", self._SERVICE, "-w", value)
+        # -U: update if the item already exists (macOS 10.9+). Pass the secret
+        # via stdin (security prompts twice) rather than as a `-w <value>` argv,
+        # which would expose it in `ps`/`/proc/<pid>/cmdline` to any local user.
+        r = self._security(
+            "add-generic-password", "-U", "-a", key, "-s", self._SERVICE, "-w",
+            stdin=f"{value}\n{value}\n",
+        )
         if r.returncode != 0:
             raise RuntimeError(f"Keychain set failed for {key!r}: {r.stderr.strip()}")
         keys = self._load_index()

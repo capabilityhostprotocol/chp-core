@@ -1541,6 +1541,35 @@ REFERENCE_CHECKS: list[tuple[str, Check]] = [
 # only the wire surface (discover / invoke / replay / verify) — the checks that
 # reach into a local SQLite store can't run black-box. A host-under-test
 # pre-registers the fixture profile (conformance.echo/fail/guarded).
+async def check_scoped_caller_key(host: Any) -> None:
+    """v0.2 (binding §2): a capability-scoped caller key. In-scope invokes
+    succeed under the scoped verified subject; an out-of-scope invocation is a
+    PROCESSED governance denial — HTTP 200, outcome `denied`, reserved code
+    `policy_blocked` — never a bare transport 403. The host-under-test
+    configures `conformance-scoped:<key>:conformance.echo` (FIXTURES.md) and
+    the runner receives the key via CHP_CONFORMANCE_SCOPED_KEY."""
+    scoped_key = os.environ.get("CHP_CONFORMANCE_SCOPED_KEY")
+    assert scoped_key, (
+        "scoped-key check needs CHP_CONFORMANCE_SCOPED_KEY (a key configured as "
+        "conformance-scoped:<key>:conformance.echo on the host under test)"
+    )
+    from chp_core.http import RemoteCapabilityHost
+    base = getattr(host, "_base", None)
+    assert base, "scoped-key check requires a wire host"
+    scoped = RemoteCapabilityHost(base, api_key=scoped_key)
+
+    ok = await invoke_host(scoped, "conformance.echo", {"value": "in-scope"})
+    assert result_value(ok, "outcome") == "success", f"in-scope invoke failed: {ok}"
+
+    denied = await invoke_host(scoped, "conformance.fail", {})
+    assert result_value(denied, "outcome") == "denied", (
+        f"out-of-scope invoke must be a PROCESSED denial (200 + outcome denied), got: {denied}"
+    )
+    denial = result_value(denied, "denial")
+    code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
+    assert code == "policy_blocked", f"out-of-scope denial must use policy_blocked, got {code!r}"
+
+
 WIRE_CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -1558,6 +1587,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("chain verification over /verify", check_wire_verify),
     ("identity document (v0.2 §3.1)", check_identity_document),
     ("export bundle verifies (v0.2 §4a)", check_export_bundle),
+    ("capability-scoped caller key (binding §2)", check_scoped_caller_key),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

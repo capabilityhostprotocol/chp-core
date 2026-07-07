@@ -380,6 +380,15 @@ class TestFileBackend:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes only")
+    def test_file_backend_writes_0600(self, tmp_path):
+        # Secrets at rest must not be group/world-readable.
+        path = tmp_path / "secrets.json"
+        backend = FileBackend(str(path))
+        backend.set("TOKEN", "s3cret")
+        mode = path.stat().st_mode & 0o777
+        assert mode == 0o600, oct(mode)
+
     def test_file_backend_read_only_raises(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"K": "v"}, f)

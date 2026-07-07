@@ -136,6 +136,23 @@ def test_load_mesh_creates_empty(tmp_path, monkeypatch):
     assert "gateway" in data
 
 
+def test_tofu_pin_check_reset(tmp_path, monkeypatch):
+    from chp_host import mesh as mesh_mod
+    monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")
+    d = mesh_mod._empty_mesh()
+    d["agent_remotes"].append({"url": "http://n1:8803", "api_key_env": "K"})
+    mesh_mod.save_mesh(d)
+
+    # First sight pins the key (TOFU); same key trusts; a changed key is a hard
+    # mismatch; reset clears it so the next verify re-pins.
+    assert mesh_mod.pin_or_check_key("http://n1:8803", "key-a", "pubA") == ("pinned", "key-a")
+    assert mesh_mod.pin_or_check_key("http://n1:8803", "key-a", "pubA") == ("ok", "key-a")
+    assert mesh_mod.pin_or_check_key("http://n1:8803", "key-EVIL", "pubE") == ("mismatch", "key-a")
+    assert mesh_mod.reset_key("http://n1:8803") is True
+    assert mesh_mod.pin_or_check_key("http://n1:8803", "key-b", "pubB") == ("pinned", "key-b")
+    assert mesh_mod.pin_or_check_key("http://unknown", "k", "p") == ("no-remote", None)
+
+
 def test_save_and_reload(tmp_path, monkeypatch):
     from chp_host import mesh as mesh_mod
     monkeypatch.setattr(mesh_mod, "mesh_path", lambda: tmp_path / "mesh.json")

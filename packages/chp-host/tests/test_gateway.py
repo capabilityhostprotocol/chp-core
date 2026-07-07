@@ -56,7 +56,8 @@ class TestGatewayHTTP:
         data = _get(f"{self.base}/health")
         assert data["status"] == "ok"
         assert data["protocol"] == "chp"
-        assert data["capability_count"] >= 2
+        # capability_count is disclosed on the authed /host, not public /health.
+        assert "capability_count" not in data
 
     def test_capabilities_lists_all_hosts(self):
         data = _get(f"{self.base}/capabilities")

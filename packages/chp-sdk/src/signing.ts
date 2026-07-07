@@ -172,3 +172,41 @@ export function buildTaskBundle(
     task_root_hash: computeTaskRootHash(members),
   };
 }
+
+const TASK_HEADER_FIELDS = [
+  'kind', 'correlation_id', 'protocol_version', 'created_at', 'canonicalization', 'task_root_hash',
+] as const;
+
+/** The aggregator-signed header — task_root_hash commits to every member root. */
+export function taskBundleHeader(task: Record<string, JsonValue>): JsonValue {
+  const h: Record<string, JsonValue> = {};
+  for (const f of TASK_HEADER_FIELDS) h[f] = task[f] ?? null;
+  return h;
+}
+
+/** Attach the AGGREGATOR signature (spec §8): the assembling gateway signs the
+ * canonical task-bundle header with its own key + attestation. Omit-when-empty:
+ * an unsigned task bundle stays byte-identical to the pre-aggregator format. */
+export function signTaskBundle(
+  task: Record<string, JsonValue>,
+  key: HostKey,
+  aggregatorHostId: string,
+  opts: { validUntil?: string | null; anchors?: JsonValue[] | null } = {},
+): Record<string, JsonValue> {
+  if (!key.privateKey) throw new Error('aggregator key has no private component; cannot sign');
+  return {
+    ...task,
+    aggregator: {
+      host_id: aggregatorHostId,
+      public_key: key.publicKeyB64,
+      host_identity: buildAttestation(
+        aggregatorHostId, key, String(task.created_at ?? ''),
+        opts.validUntil ?? null, opts.anchors ?? null),
+      signature: {
+        algorithm: SIGNATURE_ALGORITHM,
+        key_id: key.keyId,
+        signature: signCanon(key.privateKey, taskBundleHeader(task)),
+      },
+    },
+  };
+}

@@ -40,6 +40,19 @@ _MAX_GREP_RESULTS = 200
 _MAX_GLOB_RESULTS = 500
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    """True if *path* is *root* or lives under it — component-wise, not string
+    prefix (so '/srv/data-secret' is not 'within' '/srv/data')."""
+    try:
+        return path == root or path.is_relative_to(root)
+    except AttributeError:  # Python < 3.9
+        import os
+        try:
+            return os.path.commonpath([str(path), str(root)]) == str(root)
+        except ValueError:
+            return False
+
+
 @dataclass
 class FilesystemConfig:
     """Config for FilesystemAdapter.
@@ -77,8 +90,11 @@ class FilesystemAdapter(BaseAdapter):
         """Resolve *path* and verify it is under an allowed root (if configured)."""
         resolved = Path(path).resolve()
         if self._config.allowed_roots is not None:
-            allowed = [str(Path(r).resolve()) for r in self._config.allowed_roots]
-            if not any(str(resolved).startswith(a) for a in allowed):
+            # Component-wise containment, NOT string prefix: root '/srv/data'
+            # must not admit sibling '/srv/data-secret'. is_relative_to compares
+            # path parts, so '/srv/data-secret' is correctly rejected.
+            allowed = [Path(r).resolve() for r in self._config.allowed_roots]
+            if not any(_is_within(resolved, a) for a in allowed):
                 raise PermissionError(
                     f"Path {resolved} is outside allowed roots"
                 )
@@ -464,6 +480,17 @@ class FilesystemAdapter(BaseAdapter):
 
         t0 = time.monotonic()
         raw = _glob.glob(pattern, root_dir=str(resolved_base), recursive=True)
+        # A pattern like '../../etc/*' escapes root_dir — re-validate every
+        # returned path against the allowed roots, dropping any that resolve out.
+        if self._config.allowed_roots is not None:
+            kept = []
+            for rel in raw:
+                try:
+                    self._check_path(str(resolved_base / rel))
+                except PermissionError:
+                    continue
+                kept.append(rel)
+            raw = kept
         raw.sort()
 
         truncated = len(raw) > _MAX_GLOB_RESULTS

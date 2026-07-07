@@ -15,6 +15,7 @@ extensions MUST be reverse-DNS namespaced (`com.acme.…`) — see
 | `COMPLIANCE_EVIDENCE_TYPES` | `compliance_report_generated`, `evidence_purged`, `evidence_redacted`, `retention_policy_applied` |
 | `CORE_EVIDENCE_TYPES` | `execution_completed`, `execution_denied`, `execution_failed`, `execution_skipped`, `execution_started` |
 | `DOMAIN_EVENT_EVIDENCE_TYPES` | `domain_event_emitted`, `domain_event_operation_failed`, `domain_events_queried` |
+| `FEDERATION_EVIDENCE_TYPES` | `task_participants_declared` |
 | `GRAPH_EVIDENCE_TYPES` | `graph_entity_added`, `graph_operation_failed`, `graph_queried`, `graph_relation_added`, `graph_traversed` |
 | `IDENTITY_EVIDENCE_TYPES` | `identity_anchored`, `key_generated`, `key_revoked`, `key_rotated` |
 | `INCIDENT_EVIDENCE_TYPES` | `incident_closed`, `incident_escalated`, `incident_opened`, `incident_remediation_applied`, `incident_resolved`, `incident_trigger_fired` |
@@ -51,6 +52,8 @@ ordering are normative in [chp-invocation-pipeline.md](chp-invocation-pipeline.m
 ## Reserved prefixes / namespaces
 
 - `chp.*` — capability ids reserved for the protocol/reference implementation (governance §5)
+- `chp.adapters.*` — the adapter capability namespace — ids follow `chp.adapters.<adapter>.<capability>` (governance §5)
+- `chp.adapters` (entry-point group) — the discovery group adapters publish under; package convention `chp-adapter-<name>` (governance §5)
 - `execution_*` — core lifecycle evidence events (chp-v0.1.md §6)
 - `host-identity-<host_id>` — the correlation carrying a host's own identity/key-lifecycle evidence (chp-v0.2.md §3.2)
 - `chp-host-anchor` — the SSHSIG namespace for did-anchor countersignatures (chp-v0.2.md §3.1)

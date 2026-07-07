@@ -85,7 +85,9 @@ class TestHttpTransport:
             tr = HttpTransport(url)
             health = await tr.health()
             assert health["status"] == "ok"
-            assert health["capability_count"] == 1
+            # capability_count is NOT disclosed on the unauthenticated /health
+            # (moved to the authed /host descriptor) — mesh-count privacy.
+            assert "capability_count" not in health
 
     @pytest.mark.asyncio
     async def test_replay(self):

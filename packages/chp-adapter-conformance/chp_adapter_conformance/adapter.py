@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib as _hashlib
 import inspect
 import json
 from datetime import datetime, timezone
@@ -17,7 +18,32 @@ from .checker import (
     score,
 )
 
-_SESSION_FILE = Path.home() / ".chp" / "active-session.json"
+_SESSION_FILE = Path.home() / ".chp" / "active-session.json"  # global default (back-compat)
+_SESSION_DIR = Path.home() / ".chp" / "sessions"  # per-repo/worktree keyed sessions
+
+
+def _session_file(repo_path: str | None) -> Path:
+    """Resolve the session-state file. Keyed by repo path when given (so each git worktree gets its
+    own session and concurrent builds never clobber each other), else the global file."""
+    if not repo_path:
+        return _SESSION_FILE
+    key = _hashlib.sha1(str(Path(repo_path).resolve()).encode()).hexdigest()[:12]
+    return _SESSION_DIR / f"{key}.json"
+
+
+def _resolve_existing(repo_path: str | None) -> Path:
+    """The keyed file if it exists, else fall back to the global file (smooth migration + lets an
+    authoring (global) session and a worktree (keyed) session coexist)."""
+    sf = _session_file(repo_path)
+    return sf if sf.exists() else _SESSION_FILE
+
+# Declared evidence-emission contract for this adapter's capabilities (the granular
+# events each method emits). Declaring the superset makes the catalog honest vs what's
+# observed — see chp.adapters.audit.emission_report.
+_EMITS = [
+    "source_checked", "adapter_checked", "all_checked", "staged_checked",
+    "policy_checked", "dev_session_opened", "dev_session_closed", "violations_reported",
+]
 
 # The sole adapter sanctioned to import an HTTP client directly: it IS the
 # governed transport. Every other adapter must compose through it
@@ -76,6 +102,7 @@ class ConformanceAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.conformance.check_source",
+        emits=_EMITS,
         version="1.0.0",
         description="Run static AST analysis on an adapter source file and report violations.",
         category="core",
@@ -109,6 +136,7 @@ class ConformanceAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.conformance.check_adapter",
+        emits=_EMITS,
         version="1.0.0",
         description="Runtime introspection of a loaded adapter — checks schema, version, and metadata completeness.",
         category="core",
@@ -159,6 +187,7 @@ class ConformanceAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.conformance.check_all",
+        emits=_EMITS,
         version="1.0.0",
         description="Check all loaded adapters for violations and return a ranked summary.",
         category="core",
@@ -210,6 +239,7 @@ class ConformanceAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.conformance.policy_check",
+        emits=_EMITS,
         version="1.0.0",
         description="Check a commit message for the Radicle issue reference policy (rad:XXXXXXX).",
         category="core",
@@ -284,6 +314,7 @@ class ConformanceAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.conformance.open_dev_session",
+        emits=_EMITS,
         version="1.0.0",
         description="Open a tracked dev session: validate Radicle issue, snapshot baseline conformance, create plan, write active-session state.",
         category="core",
@@ -293,6 +324,7 @@ class ConformanceAdapter(BaseAdapter):
             "properties": {
                 "issue_id": {"type": "string", "description": "Radicle issue short-hash (7+ chars)"},
                 "description": {"type": "string", "description": "Optional work description"},
+                "repo_path": {"type": "string", "description": "Repo/worktree path to key this session by (defaults to the global session)"},
             },
             "required": ["issue_id"],
             "additionalProperties": False,
@@ -303,11 +335,17 @@ class ConformanceAdapter(BaseAdapter):
             raise RuntimeError("ConformanceAdapter must be registered with a host")
 
         issue_id = payload["issue_id"]
+        repo_path = payload.get("repo_path")
 
-        # 1. Validate issue exists and is open
+        # 1. Validate issue exists and is open. Forward repo_path so the issue is
+        # resolved against the same repo the session is keyed by — without it,
+        # issue_show defaults to the host's cwd and fails for any other repo.
+        issue_show_payload = {"issue_id": issue_id}
+        if repo_path:
+            issue_show_payload["repo_path"] = repo_path
         issue_result = await ctx.ainvoke(
             "chp.adapters.radicle.issue_show",
-            {"issue_id": issue_id},
+            issue_show_payload,
         )
         if not issue_result.success:
             raise ValueError(f"Issue {issue_id} not found: {issue_result.error}")
@@ -335,8 +373,10 @@ class ConformanceAdapter(BaseAdapter):
         )
         plan_id = plan_result.data.get("plan_id") if plan_result.success else None
 
-        # 4. Write session state (sanctioned local state — ~/.chp/ is CHP's own state dir)
-        _SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # 4. Write session state (sanctioned local state — ~/.chp/ is CHP's own state dir).
+        #    Keyed by repo_path when given so worktree builds don't clobber an authoring session.
+        session_file = _session_file(payload.get("repo_path"))
+        session_file.parent.mkdir(parents=True, exist_ok=True)
         session_data = {
             "issue_id": issue_id,
             "issue_title": issue_title,
@@ -344,8 +384,9 @@ class ConformanceAdapter(BaseAdapter):
             "baseline": baseline,
             "plan_id": plan_id,
             "session_correlation_id": ctx.correlation_id,
+            "repo_path": payload.get("repo_path"),
         }
-        _SESSION_FILE.write_text(json.dumps(session_data, indent=2))
+        session_file.write_text(json.dumps(session_data, indent=2))
 
         baseline_total = baseline["total_violations"]
         ctx.emit("dev_session_opened", {
@@ -359,12 +400,13 @@ class ConformanceAdapter(BaseAdapter):
             "issue_id": issue_id,
             "issue_title": issue_title,
             "baseline_total_violations": baseline_total,
-            "session_file": str(_SESSION_FILE),
+            "session_file": str(session_file),
             "plan_id": plan_id,
         }
 
     @capability(
         id="chp.adapters.conformance.check_staged",
+        emits=_EMITS,
         version="1.0.0",
         description="Check staged Python files against the active dev session baseline. Returns new violations only — existing baseline violations are not re-flagged.",
         category="core",
@@ -377,6 +419,7 @@ class ConformanceAdapter(BaseAdapter):
                     "items": {"type": "string"},
                     "description": "Absolute paths to staged .py files (from git diff --staged --name-only)",
                 },
+                "repo_path": {"type": "string", "description": "Repo/worktree path keying the session (defaults to global)"},
             },
             "required": ["staged_files"],
             "additionalProperties": False,
@@ -388,10 +431,11 @@ class ConformanceAdapter(BaseAdapter):
 
         staged_files = payload.get("staged_files", [])
 
-        if not _SESSION_FILE.exists():
+        session_file = _resolve_existing(payload.get("repo_path"))
+        if not session_file.exists():
             raise RuntimeError("No active dev session. Run open_dev_session first.")
 
-        session_data = json.loads(_SESSION_FILE.read_text())
+        session_data = json.loads(session_file.read_text())
         baseline_adapters = session_data.get("baseline", {}).get("adapters", [])
 
         # Build reverse map: source_file → baseline rule set
@@ -457,6 +501,7 @@ class ConformanceAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.conformance.close_dev_session",
+        emits=_EMITS,
         version="1.0.0",
         description="Close the active dev session: run final conformance scan, compare vs baseline, delete session state.",
         category="core",
@@ -469,6 +514,7 @@ class ConformanceAdapter(BaseAdapter):
                     "enum": ["success", "abandoned"],
                     "description": "Whether the work was completed or abandoned",
                 },
+                "repo_path": {"type": "string", "description": "Repo/worktree path keying the session (defaults to global)"},
             },
             "additionalProperties": False,
         },
@@ -477,10 +523,11 @@ class ConformanceAdapter(BaseAdapter):
         if self._host is None:
             raise RuntimeError("ConformanceAdapter must be registered with a host")
 
-        if not _SESSION_FILE.exists():
+        session_file = _resolve_existing(payload.get("repo_path"))
+        if not session_file.exists():
             raise RuntimeError("No active dev session to close")
 
-        session_data = json.loads(_SESSION_FILE.read_text())
+        session_data = json.loads(session_file.read_text())
         issue_id = session_data["issue_id"]
         started_at = session_data.get("started_at", "")
         baseline_total = session_data.get("baseline", {}).get("total_violations", 0)
@@ -498,7 +545,7 @@ class ConformanceAdapter(BaseAdapter):
         violations_resolved = max(0, baseline_total - final["total_violations"])
 
         # Delete session state (sanctioned local state)
-        _SESSION_FILE.unlink()
+        session_file.unlink()
 
         ctx.emit("dev_session_closed", {
             "issue_id": issue_id,
@@ -518,6 +565,7 @@ class ConformanceAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.conformance.report_violations",
+        emits=_EMITS,
         version="1.0.0",
         description="Auto-open Radicle issues for adapters with conformance violations. Deduplicates against existing open issues.",
         category="core",

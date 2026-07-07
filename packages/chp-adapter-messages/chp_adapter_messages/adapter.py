@@ -58,6 +58,7 @@ class MessagesAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.messages.record_turn",
+        emits=['message_turn_recorded'],
         version="1.0.0",
         description="Record a conversation turn (user/assistant/system) into the evidence chain and JSONL store.",
         input_schema={
@@ -119,6 +120,7 @@ class MessagesAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.messages.load_session",
+        emits=['session_loaded'],
         version="1.0.0",
         description="Load all conversation turns for a session from the local JSONL store.",
         input_schema={
@@ -141,6 +143,7 @@ class MessagesAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.messages.list_sessions",
+        emits=['sessions_listed'],
         version="1.0.0",
         description="List session IDs that have stored conversation transcripts.",
         input_schema={"type": "object", "properties": {}},
@@ -152,6 +155,7 @@ class MessagesAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.messages.backfill_session",
+        emits=['session_backfilled'],
         version="1.0.0",
         description="Parse a Claude Code JSONL transcript and backfill human-typed turns into the evidence chain.",
         input_schema={

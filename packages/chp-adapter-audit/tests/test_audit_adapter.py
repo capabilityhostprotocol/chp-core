@@ -75,6 +75,8 @@ class TestShaping:
             "chp.adapters.audit.get_invocation",
             "chp.adapters.audit.stats",
             "chp.adapters.audit.token_report",
+            "chp.adapters.audit.emission_report",
+            "chp.adapters.audit.agent_runs",
         }
 
     def test_all_risk_low(self):
@@ -222,6 +224,18 @@ class TestStats:
         host.invoke("chp.adapters.echo.fail", {})
         r = host.invoke("chp.adapters.audit.stats", {})
         assert 0.0 <= r.data["error_rate"] <= 1.0
+
+    def test_by_outcome_reflects_terminal_outcomes_not_unknown(self):
+        # Regression: by_outcome must read the terminal event's outcome, not
+        # execution_started (which is always None → the old "unknown" bug).
+        host = _make_host()
+        host.invoke("chp.adapters.echo.ping", {"msg": "ok"})
+        host.invoke("chp.adapters.echo.fail", {})
+        r = host.invoke("chp.adapters.audit.stats", {})
+        by_outcome = r.data["by_outcome"]
+        assert by_outcome.get("success", 0) >= 1
+        assert by_outcome.get("failure", 0) >= 1
+        assert "unknown" not in by_outcome
 
 
 # --------------------------------------------------------------------------

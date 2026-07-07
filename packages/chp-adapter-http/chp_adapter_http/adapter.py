@@ -14,6 +14,8 @@ One capability: ``request``
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import socket
 import threading
 import time as _time
 from dataclasses import dataclass, field
@@ -21,6 +23,19 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+
+# Cloud metadata / link-local endpoints — never a legitimate HTTP target, the
+# primary SSRF escalation. Blocked by default even without an allowlist. Does
+# NOT include general loopback/RFC-1918/CGNAT: this adapter legitimately calls
+# localhost sovereign inference (vLLM/TEI/scout) and Tailscale 100.64/10 mesh
+# nodes — set block_private_networks=True to sandbox those too.
+_METADATA_HOSTS = frozenset({
+    "169.254.169.254",   # AWS/GCP/Azure IMDS
+    "169.254.170.2",     # ECS task metadata
+    "fd00:ec2::254",     # EC2 IMDSv2 IPv6
+    "metadata.google.internal",
+    "metadata",
+})
 
 from chp_core import BaseAdapter, capability
 
@@ -47,6 +62,10 @@ class HttpConfig:
     timeout: float = 30.0
     max_response_bytes: int = 1 * 1024 * 1024  # 1 MB
     transport: Any = None
+    # When True, additionally deny loopback / private / link-local / CGNAT
+    # targets (resolving hostnames first). Off by default because sovereign
+    # inference (localhost) and mesh (Tailscale 100.64/10) depend on them.
+    block_private_networks: bool = False
     # Resilience: retries + circuit breaker key off TRANSPORT failures (server
     # down, connection refused, timeout) — NOT HTTP status codes (those return
     # normally as before). Composing adapters (tei/vllm/github/local_llm) inherit
@@ -58,16 +77,44 @@ class HttpConfig:
 
     def _check_url(self, url: str) -> str:
         """Return the URL unchanged if allowed; raise PermissionError if not."""
-        if self.allowed_origins is None:
-            return url
         parsed = urlparse(url)
-        origin = f"{parsed.scheme}://{parsed.netloc}"
-        for allowed in self.allowed_origins:
-            if origin == allowed.rstrip("/") or url.startswith(allowed):
-                return url
-        raise PermissionError(
-            f"URL origin {origin!r} is not in allowed_origins"
-        )
+        host = (parsed.hostname or "").lower()
+
+        # 1. Always deny cloud metadata endpoints (SSRF crown jewel).
+        if host in _METADATA_HOSTS:
+            raise PermissionError(f"host {host!r} is a blocked metadata endpoint")
+
+        # 2. Optional strict sandbox: deny loopback/private/link-local/CGNAT.
+        if self.block_private_networks:
+            for addr in self._resolve_ips(host, parsed.port):
+                if (
+                    addr.is_private or addr.is_loopback or addr.is_link_local
+                    or addr.is_reserved or addr.is_multicast
+                ):
+                    raise PermissionError(f"host {host!r} resolves to blocked address {addr}")
+
+        # 3. Origin allowlist — strict scheme+host[:port] equality (no prefix
+        #    match: 'https://evil.com' must not admit 'https://evil.com.attacker').
+        if self.allowed_origins is not None:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            allowed_set = {a.rstrip("/") for a in self.allowed_origins}
+            if origin not in allowed_set:
+                raise PermissionError(f"URL origin {origin!r} is not in allowed_origins")
+        return url
+
+    @staticmethod
+    def _resolve_ips(host: str, port: int | None) -> list[ipaddress._BaseAddress]:
+        """Resolve host to IPs. A bare IP literal skips DNS. Unresolvable hosts
+        raise (fail-closed) only in strict mode where this is called."""
+        try:
+            return [ipaddress.ip_address(host)]
+        except ValueError:
+            pass
+        try:
+            infos = socket.getaddrinfo(host, port or 80, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as exc:
+            raise PermissionError(f"host {host!r} could not be resolved") from exc
+        return [ipaddress.ip_address(info[4][0]) for info in infos]
 
 
 class HttpAdapter(BaseAdapter):

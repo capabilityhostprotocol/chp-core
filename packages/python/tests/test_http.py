@@ -137,6 +137,17 @@ class HTTPHostTests(unittest.TestCase):
         assert 'capability_id="math.add"' in body
         assert 'outcome="success"' in body
 
+    def test_metrics_exposes_integrity_counters(self) -> None:
+        # A verification run shows up as a scrapeable counter, not only evidence.
+        self.post("/invoke", {"capability_id": "math.add", "payload": {"a": 1, "b": 2},
+                              "correlation_id": "corr-integrity"})
+        self.get("/verify/corr-integrity")
+        with urlopen(f"{self.base_url}/metrics", timeout=5) as response:
+            body = response.read().decode("utf-8")
+        assert "chp_verify_requests_total" in body
+        assert 'chp_verify_requests_total{valid="true"}' in body
+        assert "chp_chain_breaks_total" in body
+
     def get(self, path: str):
         with urlopen(f"{self.base_url}{path}", timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -426,3 +437,63 @@ def test_well_known_identity_is_public_while_host_is_gated(monkeypatch) -> None:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _serve_for_auth(monkeypatch, keys_env: str):
+    monkeypatch.setenv("CHP_HOST_API_KEYS", keys_env)
+    monkeypatch.delenv("CHP_HOST_API_KEY", raising=False)
+    host = LocalCapabilityHost("auth-e-host", store=SQLiteEvidenceStore(":memory:"))
+
+    async def noop(_ctx, _p):
+        return {"ok": True}
+
+    host.register(CapabilityDescriptor(id="in.scope", version="1.0.0", description=""), noop)
+    host.register(CapabilityDescriptor(id="out.of.scope", version="1.0.0", description=""), noop)
+    server = create_http_server(host, port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return host, server
+
+
+def _invoke_http(port: int, key: str, cap: str) -> dict:
+    body = json.dumps({"capability_id": cap, "payload": {},
+                       "correlation": {"correlation_id": "e-corr"}}).encode()
+    req = Request(f"http://127.0.0.1:{port}/invoke", data=body,
+                  headers={"X-CHP-Key": key, "Content-Type": "application/json"},
+                  method="POST")
+    return json.loads(urlopen(req, timeout=5).read())
+
+
+def test_caller_key_rotation_overlap(monkeypatch) -> None:
+    # binding §2: same name, several keys — rotation is add-new, drain, remove-old.
+    host, server = _serve_for_auth(monkeypatch, "agent-a:new-key,agent-a:old-key")
+    try:
+        for key in ("new-key", "old-key"):
+            r = _invoke_http(server.server_port, key, "in.scope")
+            assert r["outcome"] == "success", r
+        subjects = {json.dumps(e.get("subject")) for e in host.store.all() if e.get("subject")}
+        assert subjects == {'{"id": "agent-a", "type": "api_key", "verified": true}'}
+        # removed key: reconfigure without old-key → 401
+        monkeypatch.setenv("CHP_HOST_API_KEYS", "agent-a:new-key")
+        try:
+            _invoke_http(server.server_port, "old-key", "in.scope")
+            assert False, "expected 401"
+        except Exception as exc:
+            assert getattr(exc, "code", None) == 401
+    finally:
+        server.shutdown(); server.server_close()
+
+
+def test_capability_scoped_key_denies_out_of_scope_with_evidence(monkeypatch) -> None:
+    # binding §2: out-of-scope = PROCESSED policy_blocked denial (200 + evidence).
+    host, server = _serve_for_auth(monkeypatch, "scoped:sk:in.*")
+    try:
+        ok = _invoke_http(server.server_port, "sk", "in.scope")
+        assert ok["outcome"] == "success", ok
+        denied = _invoke_http(server.server_port, "sk", "out.of.scope")
+        assert denied["outcome"] == "denied", denied
+        assert denied["denial"]["code"] == "policy_blocked"
+        events = host.store.by_correlation("e-corr")
+        denials = [e for e in events if e["event_type"] == "execution_denied"]
+        assert denials and denials[-1]["capability_id"] == "out.of.scope"
+    finally:
+        server.shutdown(); server.server_close()

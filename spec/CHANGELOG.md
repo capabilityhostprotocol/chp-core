@@ -5,6 +5,55 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [Unreleased] — additive over 0.2
+
+### Added
+- **Deferred execution rides the submitting correlation** (chp-v0.2.md §7,
+  pipeline doc §1): a background job / queued task MUST propagate the
+  submitting invocation's correlation with a causal edge (`causation_id` =
+  submitting `invocation_id`) — the gates ran at submit, so the execution's
+  evidence must remain reachable from it. *Gate: jobs-adapter continuity test.*
+- **Federated replay is never silently partial** (chp-http-binding.md §4b):
+  a gateway `/replay` that could not reach every member MUST set
+  `partial: true` + `missing_hosts` on the `ReplayResult` (schema gains the
+  two optional fields — additive; single-host results unchanged).
+- `/metrics` MAY expose integrity counters (`chp_verify_requests_total{valid}`,
+  `chp_chain_breaks_total`) — verification failures become alertable.
+- **Key custody** (chp-v0.2.md §3): a deployment SHOULD provision a distinct
+  signing key per `host_id` (shared custody collapses per-host attribution to
+  the key holder). Reference impl: per-host key-dir resolution, legacy fallback.
+- **Adapter namespace reserved** (governance §5, reserved-names): `chp.adapters.*`
+  with the `chp.adapters.<adapter>.<capability>` structure, the `chp.adapters`
+  entry-point group, and the `chp-adapter-<name>` package convention.
+- **Declared emits is a contract** (governance §4.4): a capability MUST NOT
+  emit an event type that is neither declared, lifecycle, nor reverse-DNS
+  namespaced. *Gate: adapter-conformance `undeclared_emit` static check (found
+  and fixed real drift in two reference adapters on first sweep).*
+- **Capability version semantics** (chp-v0.1.md §3, clarification): semver;
+  same-major = compatible.
+- Adapter-install provenance floor: the reference install path fingerprints
+  the installed distribution (`record_sha256`) and appends
+  `host_adapter_installed` evidence under the SUBMITTING correlation (per the
+  deferred-execution rule). Signed provenance: [proposals/0001](proposals/0001-adapter-provenance.md).
+- **Aggregator signatures** (chp-v0.2.md §8, the `aggregated` layer): the
+  assembling gateway MAY sign the canonical task-bundle header — re-assembly
+  breaks the signature even with a recomputed `task_root_hash`. Omit-when-empty:
+  unsigned task bundles byte-identical. *Vector:
+  `test-vectors/task-bundle-aggregated.json` (both implementations +
+  `verify.mjs`); guard `aggregated_task_bundle_vector_verifies`.*
+- **Participation manifests** (chp-v0.2.md §8): reserved
+  `task_participants_declared` event (`FEDERATION_EVIDENCE_TYPES`) — a declared
+  member set makes leaf omission detectable; the completeness limit now covers
+  only *undeclared* leaves. Verification gains the `participation` check
+  (absent manifest → no check, visibly).
+- **Caller-key rotation** (binding §2): a caller name MAY carry several keys
+  simultaneously — rotation is add-new → drain → remove-old, no auth gap.
+- **Capability-scoped caller keys** (binding §2): `name:key:scope1|scope2`
+  (exact id or trailing-`*` prefix); an out-of-scope invocation is a PROCESSED
+  `policy_blocked` denial — HTTP 200 with evidence, never a transport 403.
+  *Wire conformance grows 16→17 (`capability-scoped caller key`); both
+  reference implementations pass 17/17.*
+
 ## [0.2] — additive over 0.1 — **released 2026-07-06**
 
 ### Added

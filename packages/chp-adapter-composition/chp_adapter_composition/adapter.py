@@ -276,7 +276,7 @@ class CompositionAdapter(BaseAdapter):
             "properties": {},
             "additionalProperties": False,
         },
-        emits=_EMITS,
+        emits=["workflows_listed"],  # read-only listing — not the shared workflow-lifecycle _EMITS
         tags=["workflow"],
     )
     async def list_workflows(self, ctx: Any, payload: dict) -> dict:
@@ -305,7 +305,7 @@ class CompositionAdapter(BaseAdapter):
             "required": ["name"],
             "additionalProperties": False,
         },
-        emits=_EMITS,
+        emits=["workflow_retrieved"],  # read-only fetch — not the shared workflow-lifecycle _EMITS
         tags=["workflow"],
     )
     async def get_workflow(self, ctx: Any, payload: dict) -> dict:

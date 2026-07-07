@@ -122,6 +122,62 @@ class _CapabilityVisitor(ast.NodeVisitor):
         pass
 
 
+_LIFECYCLE_EVENTS = {
+    "execution_started", "execution_completed", "execution_failed",
+    "execution_denied", "execution_skipped",
+}
+
+
+def _module_string_lists(tree: ast.Module) -> dict[str, set[str]]:
+    """Module-level `NAME = ["a", "b"]` string-list assignments (the `_EMITS`
+    sharing pattern) so a declared `emits=_EMITS` resolves statically."""
+    out: dict[str, set[str]] = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, (ast.List, ast.Tuple, ast.Set))
+                and all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                        for e in node.value.elts)):
+            out[node.targets[0].id] = {e.value for e in node.value.elts}
+    return out
+
+
+def _declared_emits(node: ast.AST, module_lists: dict[str, set[str]]) -> set[str] | None:
+    """The literal `emits=` set declared on a @capability decorator, or None when
+    absent/unresolvable (no declaration → no contract to enforce)."""
+    for d in getattr(node, "decorator_list", []):
+        if not (isinstance(d, ast.Call) and isinstance(d.func, ast.Name)
+                and d.func.id == "capability"):
+            continue
+        for kw in d.keywords:
+            if kw.arg != "emits":
+                continue
+            v = kw.value
+            if isinstance(v, (ast.List, ast.Tuple, ast.Set)) and all(
+                    isinstance(e, ast.Constant) and isinstance(e.value, str)
+                    for e in v.elts):
+                return {e.value for e in v.elts}
+            if isinstance(v, ast.Name) and v.id in module_lists:
+                return module_lists[v.id]
+            return None  # computed expression — can't resolve statically
+    return None
+
+
+def _emitted_literals(node: ast.AST) -> list[tuple[str, int]]:
+    """Every `ctx.emit("literal", ...)` first-arg string inside the body."""
+    found: list[tuple[str, int]] = []
+    for child in ast.walk(node):
+        if (isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "emit"
+                and isinstance(child.func.value, ast.Name)
+                and child.func.value.id == "ctx"
+                and child.args
+                and isinstance(child.args[0], ast.Constant)
+                and isinstance(child.args[0].value, str)):
+            found.append((child.args[0].value, child.lineno))
+    return found
+
+
 def check_source_file(path: str | Path) -> list[Violation]:
     """Parse a Python source file and return capability violations."""
     source = Path(path).read_text()
@@ -131,6 +187,7 @@ def check_source_file(path: str | Path) -> list[Violation]:
         return [Violation(rule="parse_error", severity="error", message=str(exc))]
 
     violations: list[Violation] = []
+    module_lists = _module_string_lists(tree)
 
     # File-level: check all imports regardless of context
     for node in ast.walk(tree):
@@ -179,6 +236,23 @@ def check_source_file(path: str | Path) -> list[Violation]:
                 message=f"Capability `{node.name}` never calls ctx.emit() — evidence chain incomplete",
                 location=f"line {node.lineno}",
             ))
+
+        # Declared emits is a CONTRACT (governance §4.4): a statically visible
+        # ctx.emit of a bare event type outside the declared set is a violation.
+        declared = _declared_emits(node, module_lists)
+        if declared is not None:
+            for event_type, lineno in _emitted_literals(node):
+                if (event_type not in declared
+                        and event_type not in _LIFECYCLE_EVENTS
+                        and "." not in event_type):
+                    violations.append(Violation(
+                        rule="undeclared_emit",
+                        severity="error",
+                        message=(f"Capability `{node.name}` emits `{event_type}` which is not "
+                                 "in its declared emits set (governance §4.4 — declared emits "
+                                 "is a contract; declare it or reverse-DNS namespace it)"),
+                        location=f"line {lineno}",
+                    ))
 
         violations.extend(visitor.violations)
 

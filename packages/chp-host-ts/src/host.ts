@@ -161,6 +161,21 @@ export class LocalCapabilityHost {
     return this.result(env, { outcome: 'denied', success: false, denial, evidence_ids: [e.event_id] });
   }
 
+  /** A PROCESSED denial from outside the pipeline (e.g. a caller-key scope
+   * decision at the transport layer — binding §2): normalizes the envelope,
+   * emits execution_denied evidence, returns the denied result. */
+  denyEnvelope(input: InvocationEnvelope, denial: DenialReason): InvocationResult {
+    const env: InvocationEnvelope = {
+      mode: 'sync',
+      payload: {},
+      subject: { id: 'local', type: 'user' },
+      ...input,
+      invocation_id: input.invocation_id ?? newId('inv'),
+      correlation: (input.correlation as Correlation) ?? { correlation_id: newId('corr') },
+    };
+    return this.deny(env, denial);
+  }
+
   private skip(env: InvocationEnvelope, code: string, message: string): InvocationResult {
     const e = this.emit('execution_skipped', env, { code, message }, 'skipped');
     return this.result(env, { outcome: 'skipped', success: false, evidence_ids: [e.event_id] });

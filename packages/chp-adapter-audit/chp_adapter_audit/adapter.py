@@ -53,6 +53,7 @@ class AuditAdapter(BaseAdapter):
     def on_register(self, host: Any) -> None:
         if self._store is None:
             self._store = host.store
+        self._host = host  # for emission_report's declared-emits catalog (host.discover)
 
     # ------------------------------------------------------------------
     # query_invocations
@@ -183,6 +184,7 @@ class AuditAdapter(BaseAdapter):
 
         return {
             "invocation_id": invocation_id,
+            "correlation_id": (events[0].get("correlation") or {}).get("correlation_id"),
             "events": stripped,
             "event_count": len(stripped),
         }
@@ -327,15 +329,38 @@ class AuditAdapter(BaseAdapter):
         current_inv_id = ctx.envelope.invocation_id
         events = [e for e in events if e.get("invocation_id") != current_inv_id]
 
-        # Count only terminal lifecycle events (execution_started = one per invocation)
-        started = [e for e in events if e.get("event_type") == "execution_started"]
-        total = len(started)
+        # Count DISTINCT invocations (robust to a capability that double-emits
+        # execution_started alongside the host — keying by invocation_id
+        # collapses the duplicate).
+        started_by_inv: dict[str, dict] = {}
+        for e in events:
+            if e.get("event_type") == "execution_started":
+                inv = e.get("invocation_id")
+                if inv is not None:
+                    started_by_inv.setdefault(inv, e)
+        total = len(started_by_inv)
+
+        # Outcome lives on the TERMINAL event, not on execution_started (which is
+        # always outcome=None). Map invocation_id → terminal outcome, preferring
+        # a real outcome over unknown when duplicates exist. An invocation with
+        # no terminal event is "incomplete" (not "unknown").
+        _TERMINAL = {"execution_completed", "execution_failed",
+                     "execution_denied", "execution_skipped"}
+        terminal_outcome: dict[str, str] = {}
+        for e in events:
+            if e.get("event_type") in _TERMINAL:
+                inv = e.get("invocation_id")
+                if inv is None:
+                    continue
+                out = e.get("outcome") or "unknown"
+                # Don't let a duplicate outcome-less terminal clobber a real one.
+                if inv not in terminal_outcome or terminal_outcome[inv] == "unknown":
+                    terminal_outcome[inv] = out
 
         by_outcome: dict[str, int] = defaultdict(int)
         by_cap: dict[str, int] = defaultdict(int)
-        for e in started:
-            out = e.get("outcome") or "unknown"
-            by_outcome[out] += 1
+        for inv, e in started_by_inv.items():
+            by_outcome[terminal_outcome.get(inv, "incomplete")] += 1
             cap = e.get("capability_id") or "unknown"
             by_cap[cap] += 1
 
@@ -358,6 +383,144 @@ class AuditAdapter(BaseAdapter):
             "error_rate": round(error_rate, 4),
         }
 
+    # ------------------------------------------------------------------
+    # emission_report — review evidence-emission coverage per capability
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.audit.emission_report",
+        version="1.0.0",
+        description=(
+            "Review the protocol's evidence emission: join each capability's DECLARED emits "
+            "(from the host catalog) against the event types actually OBSERVED in the audit "
+            "log. Flags `no_declared_emits` (capability claims no evidence — a gap), "
+            "`declared_unobserved` (invoked but emitted none of its declared events), and "
+            "`undeclared_observed` (emitted an event type it never declared — drift). Builds "
+            "confidence in the chain and surfaces protocol issues. Metadata only."
+        ),
+        category="governance",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": "ISO-8601 lower bound for observed events."},
+                "until": {"type": "string", "description": "ISO-8601 upper bound."},
+                "flagged_only": {"type": "boolean", "default": True,
+                                 "description": "Return only capabilities with a flag (vs the full catalog)."},
+            },
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["audit", "governance", "evidence-quality"],
+    )
+    async def emission_report(self, ctx: Any, payload: dict) -> dict:
+        if self._store is None:
+            ctx.emit("audit_error", {"reason": "store_not_bound"}, redacted=False)
+            raise RuntimeError("AuditAdapter: store not bound")
+        ctx.emit("audit_query", {"op": "emission_report"}, redacted=False)
+
+        # Framework lifecycle events are auto-emitted (not adapter-declared) — exclude them
+        # so "observed adapter evidence" is compared fairly against declared emits.
+        lifecycle = {"execution_started", "execution_completed", "execution_failed",
+                     "execution_denied", "capability_invoked"}
+
+        # Declared emits per capability, from the host catalog.
+        declared: dict[str, set] = {}
+        try:
+            for c in (self._host.discover() or {}).get("capabilities", []):
+                cid = c.get("id")
+                if cid:
+                    declared[cid] = set(c.get("emits") or [])
+        except Exception as exc:  # noqa: BLE001
+            ctx.emit("audit_error", {"reason": f"catalog_unavailable:{str(exc)[:80]}"}, redacted=False)
+
+        # Observed event types per capability, from the audit store.
+        observed: dict[str, set] = defaultdict(set)
+        for e in self._store.query(since=payload.get("since"), until=payload.get("until")):
+            cid, et = e.get("capability_id"), e.get("event_type")
+            if cid and et and et not in lifecycle:
+                observed[cid].add(et)
+
+        # Framework sentinels (e.g. chp.core.conversation.turn — a conversation-turn marker, not a
+        # declarable adapter @capability) are not audited for emit-declaration drift.
+        for d in (declared, observed):
+            for k in [k for k in d if k.startswith("chp.core.")]:
+                d.pop(k, None)
+
+        rows = []
+        for cid in sorted(set(declared) | set(observed)):
+            dec, obs = declared.get(cid, set()), observed.get(cid, set())
+            invoked = cid in observed
+            flags = []
+            if not dec:
+                flags.append("no_declared_emits")
+            if invoked and dec and not (dec & obs):
+                flags.append("declared_unobserved")
+            if obs - dec:
+                flags.append("undeclared_observed")
+            if flags or not payload.get("flagged_only", True):
+                rows.append({"capability_id": cid, "declared": sorted(dec), "observed": sorted(obs),
+                             "invoked": invoked, "flags": flags})
+
+        total = len(set(declared) | set(observed))
+        invoked_caps = [c for c in declared if c in observed] + [c for c in observed if c not in declared]
+        clean_invoked = sum(1 for c in set(invoked_caps) if (declared.get(c) and (declared[c] & observed.get(c, set()))))
+        n_invoked = len(set(invoked_caps))
+        summary = {
+            "total_capabilities": total,
+            "no_declared_emits": sum(1 for c in declared if not declared[c]),
+            "invoked_capabilities": n_invoked,
+            "emission_score": round(clean_invoked / n_invoked, 4) if n_invoked else None,
+            "flagged": len(rows) if payload.get("flagged_only", True) else sum(1 for r in rows if r["flags"]),
+        }
+        ctx.emit("audit_result", {"op": "emission_report", **summary}, redacted=False)
+        return {"summary": summary, "capabilities": rows}
+
+    @capability(
+        id="chp.adapters.audit.agent_runs",
+        version="1.0.0",
+        description="List recent agent_run trace spans (steward/dreamer runs) from the evidence chain: "
+                    "agent, duration, outcome, and for model agents the model, call count, tokens, and "
+                    "tools used. CHP's native, langfuse-shaped agent observability. Read-only; the spans "
+                    "are redacted by construction (counts/ids/tool-names, never prompt text).",
+        category="governance",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string", "description": "filter by agent, e.g. 'steward:grow'"},
+                "limit": {"type": "integer", "description": "max spans (most recent first)"},
+                "since": {"type": "string"}, "until": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+    )
+    async def agent_runs(self, ctx: Any, payload: dict) -> dict:
+        if self._store is None:
+            ctx.emit("audit_error", {"reason": "store_not_bound"}, redacted=False)
+            return {"error": "evidence store not bound", "agent_runs": []}
+        limit = min(payload.get("limit") or 50, self._config.max_results)
+        want = payload.get("agent")
+        spans = []
+        for e in self._store.query(capability_id="chp.adapters.stewards.record_run",
+                                   since=payload.get("since"), until=payload.get("until")):
+            if e.get("event_type") != "agent_run":
+                continue
+            p = e.get("payload") or {}
+            if want and p.get("agent") != want:
+                continue
+            span = {k: p.get(k) for k in ("agent", "trace_id", "duration_ms", "outcome", "model",
+                    "model_calls", "prompt_tokens", "completion_tokens", "findings", "filed")}
+            span["tools_called"] = p.get("tools_called") or []
+            span["at"] = e.get("timestamp")
+            spans.append(span)
+        spans = spans[-limit:][::-1]  # most recent first
+        total_tokens = sum((s.get("prompt_tokens") or 0) + (s.get("completion_tokens") or 0) for s in spans)
+        ctx.emit("audit_result", {"op": "agent_runs", "count": len(spans), "total_tokens": total_tokens},
+                 redacted=False)
+        return {"agent_runs": spans, "count": len(spans), "total_tokens": total_tokens}
+
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -376,6 +539,7 @@ def _group_by_invocation(events: list[dict], limit: int) -> list[dict]:
             seen[inv_id] = {
                 "invocation_id": inv_id,
                 "capability_id": e.get("capability_id"),
+                "correlation_id": (e.get("correlation") or {}).get("correlation_id"),
                 "started_at": e.get("timestamp"),
                 "outcome": None,
                 "event_count": 0,

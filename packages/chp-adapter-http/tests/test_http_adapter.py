@@ -170,6 +170,25 @@ class TestAllowlist:
         })
         assert r.outcome == "success"
 
+    def test_metadata_endpoint_blocked_even_without_allowlist(self):
+        # SSRF crown jewel — denied by default, no allowlist required.
+        host = _make_host(HttpConfig(allowed_origins=None, transport=_make_transport()))
+        r = host.invoke("chp.adapters.http.request", {
+            "method": "GET", "url": "http://169.254.169.254/latest/meta-data/iam/",
+        })
+        assert r.outcome == "failure"
+
+    def test_prefix_confusion_origin_not_admitted(self):
+        # 'https://api.allowed.com' must NOT admit a look-alike sibling host.
+        host = _make_host(HttpConfig(
+            allowed_origins=["https://api.allowed.com"],
+            transport=_make_transport(),
+        ))
+        r = host.invoke("chp.adapters.http.request", {
+            "method": "GET", "url": "https://api.allowed.com.attacker.net/x",
+        })
+        assert r.outcome == "failure"
+
 
 # --------------------------------------------------------------------------
 # 4. Schema validation

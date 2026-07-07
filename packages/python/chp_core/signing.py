@@ -30,6 +30,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,29 @@ SIGNATURE_ALGORITHM = "ed25519"
 DEFAULT_KEY_DIR = Path.home() / ".chp" / "keys"
 _PRIVATE_NAME = "host_ed25519"
 _PUBLIC_NAME = "host_ed25519.pub"
+_SAFE_HOST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def resolve_key_dir(host_id: str | None = None) -> Path:
+    """The signing-key directory for a host.
+
+    Precedence: ``$CHP_KEY_DIR`` → per-host ``~/.chp/keys/<host_id>/`` when it
+    holds a key → legacy shared ``~/.chp/keys``. Per-host custody is opt-in by
+    provisioning the per-host dir (``chp host keygen --key-dir``); existing
+    single-key machines keep working untouched. A deployment SHOULD provision a
+    distinct key per host_id (chp-v0.2.md §3) — the shared default makes
+    "which host signed this" collapse to "which machine".
+
+    host_ids that are not safe path components never map to a per-host dir.
+    """
+    env = os.environ.get("CHP_KEY_DIR")
+    if env:
+        return Path(env)
+    if host_id and _SAFE_HOST_ID.match(host_id):
+        per_host = DEFAULT_KEY_DIR / host_id
+        if (per_host / _PUBLIC_NAME).exists():
+            return per_host
+    return DEFAULT_KEY_DIR
 
 
 class SigningUnavailable(RuntimeError):
@@ -725,6 +750,46 @@ def _member_sort_key(bundle: dict) -> tuple[str, str]:
     return (str(bundle.get("host_id") or ""), str(bundle.get("root_hash") or ""))
 
 
+_TASK_HEADER_FIELDS = ("kind", "correlation_id", "protocol_version", "created_at",
+                       "canonicalization", "task_root_hash")
+
+
+def task_bundle_header(task: dict) -> dict:
+    """The aggregator-signed header. `task_root_hash` commits to every member
+    root, and `member_order` pins arrangement, so signing the header signs the
+    assembly."""
+    return {k: task.get(k) for k in _TASK_HEADER_FIELDS}
+
+
+def sign_task_bundle(task: dict, host_key: HostKey, *, aggregator_host_id: str,
+                     valid_until: str | None = None,
+                     anchors: list[dict] | None = None) -> dict:
+    """Attach the AGGREGATOR signature (chp-v0.2.md §8, `aggregated`): the
+    assembling gateway signs the canonical task-bundle header with its own key
+    and attaches its own attestation. Member signatures keep proving each
+    part's origin; this proves WHO assembled the set and that the set hasn't
+    been re-assembled since. Omit-when-empty: an unsigned task bundle stays
+    byte-identical to the pre-aggregator format."""
+    if not host_key.can_sign:
+        raise SigningUnavailable("aggregator key has no private component; cannot sign")
+    signed = dict(task)
+    signed["aggregator"] = {
+        "host_id": aggregator_host_id,
+        "public_key": host_key.public_key_b64,
+        "host_identity": build_attestation(
+            aggregator_host_id, host_key,
+            valid_from=str(task.get("created_at", "")), valid_until=valid_until,
+            anchors=anchors,
+        ),
+        "signature": {
+            "algorithm": SIGNATURE_ALGORITHM,
+            "key_id": host_key.key_id,
+            "signature": _sign(host_key._private, _canon(task_bundle_header(task))),
+        },
+    }
+    return signed
+
+
 def build_task_bundle(correlation_id: str, bundles: list[dict], *,
                       created_at: str) -> dict:
     """Aggregate one correlation's per-host SIGNED bundles into a task bundle.
@@ -732,8 +797,8 @@ def build_task_bundle(correlation_id: str, bundles: list[dict], *,
     Members are byte-untouched and sorted canonically by (host_id, root_hash)
     so assembly order is irrelevant — two gateways assembling the same members
     produce identical bytes. `assurance` = the MINIMUM member tier (degradation
-    surfaced, never hidden). No aggregator signature in v1 — member signatures
-    prove each part's origin; the format admits one later (omit-when-empty)."""
+    surfaced, never hidden). Aggregator signature is a separate, optional layer
+    (`sign_task_bundle`) — omit-when-empty keeps unsigned bundles byte-stable."""
     members = sorted(bundles, key=_member_sort_key)
     tiers = {b.get("assurance", "none") for b in members}
     assurance = ("none" if "none" in tiers
@@ -761,6 +826,8 @@ class TaskBundleVerification:
     # Per member: who contributed what, under which trust root.
     hosts: list[dict] = field(default_factory=list)
     reason: str | None = None
+    # Who ASSEMBLED the set (None = unsigned assembly — surfaced, not hidden).
+    aggregator: dict | None = None
 
 
 def verify_task_bundle(task: dict, *, resolve: bool = False) -> TaskBundleVerification:
@@ -837,12 +904,56 @@ def verify_task_bundle(task: dict, *, resolve: bool = False) -> TaskBundleVerifi
             break
     checks["causal_acyclic"] = acyclic
 
+    # Participation manifest (§8): when an orchestrator declared the member set
+    # (task_participants_declared — riding ITS signed chain), every declared
+    # host must have contributed a bundle. Absent manifest → no check (the
+    # completeness limit stands, visibly). Declarations union across events.
+    declared_participants: set[str] = set()
+    for e in all_events:
+        if e.get("event_type") == "task_participants_declared":
+            declared_participants.update(
+                str(p) for p in (e.get("payload") or {}).get("participants") or [])
+    missing_participants: set[str] = set()
+    if declared_participants:
+        member_ids = {str(b.get("host_id") or "") for b in members}
+        missing_participants = declared_participants - member_ids
+        checks["participation"] = not missing_participants
+
+    # Aggregator signature (§8 `aggregated` layer): verified whenever present;
+    # absent = unsigned assembly, surfaced via aggregator=None (never a failure).
+    aggregator_info: dict | None = None
+    agg = task.get("aggregator")
+    if agg is not None:
+        sig = agg.get("signature") or {}
+        pub = str(agg.get("public_key") or "")
+        agg_ok = (sig.get("algorithm") == SIGNATURE_ALGORITHM
+                  and bool(pub)
+                  and _verify_sig(pub, _canon(task_bundle_header(task)),
+                                  str(sig.get("signature") or "")))
+        att = agg.get("host_identity")
+        if agg_ok and att:
+            agg_ok = verify_attestation(
+                att, public_key=pub, expected_host_id=agg.get("host_id"),
+                at_time=task.get("created_at"))
+        elif not att:
+            agg_ok = False  # a signed assembly must say who assembled it
+        checks["aggregator"] = agg_ok
+        aggregator_info = {
+            "host_id": agg.get("host_id"),
+            "key_id": sig.get("key_id"),
+            "anchored_domain": _domain_anchor(att) if att else None,
+            "anchored_did": ((_did_anchor(att) or {}).get("did") if att else None),
+            "valid": agg_ok,
+        }
+
     valid = all(checks.values())
     reason = None if valid else "task-bundle checks failed: " + ", ".join(
         k for k, v in checks.items() if not v)
     if not checks["causal_closure"] and dangling:
         reason = (reason or "") + f" (dangling causation_ids: {sorted(dangling)[:3]})"
+    if missing_participants:
+        reason = (reason or "") + f" (declared but missing: {sorted(missing_participants)[:3]})"
     return TaskBundleVerification(
         valid=valid, assurance=str(task.get("assurance", "none")), checks=checks,
         correlation_id=correlation_id, task_root_hash=task.get("task_root_hash"),
-        hosts=hosts, reason=reason)
+        hosts=hosts, reason=reason, aggregator=aggregator_info)

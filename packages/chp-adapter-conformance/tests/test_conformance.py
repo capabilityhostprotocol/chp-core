@@ -351,3 +351,19 @@ class TestConformanceCapabilities:
                 session.write_text(backup)
             elif session.exists():
                 session.unlink()
+
+
+def test_session_file_keying():
+    """repo_path-keyed sessions: global default, deterministic + distinct keyed files."""
+    from chp_adapter_conformance import adapter as A
+    assert A._session_file(None) == A._SESSION_FILE
+    f1, f2, f3 = A._session_file("/a/repo"), A._session_file("/a/repo"), A._session_file("/b/repo")
+    assert f1 == f2 and f1 != f3
+    assert f1.parent == A._SESSION_DIR
+
+
+def test_resolve_existing_falls_back_to_global():
+    """A keyed path with no keyed file resolves to the global session file."""
+    from chp_adapter_conformance import adapter as A
+    # An unlikely path that has no keyed session file → fall back to global.
+    assert A._resolve_existing("/no/such/worktree/xyzzy") == A._SESSION_FILE

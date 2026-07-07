@@ -3,7 +3,12 @@
   "$id": "https://chp.dev/schemas/v0.1/replay-result.schema.json",
   "title": "ReplayResult",
   "type": "object",
-  "required": ["correlation_id", "events", "event_count", "replayed_at"],
+  "required": [
+    "correlation_id",
+    "events",
+    "event_count",
+    "replayed_at"
+  ],
   "additionalProperties": false,
   "properties": {
     "correlation_id": {
@@ -28,6 +33,19 @@
     "replayed_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "partial": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when a federated replay could not reach every member host - the timeline is incomplete and missing_hosts names the gaps. Never silently partial."
+    },
+    "missing_hosts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Member hosts that could not be reached during a federated replay."
     }
   }
 }

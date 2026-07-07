@@ -27,6 +27,8 @@ export {
   signBundle,
   buildTaskBundle,
   computeTaskRootHash,
+  taskBundleHeader,
+  signTaskBundle,
 } from './signing.js';
 export {
   verifyBundle,

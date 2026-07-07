@@ -21,12 +21,16 @@ Evidence policy:
 from __future__ import annotations
 
 import contextlib
+import glob
 import importlib.util
+import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +45,12 @@ _EMITS = [
     "mlx_chat_failed",
     "mlx_models_listed",
     "mlx_status_reported",
+    "mlx_finetune_started",
+    "mlx_eval_started",
+    "mlx_eval_completed",
+    "mlx_eval_failed",
+    "mlx_server_started",
+    "mlx_server_stopped",
 ]
 
 # mlx_lm.server defaults to :8080, which collides with llama.cpp (probed by the
@@ -121,6 +131,69 @@ def _lora_cmd(model: str, data: str, adapter_path: str, iters: int,
     if num_layers:
         cmd += ["--num-layers", str(num_layers)]
     return cmd
+
+
+def _jsonl(content: Any) -> str:
+    """Coerce inline dataset content to JSONL text: pass a JSONL string through, or
+    serialize a list of records (dicts)."""
+    if isinstance(content, str):
+        return content if content.endswith("\n") else content + "\n"
+    return "".join(json.dumps(r) + "\n" for r in (content or []))
+
+
+def _materialize_dataset(name: str, train: Any, valid: Any) -> str:
+    """Write inline train/valid content into a fresh data dir *on this node* and
+    return its path. The finetune node has no process.run and its filesystem
+    adapter won't mkdir — but this adapter is Python on that node, so it creates
+    its own dataset dir. Solves the cross-node data problem (data + compute must be
+    co-located; capacity routing can split them across hosts)."""
+    base = os.path.join(_service_safe_env()["HOME"], ".chp", "flywheel-data", name)
+    os.makedirs(base, exist_ok=True)
+    for fname, content in (("train.jsonl", train), ("valid.jsonl", valid)):
+        if content is None:
+            continue
+        with open(os.path.join(base, fname), "w") as f:
+            f.write(_jsonl(content))
+    return base
+
+
+def _stop_all_mlx_servers() -> list[dict]:
+    """SIGTERM every tracked mlx_lm server and clear its pidfile — free the GPU
+    before training. A served model and LoRA training cannot share a single-GPU
+    Apple Silicon node (Metal OOMs after the first iter). Returns what was stopped
+    so the caller can re-serve (e.g. with the freshly tuned adapter)."""
+    stopped: list[dict] = []
+    for pidfile in glob.glob(os.path.join(_run_dir(), "mlx-server-*.pid")):
+        pid = _read_pid(pidfile)
+        port = os.path.basename(pidfile)[len("mlx-server-"):-len(".pid")]
+        if pid and _alive(pid):
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
+            stopped.append({"pid": pid, "port": port})
+        with contextlib.suppress(OSError):
+            os.remove(pidfile)
+    return stopped
+
+
+def _tokens(s: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", (s or "").lower())
+
+
+def _score_one(completion: str, reference: str, metric: str) -> float:
+    """Deterministic score of a completion against a reference in [0,1]. `contains`
+    = reference substring present; `f1` = token-overlap F1. Text is scored on-node and
+    never recorded — only the resulting score lands in evidence."""
+    if metric == "contains":
+        ref = (reference or "").strip().lower()
+        return 1.0 if ref and ref in (completion or "").lower() else 0.0
+    c, r = _tokens(completion), _tokens(reference)
+    if not c or not r:
+        return 0.0
+    overlap = sum((Counter(c) & Counter(r)).values())
+    if not overlap:
+        return 0.0
+    prec, rec = overlap / len(c), overlap / len(r)
+    return round(2 * prec * rec / (prec + rec), 4)
 
 
 def _pkg_version(name: str) -> str | None:
@@ -563,27 +636,33 @@ class MLXAdapter(BaseAdapter):
         version="1.0.0",
         description=(
             "LoRA fine-tune a model on-fleet via mlx_lm.lora, detached (logs to "
-            "~/.chp/logs/mlx-finetune-<name>.log). *data* is a directory with "
-            "train.jsonl / valid.jsonl (chat or completions format). Produces a LoRA "
-            "at adapter_path that mlx.start_server can serve via --adapter-path. The "
-            "training step of the evidence→tune→serve flywheel."
+            "~/.chp/logs/mlx-finetune-<name>.log). Provide the dataset inline via "
+            "*train*/*valid* (JSONL string or list of records) — the node writes its "
+            "own data dir, so data and compute stay co-located — or point *data* at a "
+            "pre-staged dir with train.jsonl / valid.jsonl. By default frees the GPU "
+            "first (stops any served model; a served model + training OOM a single-GPU "
+            "node). Produces a LoRA at adapter_path that mlx.start_server serves via "
+            "--adapter-path. The training step of the evidence→tune→serve flywheel."
         ),
         category="ai",
         provider="mlx",
         risk="high",
-        side_effects=["process_spawn", "model_training"],
+        side_effects=["process_spawn", "model_training", "process_kill"],
         emits=_EMITS,
         input_schema={
             "type": "object",
             "properties": {
                 "model": {"type": "string", "description": "Base model to fine-tune (defaults to MLX_MODEL)."},
-                "data": {"type": "string", "description": "Directory with train.jsonl / valid.jsonl."},
+                "train": {"type": ["string", "array"], "description": "Inline training data: JSONL string or list of records (mlx_lm chat/completions format). Materialized on the node."},
+                "valid": {"type": ["string", "array"], "description": "Inline validation data (same shape as train)."},
+                "data": {"type": "string", "description": "Alternative to train/valid: a pre-staged dir with train.jsonl / valid.jsonl."},
                 "adapter_path": {"type": "string", "description": "Output directory for the LoRA adapter."},
                 "iters": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 300},
                 "batch_size": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4},
                 "num_layers": {"type": "integer", "minimum": 1, "description": "LoRA layers (default: mlx_lm default)."},
+                "free_gpu": {"type": "boolean", "default": True, "description": "Stop any served mlx model before training to avoid GPU OOM."},
             },
-            "required": ["data", "adapter_path"],
+            "required": ["adapter_path"],
             "additionalProperties": False,
         },
     )
@@ -591,12 +670,24 @@ class MLXAdapter(BaseAdapter):
         model = payload.get("model") or self._config.resolved_default_model()
         if not model:
             raise ValueError("No model specified and no MLX_MODEL configured.")
-        data = str(payload["data"])
         adapter_path = str(payload["adapter_path"])
         iters = int(payload.get("iters") or 300)
         batch_size = int(payload.get("batch_size") or 4)
         num_layers = payload.get("num_layers")
         name = os.path.basename(adapter_path.rstrip("/")) or "lora"
+
+        # Dataset: inline train/valid (materialized on this node) or a pre-staged dir.
+        train = payload.get("train")
+        valid = payload.get("valid")
+        if train is not None or valid is not None:
+            data = _materialize_dataset(name, train, valid)
+        elif payload.get("data"):
+            data = str(payload["data"])
+        else:
+            raise ValueError("finetune needs inline `train`/`valid` content or a `data` directory.")
+
+        # Free the GPU: a served model and LoRA training cannot share a single-GPU node.
+        freed = _stop_all_mlx_servers() if payload.get("free_gpu", True) else []
 
         env = _service_safe_env()
         log_dir = os.path.join(env["HOME"], ".chp", "logs")
@@ -613,13 +704,103 @@ class MLXAdapter(BaseAdapter):
             os.close(fd)
         _write_pid(pidfile, proc.pid)
         ctx.emit("mlx_finetune_started",
-                 {"model": model, "iters": iters, "adapter_path": adapter_path, "pid": proc.pid}, redacted=False)
+                 {"model": model, "iters": iters, "adapter_path": adapter_path,
+                  "pid": proc.pid, "freed_servers": len(freed)}, redacted=False)
+        note = ("LoRA training runs detached; tail ~/.chp/logs/mlx-finetune-"
+                f"{name}.log. When done, serve with mlx.start_server adapter_path=" + adapter_path)
+        if freed:
+            note += f" (freed {len(freed)} served model(s) for GPU headroom — re-serve after)"
         return {
             "started": True,
             "pid": proc.pid,
             "model": model,
             "adapter_path": adapter_path,
+            "data": data,
             "iters": iters,
-            "note": "LoRA training runs detached; tail ~/.chp/logs/mlx-finetune-"
-                    f"{name}.log. When done, serve with mlx.start_server adapter_path=" + adapter_path,
+            "freed_servers": freed,
+            "note": note,
         }
+
+    # ------------------------------------------------------------------
+    # eval — the flywheel's promotion gate (score the currently-served model)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.mlx.eval",
+        version="1.0.0",
+        description=(
+            "Evaluate the currently-served model against a held-out eval set: generate a "
+            "completion per example and score it against a reference (deterministic "
+            "token-F1 or substring). Returns the aggregate mean + per-example scores. "
+            "Scores only in evidence — prompt/reference/completion text is never recorded. "
+            "The flywheel's promotion gate: eval base, swap in the tuned adapter, eval "
+            "again, and promote only if the tuned mean wins by a margin."
+        ),
+        category="ai",
+        provider="mlx",
+        risk="medium",
+        side_effects=["llm_inference"],
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "description": "Defaults to the served default model."},
+                "eval_set": {
+                    "type": "array", "minItems": 1,
+                    "description": "Held-out examples; each has `prompt` (or `messages`) and a `reference` answer.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": {"type": "string"},
+                            "messages": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+                            "reference": {"type": "string"},
+                        },
+                        "additionalProperties": True,
+                    },
+                },
+                "metric": {"type": "string", "enum": ["f1", "contains"], "default": "f1"},
+                "max_tokens": {"type": "integer", "minimum": 1, "maximum": 4096, "default": 256},
+                "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0, "default": 0.0},
+            },
+            "required": ["eval_set"],
+            "additionalProperties": False,
+        },
+    )
+    async def evaluate(self, ctx: Any, payload: dict) -> dict:
+        model = self._model(payload)
+        items: list[dict] = payload["eval_set"]
+        metric = payload.get("metric", "f1")
+        max_tokens = int(payload.get("max_tokens") or 256)
+        temperature = float(payload.get("temperature", 0.0))
+
+        ctx.emit("mlx_eval_started", {"model": model, "n": len(items), "metric": metric}, redacted=False)
+        t0 = time.monotonic()
+        scores: list[float] = []
+        predictions: list[str] = []
+        references: list[str] = []
+        try:
+            for ex in items:
+                msgs = ex.get("messages") or [{"role": "user", "content": ex.get("prompt", "")}]
+                body = {"model": model, "messages": msgs, "max_tokens": max_tokens, "temperature": temperature}
+                data = await self._http(ctx, "POST", "/v1/chat/completions", body)
+                resp = data.get("json") or {}
+                choice = (resp.get("choices") or [{}])[0]
+                completion = (choice.get("message") or {}).get("content") or ""
+                ref = ex.get("reference", "")
+                predictions.append(completion)
+                references.append(ref)
+                scores.append(_score_one(completion, ref, metric))
+        except Exception as exc:
+            ctx.emit("mlx_eval_failed", {"model": model, "error": str(exc)[:300]}, redacted=False)
+            raise
+
+        mean = round(sum(scores) / len(scores), 4) if scores else 0.0
+        latency_ms = round((time.monotonic() - t0) * 1000)
+        ctx.emit("mlx_eval_completed",
+                 {"model": model, "n": len(scores), "mean_score": mean, "metric": metric,
+                  "latency_ms": latency_ms}, redacted=False)
+        # predictions/references are returned (NOT evidenced) so a caller can re-score with any
+        # metric — e.g. flywheel.evaluate_and_gate scoring via chp.adapters.huggingface.evaluate.
+        return {"model": model, "n": len(scores), "metric": metric,
+                "mean_score": mean, "scores": scores, "latency_ms": latency_ms,
+                "predictions": predictions, "references": references}

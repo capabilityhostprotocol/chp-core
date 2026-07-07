@@ -54,10 +54,24 @@ _RAD_PATCH_LIST = """\
 abc1234 open  fix(router): failover test  feat/multi-host
 """
 
-_RAD_ISSUE_LIST = """\
-cafe123 open  Transport conformance gap
-beef456 open  Add Radicle adapter
-"""
+def _issue_table(rows: list[tuple[str, str, str]]) -> str:
+    """Build an aligned box-table like ``rad issue list`` (fixed-width columns)."""
+    w = {"id": 9, "title": 40, "author": 20, "labels": 24, "assignees": 10}
+    hdr = (f"│ ●   {'ID':<{w['id']}} {'Title':<{w['title']}} {'Author':<{w['author']}} "
+           f"{'Labels':<{w['labels']}} {'Assignees':<{w['assignees']}} Opened │")
+    bar = len(hdr) - 2
+    lines = ["╭" + "─" * bar + "╮", hdr, "├" + "─" * bar + "┤"]
+    for iid, title, labels in rows:
+        lines.append(f"│ ●   {iid:<{w['id']}} {title:<{w['title']}} {'macbook-pro (you)':<{w['author']}} "
+                     f"{labels:<{w['labels']}} {'':<{w['assignees']}} 1 hour ago │")
+    lines.append("╰" + "─" * bar + "╯")
+    return "\n".join(lines)
+
+
+_RAD_ISSUE_LIST = _issue_table([
+    ("cafe123", "Transport conformance gap", "bug, transport"),
+    ("beef456", "Add Radicle adapter", "approved-for-dev"),
+])
 
 _RAD_ISSUE_SHOW = """\
 Title   Add Radicle adapter
@@ -325,7 +339,7 @@ class TestPatchOpen:
 class TestIssueList:
     @pytest.fixture
     def backend(self):
-        return FakeRadicleBackend(responses={("issue", "list", "--state", "open"): _RAD_ISSUE_LIST})
+        return FakeRadicleBackend(responses={("issue", "list", "--open"): _RAD_ISSUE_LIST})
 
     @pytest.mark.asyncio
     async def test_issues_returned(self, backend):
@@ -339,6 +353,14 @@ class TestIssueList:
         result = await host.ainvoke("chp.adapters.radicle.issue_list", {})
         ids = [i["id"] for i in result.data["issues"]]
         assert "cafe123" in ids
+
+    @pytest.mark.asyncio
+    async def test_labels_extracted(self, backend):
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.issue_list", {})
+        by_id = {i["id"]: i for i in result.data["issues"]}
+        assert by_id["cafe123"]["labels"] == ["bug", "transport"]
+        assert by_id["beef456"]["labels"] == ["approved-for-dev"]
 
     @pytest.mark.asyncio
     async def test_issue_body_not_in_evidence(self, backend):
@@ -507,3 +529,110 @@ class TestIssueOpen:
     def test_shaping(self):
         ids = {c.descriptor.id for c in RadicleAdapter().capabilities()}
         assert "chp.adapters.radicle.issue_open" in ids
+
+
+# ---------------------------------------------------------------------------
+# seeding / replication
+# ---------------------------------------------------------------------------
+
+_RAD_SEED_LIST = """\
+╭────────────────────────────────────────────────────────────────────╮
+│ Repository                          Name      Policy   Scope        │
+├────────────────────────────────────────────────────────────────────┤
+│ rad:z44Jkxv3MxhdeegnPcBrCC2nr2Zfn   chp-dev   allow    followed     │
+╰────────────────────────────────────────────────────────────────────╯
+"""
+
+
+class TestSeeding:
+    @pytest.mark.asyncio
+    async def test_seed_policies_listed(self):
+        backend = FakeRadicleBackend(responses={("seed",): _RAD_SEED_LIST})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.seed_policies", {})
+        assert result.outcome != "denied"
+        assert result.data["count"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_seed_sets_policy(self):
+        rid = "rad:z44Jkxv3MxhdeegnPcBrCC2nr2Zfn"
+        backend = FakeRadicleBackend(
+            responses={("seed", rid, "--scope", "followed"): "✓ Seeding policy updated"}
+        )
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.seed", {"rid": rid})
+        assert result.data["ok"] is True
+        assert result.data["scope"] == "followed"
+        assert ("seed", rid, "--scope", "followed") in backend.calls
+
+    @pytest.mark.asyncio
+    async def test_seed_scope_all(self):
+        rid = "rad:zABC"
+        backend = FakeRadicleBackend(responses={("seed", rid, "--scope", "all"): "✓ ok"})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.seed", {"rid": rid, "scope": "all"})
+        assert result.data["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_unseed(self):
+        rid = "rad:zABC"
+        backend = FakeRadicleBackend(responses={("unseed", rid): "✓ removed"})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.unseed", {"rid": rid})
+        assert result.data["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_follow_with_alias(self):
+        nid = "z6MkvP5"
+        backend = FakeRadicleBackend(responses={("follow", nid, "--alias", "nas"): "✓ following"})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.follow", {"nid": nid, "alias": "nas"})
+        assert result.data["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_node_connect(self):
+        nid = "z6MkvP5"
+        backend = FakeRadicleBackend(responses={("node", "connect", f"{nid}@100.1.2.3:8776"): "✓ connected"})
+        host = _make_host(backend)
+        result = await host.ainvoke(
+            "chp.adapters.radicle.node_connect", {"nid": nid, "address": "100.1.2.3:8776"}
+        )
+        assert result.data["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_seed_requires_rid(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.seed", {})
+        assert result.outcome == "denied"
+
+    def test_shaping_includes_seed_caps(self):
+        ids = {c.descriptor.id for c in RadicleAdapter().capabilities()}
+        for cid in ("seed", "unseed", "seed_policies", "follow", "node_connect"):
+            assert f"chp.adapters.radicle.{cid}" in ids
+
+
+class TestIssueLabel:
+    @pytest.mark.asyncio
+    async def test_add_label(self):
+        backend = FakeRadicleBackend(responses={("issue", "label", "cafe123", "--add", "approved-for-dev"): "ok"})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.issue_label",
+                                    {"issue_id": "cafe123", "add": ["approved-for-dev"]})
+        assert result.data["ok"] is True
+        assert result.data["added"] == ["approved-for-dev"]
+        assert ("issue", "label", "cafe123", "--add", "approved-for-dev") in backend.calls
+
+    @pytest.mark.asyncio
+    async def test_add_and_remove(self):
+        backend = FakeRadicleBackend(
+            responses={("issue", "label", "cafe123", "--add", "building", "--delete", "approved-for-dev"): "ok"})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.issue_label",
+                                    {"issue_id": "cafe123", "add": ["building"], "remove": ["approved-for-dev"]})
+        assert result.data["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_no_labels_fails(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.issue_label", {"issue_id": "cafe123"})
+        assert result.outcome == "failure"

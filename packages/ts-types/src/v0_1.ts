@@ -203,6 +203,10 @@ export interface ReplayResult {
   events: ExecutionEvidence[];
   event_count: number;
   replayed_at: string;
+  /** True when a federated replay could not reach every member host. */
+  partial?: boolean;
+  /** Member hosts unreachable during a federated replay — never silently partial. */
+  missing_hosts?: string[];
 }
 
 export function capabilityUri(descriptor: Pick<CapabilityDescriptor, "id" | "version">): string {

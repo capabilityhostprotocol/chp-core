@@ -27,6 +27,18 @@ _EMITS = ["process_start", "process_result", "process_timeout", "process_error"]
 _PREVIEW_LEN = 500
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    """True if *path* is *root* or lives under it — component-wise, not string
+    prefix (so 'working_dir-evil' is not 'within' 'working_dir')."""
+    try:
+        return path == root or path.is_relative_to(root)
+    except AttributeError:  # Python < 3.9
+        try:
+            return os.path.commonpath([str(path), str(root)]) == str(root)
+        except ValueError:
+            return False
+
+
 @dataclass
 class ProcessConfig:
     """Config for ProcessAdapter.
@@ -122,8 +134,10 @@ class ProcessAdapter(BaseAdapter):
         if cwd_raw is not None:
             resolved_cwd = Path(cwd_raw).resolve()
             if cfg.working_dir is not None:
-                working_root = str(Path(cfg.working_dir).resolve())
-                if not str(resolved_cwd).startswith(working_root):
+                working_root = Path(cfg.working_dir).resolve()
+                # Component-wise containment, not string prefix: a sibling like
+                # 'working_dir-evil' must not pass as inside 'working_dir'.
+                if not _is_within(resolved_cwd, working_root):
                     ctx.emit("process_error", {
                         "reason": "cwd_outside_working_dir",
                         "cwd": str(resolved_cwd),

@@ -132,6 +132,19 @@ class CapabilityExecutionContext:
         from dataclasses import replace
         return replace(self.envelope.correlation, causation_id=self.envelope.invocation_id)
 
+    def declare_participants(self, host_ids: list[str]) -> None:
+        """Declare which hosts participate in this task (chp-v0.2.md §8).
+
+        Emits the reserved ``task_participants_declared`` event on THIS host's
+        signed chain — the task bundle's ``participation`` check then proves no
+        declared member was silently omitted from the assembly. Call before (or
+        while) fanning out to the declared hosts::
+
+            ctx.declare_participants([ctx.host.host_id, "worker-b", "worker-ts"])
+        """
+        self.emit("task_participants_declared",
+                  {"participants": sorted(set(host_ids))}, redacted=False)
+
     async def ainvoke(
         self,
         capability_id: str,

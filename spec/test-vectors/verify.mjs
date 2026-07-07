@@ -131,8 +131,45 @@ if (input.kind === "task-bundle") {
     if (e.correlation?.correlation_id !== input.correlation_id) { console.error("correlation mismatch"); ok = false; }
   }
   for (const b of input.bundles) { if (!verifyOne(b)) ok = false; }
+  // Participation manifest (§8): a declared member set must be fully present.
+  const declared = new Set(allEvents
+    .filter(e => e.event_type === "task_participants_declared")
+    .flatMap(e => e.payload?.participants ?? []));
+  if (declared.size > 0) {
+    const memberIds = new Set(input.bundles.map(b => b.host_id));
+    for (const d of declared) {
+      if (!memberIds.has(d)) { console.error(`declared participant ${d} has no bundle`); ok = false; }
+    }
+  }
+  // Aggregator signature (§8 `aggregated`): verified whenever present.
+  let aggNote = "";
+  if (input.aggregator) {
+    const agg = input.aggregator;
+    const aggPub = createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                          Buffer.from(agg.public_key, "base64")]),
+      format: "der", type: "spki",
+    });
+    const aggVerify = (obj, sigB64) =>
+      edVerify(null, Buffer.from(canon(obj), "utf8"), aggPub, Buffer.from(sigB64, "base64"));
+    const header = { kind: input.kind, correlation_id: input.correlation_id,
+                     protocol_version: input.protocol_version, created_at: input.created_at,
+                     canonicalization: input.canonicalization, task_root_hash: input.task_root_hash };
+    let aggOk = agg.signature?.algorithm === "ed25519"
+      && aggVerify(header, agg.signature.signature);
+    const att = agg.host_identity;
+    if (att) {
+      const claim = { host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
+                      valid_from: att.valid_from, valid_until: att.valid_until,
+                      ...("anchors" in att ? { anchors: att.anchors } : {}) };
+      aggOk = aggOk && att.host_id === agg.host_id && att.public_key === agg.public_key
+        && aggVerify(claim, att.signature);
+    } else { aggOk = false; }
+    if (!aggOk) { console.error("aggregator signature INVALID"); ok = false; }
+    else aggNote = `, aggregated by ${agg.host_id}`;
+  }
   console.log(ok
-    ? `VALID (task-bundle, ${input.bundles.length} hosts, ${allEvents.length} events)`
+    ? `VALID (task-bundle, ${input.bundles.length} hosts, ${allEvents.length} events${aggNote})`
     : "INVALID");
 } else {
   ok = verifyOne(input);

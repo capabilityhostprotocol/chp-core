@@ -41,6 +41,7 @@ class PlanningAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.planning.create_plan",
+        emits=['plan_created'],
         version="0.1.0",
         category="agent_operations",
         risk="medium",

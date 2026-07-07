@@ -54,7 +54,7 @@ AUTONOMY_EVIDENCE_TYPES = {
     "approval_denied",
 }
 
-# Host-SELF evidence (spec §3.2 / governance §4.4): the host's own key/identity
+# Host-SELF evidence (spec §3.2 / governance §4.5): the host's own key/identity
 # lifecycle, emitted on its own hash-chained store — which thereby serves as the
 # host's key-transparency log (tamper-evident, ordered, exportable like any
 # bundle). The first evidence family describing the host rather than an invocation.
@@ -63,6 +63,13 @@ IDENTITY_EVIDENCE_TYPES = {
     "key_rotated",
     "key_revoked",
     "identity_anchored",
+}
+
+# Federated tasks (chp-v0.2.md §8): the orchestrator's signed declaration of
+# which hosts participate in a task — omitting a declared leaf member from a
+# task bundle becomes detectable (the `participation` verify check).
+FEDERATION_EVIDENCE_TYPES = {
+    "task_participants_declared",
 }
 
 RETRIEVAL_EVIDENCE_TYPES = {
@@ -903,6 +910,10 @@ class ReplayResult:
     event_count: int
     truncated: bool = False
     replayed_at: str = field(default_factory=utc_now)
+    # Federated replay MUST disclose members it could not reach — a merged
+    # timeline is never silently partial (chp-http-binding.md §4).
+    partial: bool = False
+    missing_hosts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JSON:
         return asdict(self)

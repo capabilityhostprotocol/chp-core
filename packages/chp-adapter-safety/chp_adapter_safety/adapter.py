@@ -48,6 +48,7 @@ class SafetyAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.safety.assess",
+        emits=['safety_action_approved', 'safety_action_blocked', 'safety_assessment_completed', 'safety_assessment_started'],
         version="0.1.0",
         category="governance",
         risk="low",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from chp_core import HttpTransport, LocalTransport
@@ -251,6 +253,40 @@ class TestStitchedReplay:
         keys = [(e.get("timestamp", ""), e.get("sequence", 0)) for e in events]
         assert keys == sorted(keys)
 
+    def test_replay_discloses_unreachable_members(self):
+        """A federated replay is never silently partial (binding §4b)."""
+
+        class DeadReplayTransport(LocalTransport):
+            async def replay_result(self, query):
+                raise ConnectionError("member down")
+
+        async def setup():
+            a = LocalTransport(make_echo_host("A", "a", cap_id="cap.a"), name="A")
+            b = DeadReplayTransport(make_echo_host("B", "b", cap_id="cap.b"), name="B")
+            router = await _router(a, b)
+            await router.ainvoke("cap.a", {}, correlation={"correlation_id": "partial-corr"})
+            return router
+
+        router = asyncio.run(setup())
+        result = router.replay_result("partial-corr")
+        assert result.partial is True
+        assert result.missing_hosts == ["B"]
+        assert {e["_host"] for e in result.events} == {"A"}
+        d = result.to_dict()
+        assert d["partial"] is True and d["missing_hosts"] == ["B"]
+
+    def test_replay_full_mesh_not_partial(self):
+        async def setup():
+            a = LocalTransport(make_echo_host("A", "a", cap_id="cap.a"), name="A")
+            b = LocalTransport(make_echo_host("B", "b", cap_id="cap.b"), name="B")
+            router = await _router(a, b)
+            await router.ainvoke("cap.a", {}, correlation={"correlation_id": "full-corr"})
+            return router
+
+        router = asyncio.run(setup())
+        result = router.replay_result("full-corr")
+        assert result.partial is False and result.missing_hosts == []
+
 
 # ---------------------------------------------------------------------------
 # Health aggregate
@@ -336,3 +372,61 @@ class TestRouterHTTPSurface:
         replay = router.replay_result({"correlation_id": corr_id})
         assert isinstance(replay, ReplayResult)
         assert replay.correlation_id == corr_id
+
+
+# ---------------------------------------------------------------------------
+# Data-path key-pin check (chp-v0.2.md §3.2 / mesh trust)
+# ---------------------------------------------------------------------------
+
+class TestDataPathPinCheck:
+    def _mesh_with_pin(self, tmp_path, monkeypatch, url, key_id, public_key):
+        import json as _json
+        monkeypatch.setenv("HOME", str(tmp_path))  # mesh_path() reads HOME at call time
+        mesh_dir = tmp_path / ".chp"
+        mesh_dir.mkdir(parents=True, exist_ok=True)
+        (mesh_dir / "mesh.json").write_text(_json.dumps({
+            "name": "mesh",
+            "agent_remotes": [{"url": url, "key_id": key_id, "public_key": public_key, "trust": "tofu"}],
+        }))
+
+    def _served_signed_host(self, tmp_path, monkeypatch):
+        from chp_core import signing
+        monkeypatch.setattr(signing, "DEFAULT_KEY_DIR", tmp_path / "hostkeys")
+        key = signing.generate_keypair(tmp_path / "hostkeys")
+        return key
+
+    def test_pin_mismatch_refuses_member(self, tmp_path, monkeypatch):
+        from ._util import served
+        key = self._served_signed_host(tmp_path, monkeypatch)
+        host = make_echo_host("pinned-host", "p", cap_id="cap.pin")
+        with served(host) as url:
+            # Pin a DIFFERENT key for this member — impersonation scenario.
+            self._mesh_with_pin(tmp_path, monkeypatch, url, "deadbeefdeadbeef", "AAAA")
+            router = asyncio.run(MultiHostRouter([HttpTransport(url, name="M")]).connect())
+            assert "cap.pin" not in router.capability_ids
+
+    def test_pin_match_allows_member(self, tmp_path, monkeypatch):
+        from ._util import served
+        key = self._served_signed_host(tmp_path, monkeypatch)
+        host = make_echo_host("pinned-host", "p", cap_id="cap.pin")
+        with served(host) as url:
+            self._mesh_with_pin(tmp_path, monkeypatch, url, key.key_id, key.public_key_b64)
+            router = asyncio.run(MultiHostRouter([HttpTransport(url, name="M")]).connect())
+            assert "cap.pin" in router.capability_ids
+
+    def test_unpinned_member_gets_pinned_tofu(self, tmp_path, monkeypatch):
+        import json as _json
+        from ._util import served
+        key = self._served_signed_host(tmp_path, monkeypatch)
+        host = make_echo_host("pinned-host", "p", cap_id="cap.pin")
+        with served(host) as url:
+            self._mesh_with_pin(tmp_path, monkeypatch, url, None, None)
+            # strip the empty pin fields so it's a fresh remote
+            mesh_file = tmp_path / ".chp" / "mesh.json"
+            data = _json.loads(mesh_file.read_text())
+            data["agent_remotes"] = [{"url": url}]
+            mesh_file.write_text(_json.dumps(data))
+            router = asyncio.run(MultiHostRouter([HttpTransport(url, name="M")]).connect())
+            assert "cap.pin" in router.capability_ids
+            pinned = _json.loads(mesh_file.read_text())["agent_remotes"][0]
+            assert pinned["key_id"] == key.key_id  # TOFU pin recorded on the data path

@@ -29,6 +29,44 @@ def _cap_events(store):
 
 
 # --------------------------------------------------------------------------
+# Path confinement (sibling-prefix + glob escape)
+# --------------------------------------------------------------------------
+
+class TestConfinement:
+    def test_sibling_prefix_root_is_rejected(self, tmp_path):
+        # allowed_roots=[.../data] must NOT admit sibling .../data-secret
+        root = tmp_path / "data"
+        root.mkdir()
+        sibling = tmp_path / "data-secret"
+        sibling.mkdir()
+        secret = sibling / "s.txt"
+        secret.write_text("top secret")
+        host = _make_host(FilesystemConfig(allowed_roots=[str(root)]))
+        r = host.invoke("chp.adapters.filesystem.read_file", {"path": str(secret)})
+        assert r.outcome == "failure"
+
+    def test_path_inside_root_still_allowed(self, tmp_path):
+        root = tmp_path / "data"
+        root.mkdir()
+        f = root / "ok.txt"
+        f.write_text("fine")
+        host = _make_host(FilesystemConfig(allowed_roots=[str(root)]))
+        r = host.invoke("chp.adapters.filesystem.read_file", {"path": str(f)})
+        assert r.outcome == "success"
+
+    def test_glob_escape_paths_dropped(self, tmp_path):
+        root = tmp_path / "data"
+        root.mkdir()
+        (root / "inside.txt").write_text("x")
+        (tmp_path / "outside.txt").write_text("secret")
+        host = _make_host(FilesystemConfig(allowed_roots=[str(root)]))
+        r = host.invoke("chp.adapters.filesystem.glob_files", {"pattern": "../*", "base_path": str(root)})
+        assert r.outcome == "success"
+        # nothing outside the root leaks through the '../' escape
+        assert not any("outside.txt" in f for f in r.data["files"])
+
+
+# --------------------------------------------------------------------------
 # 1. Shaping
 # --------------------------------------------------------------------------
 

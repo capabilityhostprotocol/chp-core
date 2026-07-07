@@ -43,6 +43,14 @@ def _host_version() -> str:
     return "unknown"
 
 
+def _scope_allows(scope: list[str], capability_id: str) -> bool:
+    """Exact id or trailing-* prefix match, e.g. `chp.adapters.audit.*`."""
+    return any(
+        capability_id == s or (s.endswith("*") and capability_id.startswith(s[:-1]))
+        for s in scope
+    )
+
+
 def _host_assurance(host_id: str | None = None) -> JSON:
     """Declared evidence assurance tier for this host (v0.2). `signed` when a
     host keypair is present, else `hash-chain` (the store always chains).
@@ -52,8 +60,9 @@ def _host_assurance(host_id: str | None = None) -> JSON:
     mesh peer can verify the key self-attests this host_id *before* pinning it
     (chp-v0.2.md §3) — not blindly trust whatever /host reports."""
     try:
-        from .signing import load_host_key
-        key = load_host_key()
+        from .signing import load_host_key, resolve_key_dir
+        key_dir = resolve_key_dir(host_id)
+        key = load_host_key(key_dir)
     except Exception:
         key = None
     if key is None:
@@ -65,19 +74,19 @@ def _host_assurance(host_id: str | None = None) -> JSON:
             # Anchors (spec §3.1): configured anchors (e.g. a did anchor from
             # `chp anchor-did`) + a CHP_HOST_DOMAIN domain anchor. These become
             # the trust roots a never-met verifier can check. None → TOFU floor.
-            anchors = list(load_configured_anchors())
+            anchors = list(load_configured_anchors(key_dir))
             domain = os.environ.get("CHP_HOST_DOMAIN")
             if domain and not any(a.get("type") == "domain" for a in anchors):
                 anchors.append({"type": "domain", "domain": domain})
             # Persisted, not rebuilt per request — stable valid_from + anchors.
-            out["host_identity"] = load_or_build_attestation(host_id, key, anchors or None)
+            out["host_identity"] = load_or_build_attestation(host_id, key, anchors or None, key_dir)
             # Key lifecycle (spec §3.2): rotation lineage + revocations, so a
             # resolving verifier can follow continuity and see revoked keys.
             from .signing import load_key_history, load_revocations
-            history = load_key_history()
+            history = load_key_history(key_dir)
             if history:
                 out["key_history"] = history
-            revocations = load_revocations()
+            revocations = load_revocations(key_dir)
             if revocations:
                 out["revoked_keys"] = revocations
         except Exception:
@@ -117,17 +126,31 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         Per-caller keys: ``CHP_HOST_API_KEYS="agent-a:key1,steward:key2"`` — a
         match sets the caller to that name. ``CHP_HOST_API_KEY`` stays as the
         anonymous shared-key fallback.
+
+        Rotation overlap (binding §2): the same name MAY appear with several
+        keys ("a:new,a:old") — every entry is checked, so rotation is add-new,
+        drain, remove-old with no auth gap.
+
+        Capability scope (binding §2): a third field scopes the key —
+        ``name:key:chp.adapters.audit.*|conformance.echo``. An out-of-scope
+        invocation is a PROCESSED denial (``policy_blocked``, HTTP 200, with
+        evidence) — governance, not transport rejection.
         """
         self._caller: str | None = None
+        self._caller_scope: list[str] | None = None
         presented = self.headers.get("X-CHP-Key", "")
         named = os.environ.get("CHP_HOST_API_KEYS")
         shared = os.environ.get("CHP_HOST_API_KEY")
 
         if named:
             for entry in named.split(","):
-                name, sep, k = entry.partition(":")
-                if sep and hmac.compare_digest(presented, k.strip()):
-                    self._caller = name.strip()
+                parts = entry.split(":", 2)
+                if len(parts) < 2:
+                    continue
+                if hmac.compare_digest(presented, parts[1].strip()):
+                    self._caller = parts[0].strip()
+                    if len(parts) == 3 and parts[2].strip():
+                        self._caller_scope = [s.strip() for s in parts[2].split("|") if s.strip()]
                     return True
         if shared and hmac.compare_digest(presented, shared):
             return True  # anonymous authenticated (single shared key)
@@ -203,6 +226,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                             self.server.chp_host.export_task_bundle(correlation_id))
                         from .signing import verify_task_bundle
                         tv = verify_task_bundle(task)
+                        from .metrics import record_verification
+                        record_verification(tv.valid)
                         self._write_json({
                             "mode": "federated", "valid": tv.valid,
                             "assurance": tv.assurance, "checks": tv.checks,
@@ -221,6 +246,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 })
                 return
             result = self.server.chp_host.store.verify_chain(correlation_id)
+            from .metrics import record_verification
+            record_verification(result.valid, chain_break=not result.valid)
             self._write_json(asdict(result))
             return
         if path.startswith("/export/"):
@@ -244,11 +271,12 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             events = self.server.chp_host.store.export_correlation(correlation_id)
             host_id = getattr(self.server.chp_host, "host_id", "unknown")
             bundle = signing.build_bundle(host_id, events, created_at=utc_now())
-            key = signing.load_host_key()
+            key_dir = signing.resolve_key_dir(host_id)
+            key = signing.load_host_key(key_dir)
             if key is not None and key.can_sign:
                 from .signing import load_configured_anchors
                 bundle = signing.sign_bundle(bundle, key,
-                                             anchors=load_configured_anchors() or None)
+                                             anchors=load_configured_anchors(key_dir) or None)
             self._write_json(bundle)
             return
         if path == "/metrics":
@@ -272,10 +300,13 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         events = store.query(since=since)
         report = aggregate_session_metrics("live", events)
         token_report = aggregate_token_metrics(events)
+        from .metrics import format_integrity_prometheus
         body = (
             format_prometheus(report).encode("utf-8")
             + b"\n"
             + format_token_prometheus(token_report).encode("utf-8")
+            + b"\n"
+            + format_integrity_prometheus().encode("utf-8")
         )
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
@@ -330,6 +361,20 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if caller is not None:
             envelope_body["subject"] = {"id": caller, "type": "api_key", "verified": True}
         envelope = InvocationEnvelope.from_mapping(envelope_body)
+        # Capability-scoped caller key (binding §2): out-of-scope is a PROCESSED
+        # governance denial — policy_blocked, HTTP 200, evidence emitted — never
+        # a bare transport 403.
+        scope = getattr(self, "_caller_scope", None)
+        if scope is not None and not _scope_allows(scope, envelope.capability_id):
+            deny = getattr(self.server.chp_host, "_deny", None)
+            if deny is not None:
+                from .types import DenialReason
+                return deny(envelope, DenialReason(
+                    code="policy_blocked",
+                    message=f"capability {envelope.capability_id!r} is outside "
+                            f"caller {caller!r}'s key scope",
+                    retryable=False,
+                )).to_dict()
         result = asyncio.run(self.server.chp_host.ainvoke_envelope(envelope))
         return result.to_dict()
 

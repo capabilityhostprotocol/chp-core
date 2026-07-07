@@ -97,10 +97,11 @@ class LocalTransport:
 
         events = self._host.store.export_correlation(correlation_id)
         bundle = signing.build_bundle(self._host.host_id, events, created_at=utc_now())
-        key = signing.load_host_key()
+        key_dir = signing.resolve_key_dir(self._host.host_id)
+        key = signing.load_host_key(key_dir)
         if key is not None and key.can_sign:
             bundle = signing.sign_bundle(
-                bundle, key, anchors=signing.load_configured_anchors() or None)
+                bundle, key, anchors=signing.load_configured_anchors(key_dir) or None)
         return bundle
 
     async def health(self) -> JSON:
@@ -129,12 +130,17 @@ class HttpTransport:
     ) -> None:
         self._remote = RemoteCapabilityHost(base_url, timeout=timeout, api_key=api_key)
         self.name = name or base_url.rstrip("/")
+        self.url = base_url.rstrip("/")
 
     async def ainvoke_envelope(self, envelope: InvocationEnvelope) -> InvocationResult:
         return await asyncio.to_thread(self._remote.invoke_envelope, envelope)
 
     async def discover(self) -> JSON:
         return await asyncio.to_thread(self._remote.discover)
+
+    async def identity(self) -> JSON:
+        """The remote's public identity document (/.well-known/chp-identity)."""
+        return await asyncio.to_thread(self._remote.identity)
 
     async def replay_result(self, query: "str | ReplayQuery | JSON") -> JSON:
         return await asyncio.to_thread(self._remote.replay_result, query)

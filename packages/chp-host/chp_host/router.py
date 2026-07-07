@@ -113,6 +113,8 @@ class MultiHostRouter:
                 print(f"  WARNING: skipped {tr.name}: {exc}", file=sys.stderr)
                 self._mark_unhealthy(tr)
                 continue
+            if not await self._check_member_identity(tr):
+                continue
             self._mark_healthy(tr)
             self._descriptors[tr.name] = descriptor
             for cap in descriptor.get("capabilities", []):
@@ -124,6 +126,41 @@ class MultiHostRouter:
                     owners.append(tr)
         self._last_discover = time.monotonic()
         return self
+
+    async def _check_member_identity(self, tr: Transport) -> bool:
+        """Key-pin check ON THE DATA PATH (spec §3.2): at (re)connect, verify the
+        member's presented signing key against our ~/.chp/mesh.json pin. A
+        mismatch means possible impersonation — the member is refused routing
+        until an operator runs `chp-host mesh reset-key`. Members without a URL
+        (in-process), without an identity route, at the hash-chain tier (no
+        key), or not in the mesh manifest are exempt: pinning only ever
+        *tightens* an existing trust relationship, never blocks a new one.
+        """
+        url = getattr(tr, "url", None)
+        identity = getattr(tr, "identity", None)
+        if not url or identity is None:
+            return True
+        try:
+            doc = await tr.identity()
+        except Exception:  # noqa: BLE001 — no identity route ≠ impersonation
+            return True
+        key_id = doc.get("key_id") if isinstance(doc, dict) else None
+        if not key_id:
+            return True
+        from .mesh import pin_or_check_key
+
+        status, detail = pin_or_check_key(
+            url, key_id, doc.get("public_key"), key_history=doc.get("key_history"))
+        if status == "mismatch":
+            print(
+                f"  WARNING: {tr.name} presented signing key {key_id} but {detail} "
+                "is pinned — possible impersonation; refusing routes "
+                "(recover deliberately: chp-host mesh reset-key)",
+                file=sys.stderr,
+            )
+            self._mark_unhealthy(tr)
+            return False
+        return True
 
     async def _maybe_refresh_catalog(self) -> None:
         """Re-discover hosts' catalogs when the cached routing table is older than
@@ -143,6 +180,8 @@ class MultiHostRouter:
         for tr in self._transports:
             try:
                 descriptor = await tr.discover()
+                if not await self._check_member_identity(tr):
+                    continue
                 self._mark_healthy(tr)
             except Exception:  # noqa: BLE001 — keep last-known catalog on any failure
                 descriptor = self._descriptors.get(tr.name)
@@ -277,20 +316,29 @@ class MultiHostRouter:
         wall-clock-only sort, which could order a child before its cross-host
         cause under clock skew.
         """
+        events, _missing = await self._replay_with_missing(correlation_id)
+        return events
+
+    async def _replay_with_missing(self, correlation_id: str) -> tuple[list[JSON], list[str]]:
+        """Replay fan-out that also reports which members could not contribute —
+        a merged timeline is never silently partial (chp-http-binding.md §4)."""
         from chp_core.ordering import order_events
 
         events: list[JSON] = []
+        missing: list[str] = []
         for tr in self._transports:
             if not self._is_healthy(tr):
+                missing.append(tr.name)
                 continue
             try:
                 result = await tr.replay_result(correlation_id)
             except ConnectionError:
                 self._mark_unhealthy(tr)
+                missing.append(tr.name)
                 continue
             for event in result.get("events", []):
                 events.append({**event, "_host": tr.name})
-        return order_events(events)
+        return order_events(events), missing
 
     async def export_task_bundle(self, correlation_id: str) -> JSON:
         """Assemble the cross-host task bundle (chp-v0.2.md §8) at request time.
@@ -321,7 +369,18 @@ class MultiHostRouter:
                 f"task bundle incomplete — unreachable hosts: {', '.join(unreachable)}")
         if not members:
             raise LookupError(f"no evidence for correlation {correlation_id!r} on any host")
-        return build_task_bundle(correlation_id, members, created_at=utc_now())
+        task = build_task_bundle(correlation_id, members, created_at=utc_now())
+        # Aggregator signature (chp-v0.2.md §8): when this gateway holds a key,
+        # sign the assembly so "who assembled the set" is provable, not asserted.
+        from chp_core.signing import (
+            load_configured_anchors, load_host_key, resolve_key_dir, sign_task_bundle)
+        key_dir = resolve_key_dir(self._host_id)
+        key = load_host_key(key_dir)
+        if key is not None and key.can_sign:
+            task = sign_task_bundle(
+                task, key, aggregator_host_id=self._host_id,
+                anchors=load_configured_anchors(key_dir) or None)
+        return task
 
     async def ainvoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
         """Route a pre-built envelope through the routing table.
@@ -358,11 +417,13 @@ class MultiHostRouter:
             correlation_id = str(query.get("correlation_id", ""))
         else:
             correlation_id = query.correlation_id
-        events = asyncio.run(self.replay(correlation_id))
+        events, missing = asyncio.run(self._replay_with_missing(correlation_id))
         return ReplayResult(
             correlation_id=correlation_id,
             events=events,
             event_count=len(events),
+            partial=bool(missing),
+            missing_hosts=missing,
         )
 
     async def health(self) -> JSON:

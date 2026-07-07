@@ -45,14 +45,39 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export function createHostServer(host: LocalCapabilityHost, opts: { apiKey?: string } = {}): Server {
+export function createHostServer(
+  host: LocalCapabilityHost,
+  opts: { apiKey?: string; namedKeys?: string } = {},
+): Server {
   const { apiKey } = opts;
+  // Named per-caller keys (binding §2): "name:key[:scope1|scope2],…" — same
+  // name may repeat (rotation overlap); a scoped key's out-of-scope invoke is
+  // a PROCESSED policy_blocked denial, never a transport 403.
+  const named = (opts.namedKeys ?? process.env.CHP_HOST_API_KEYS ?? '')
+    .split(',')
+    .map((e) => e.split(':', 3))
+    .filter((p) => p.length >= 2)
+    .map(([name, key, scope]) => ({
+      name: name.trim(),
+      key: key.trim(),
+      scope: scope?.trim() ? scope.split('|').map((s) => s.trim()).filter(Boolean) : null,
+    }));
 
-  const authed = (req: IncomingMessage): boolean => {
-    if (!apiKey) return true;
+  interface Caller { name: string; scope: string[] | null }
+
+  const authenticate = (req: IncomingMessage): { ok: boolean; caller: Caller | null } => {
     const presented = (req.headers['x-chp-key'] as string) ?? '';
-    return constantTimeEqual(presented, apiKey);
+    for (const entry of named) {
+      if (constantTimeEqual(presented, entry.key)) {
+        return { ok: true, caller: { name: entry.name, scope: entry.scope } };
+      }
+    }
+    if (apiKey) return { ok: constantTimeEqual(presented, apiKey), caller: null };
+    return { ok: named.length === 0, caller: null };
   };
+
+  const scopeAllows = (scope: string[], capabilityId: string): boolean =>
+    scope.some((s) => capabilityId === s || (s.endsWith('*') && capabilityId.startsWith(s.slice(0, -1))));
 
   return createServer((req, res) => {
     void handle(req, res).catch((e) => err(res, 500, 'internal_error', String((e as Error).message)));
@@ -76,7 +101,8 @@ export function createHostServer(host: LocalCapabilityHost, opts: { apiKey?: str
       return sendJson(res, 200, host.identityDoc());
     }
 
-    if (!authed(req)) return err(res, 401, 'unauthorized', 'Missing or invalid X-CHP-Key');
+    const auth = authenticate(req);
+    if (!auth.ok) return err(res, 401, 'unauthorized', 'Missing or invalid X-CHP-Key');
 
     if (method === 'GET' && path === '/host') {
       return sendJson(res, 200, { ...host.discover(), host_version: HOST_VERSION });
@@ -118,6 +144,19 @@ export function createHostServer(host: LocalCapabilityHost, opts: { apiKey?: str
       if (env.correlation_id && !env.correlation) {
         env.correlation = { correlation_id: env.correlation_id };
         delete env.correlation_id;
+      }
+      // Verified caller REPLACES any client-asserted subject (binding §2).
+      if (auth.caller) {
+        env.subject = { id: auth.caller.name, type: 'api_key', verified: true };
+        // Capability scope: out-of-scope is a PROCESSED policy_blocked denial.
+        if (auth.caller.scope && !scopeAllows(auth.caller.scope, String(env.capability_id ?? ''))) {
+          const result = host.denyEnvelope(env, {
+            code: 'policy_blocked',
+            message: `capability ${String(env.capability_id)} is outside caller ${auth.caller.name}'s key scope`,
+            retryable: false,
+          });
+          return sendJson(res, 200, result as unknown as JsonValue);
+        }
       }
       const result = await host.ainvokeEnvelope(env);
       return sendJson(res, 200, result as unknown as JsonValue);
