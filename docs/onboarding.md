@@ -1,10 +1,65 @@
 # CHP Onboarding Guide
 
-Status: legacy mesh-oriented onboarding.
+How to adopt the Capability Host Protocol in your project — starting from *your*
+codebase, not ours.
 
-For the open-source v0.1 launch path, start with `README.md`, `docs/quickstart.md`, and `spec/chp-v0.1.md`. CHP v0.1 is local-first and evidence-first. Zenoh mesh participation and heavier governance are post-v0.1 transport and product layers, not requirements for conformance.
+## The fast path: `chp-host onboard` (Python, ~5 minutes)
 
-How to adopt the Capability Host Protocol in your project. Self-serve — pick your language, follow the path.
+Point the portable onboarding wizard at any Python repo. It is pure stdlib,
+assumes none of CHP's infrastructure (no mesh, no models), and never modifies
+your code:
+
+```bash
+pip install chp-core chp-host
+chp-host onboard /path/to/your/repo
+```
+
+The wizard scans your codebase and surfaces what it could contribute — external
+SDKs you import that could become **adapters**, and public functions that could
+become governed **capabilities** (each with an inferred category and risk tier,
+cross-referenced against the adapters CHP already ships). Then two ways forward:
+
+- **Mode A — wrap existing functions (deterministic, no model):**
+
+  ```bash
+  chp-host onboard <repo> --module your.module --ops fn_a,fn_b --name myservice
+  ```
+
+  Generates a complete `chp-adapter-myservice` package whose capabilities
+  *delegate* to your real functions. Governance and evidence sit at the wrapper
+  boundary — every invocation is risk-gated, schema-validated, and emits
+  hash-chained evidence carrying the source `file:line` provenance of the
+  wrapped function. Your code is untouched.
+
+  Capability ids are namespaced `onboarded.myservice.*` by default (pass
+  `--namespace com.yourco.myservice` to use your domain). `chp.adapters.*` is
+  reserved for the protocol's own adapter registry — see
+  [chp-governance-v0.2.md §5](../spec/chp-governance-v0.2.md).
+
+- **Mode B — new integration, your coding agent writes it:**
+
+  ```bash
+  chp-host onboard --detect-agents
+  ```
+
+  For code that can't be wrapped directly, the wizard emits a self-contained
+  handoff spec for whatever coding agent you already use (claude, codex,
+  gemini, aider, cursor — detected on PATH). The acceptance gate is
+  `conformance.check_source` scoring 100, so the result is safe regardless of
+  who wrote it.
+
+Either way, verify the result: run the generated adapter's `adapter.py` through
+the conformance checker, register it, invoke it, and `GET /export/{correlation}`
+gives you a signed, offline-verifiable evidence bundle for the call.
+
+---
+
+## Other languages / manual paths
+
+The paths below predate the wizard (status: legacy, mesh-oriented). For the
+v0.1 protocol itself start with `README.md`, `docs/quickstart.md`, and
+`spec/chp-v0.1.md` — CHP is local-first and evidence-first; mesh participation
+is a transport layer, not a conformance requirement.
 
 ## What You Get
 

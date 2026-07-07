@@ -47,7 +47,9 @@ PUBLIC_MESSAGING_FILES = [
     "examples/mcp-bridge-demo/README.md",
 ]
 LEGACY_MESSAGING_FILES = [
-    "docs/onboarding.md",
+    # docs/onboarding.md graduated 2026-07-07: it now leads with the CURRENT
+    # portable wizard (chp-host onboard); its mesh-oriented language paths are
+    # labeled legacy inline, in their own section.
     "docs/agent-prompt.md",
     "docs/capability-lookup-prompt.md",
 ]

@@ -214,7 +214,10 @@ class WorkCLITests(unittest.TestCase):
             self.assertTrue(messaging["success"])
             self.assertTrue(messaging["data"]["passed"])
             self.assertIn("README.md", messaging["data"]["public_files"])
-            self.assertIn("docs/onboarding.md", messaging["data"]["legacy_files"])
+            # onboarding.md graduated to a current doc (portable wizard) 2026-07-07;
+            # the prompt docs remain the labeled-legacy set.
+            self.assertIn("docs/agent-prompt.md", messaging["data"]["legacy_files"])
+            self.assertNotIn("docs/onboarding.md", messaging["data"]["legacy_files"])
 
             replay = self.run_cli(["work", "replay", correlation_id, "--store", store])
             self.assertEqual(
