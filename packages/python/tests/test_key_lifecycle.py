@@ -35,7 +35,10 @@ def test_rotate_with_continuity(tmp_path):
 
 
 def test_mesh_pin_follows_continuity_chain(tmp_path, monkeypatch):
-    import chp_host.mesh as mesh
+    # Cross-package: exercises chp_host.mesh — skip in chp-core-only envs (CI's
+    # python-reference job installs packages/python alone).
+    import pytest
+    mesh = pytest.importorskip("chp_host.mesh")
 
     monkeypatch.setattr(mesh, "mesh_path", lambda: tmp_path / "mesh.json")
     (tmp_path / "mesh.json").write_text(json.dumps(
@@ -63,6 +66,8 @@ def test_mesh_pin_follows_continuity_chain(tmp_path, monkeypatch):
 
 
 def test_mesh_rejects_self_serving_history(tmp_path, monkeypatch):
+    import pytest
+    pytest.importorskip("chp_host.mesh")
     # An attacker publishes a "history" rooted at THEIR key, not the pinned one:
     # the chain walk requires each hop signed by the key we already trust.
     import chp_host.mesh as mesh
