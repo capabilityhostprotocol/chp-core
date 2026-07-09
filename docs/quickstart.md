@@ -2,19 +2,23 @@
 
 ## 1. Install
 
-From this repository:
-
 ```bash
-pip install -e packages/python packages/chp-host
-pip install -e packages/chp-adapter-http packages/chp-adapter-filesystem packages/chp-adapter-audit
+pip install chp-core chp-host
 ```
 
-Or use the bootstrap script for a full node setup:
+Adapters install the same way as you need them
+(`pip install chp-adapter-http chp-adapter-filesystem chp-adapter-audit`, …).
+
+Then take the guided first run:
 
 ```bash
-bash scripts/bootstrap-mac.sh primary   # macOS — primary node
-bash scripts/bootstrap-linux.sh         # Linux — auto-detects arch
+chp                 # prints the start-here path
+chp serve-demo      # a governed demo host with a copy-pasteable first invoke
 ```
+
+Contributors working from this repository can use editable installs
+(`pip install -e packages/python packages/chp-host`) or the full-node
+bootstrap scripts (`scripts/bootstrap-mac.sh primary`, `scripts/bootstrap-linux.sh`).
 
 ## 2. Declare And Invoke A Capability
 
