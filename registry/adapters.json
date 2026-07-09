@@ -20,7 +20,8 @@
       "category": "network",
       "description": "Governed HTTP client with URL allowlist",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-grpc",
@@ -28,7 +29,8 @@
       "category": "network",
       "description": "gRPC service discovery and unary call invocation",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-graphql",
@@ -36,7 +38,8 @@
       "category": "network",
       "description": "GraphQL queries and mutations as governed capabilities",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-openapi",
@@ -44,7 +47,8 @@
       "category": "network",
       "description": "Any REST API described by an OpenAPI spec as governed CHP capabilities",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-webhook",
@@ -52,7 +56,8 @@
       "category": "network",
       "description": "Inbound webhook signature verification and event normalization",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-nats",
@@ -60,7 +65,8 @@
       "category": "network",
       "description": "NATS messaging (pub/sub/request-reply) as governed capabilities",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-kafka",
@@ -68,7 +74,8 @@
       "category": "network",
       "description": "Enterprise Kafka event stream operations",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-mcp",
@@ -76,7 +83,8 @@
       "category": "network",
       "description": "Wrap Model Context Protocol (MCP) server tools as governed CHP capabilities",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-filesystem",
@@ -84,7 +92,8 @@
       "category": "filesystem",
       "description": "Governed file read/write/list with path allowlist",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-file-transform",
@@ -92,7 +101,8 @@
       "category": "filesystem",
       "description": "File extraction and format conversion",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-document-store",
@@ -100,7 +110,8 @@
       "category": "filesystem",
       "description": "Document search, retrieval, and management",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-huggingface",
@@ -108,7 +119,8 @@
       "category": "ai",
       "description": "Local HuggingFace artifact consumption \u2014 pull, pipeline, embed, tokenize, dataset, cache",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-tei",
@@ -116,7 +128,8 @@
       "category": "ai",
       "description": "Metal-accelerated text embeddings via a local Text Embeddings Inference server",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-vllm",
@@ -124,7 +137,8 @@
       "category": "ai",
       "description": "Apple Silicon native text generation via a local vLLM server",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-scout",
@@ -132,7 +146,8 @@
       "category": "ai",
       "description": "FastContext repo scout subagent",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-sglang",
@@ -140,7 +155,8 @@
       "category": "ai",
       "description": "SGLang inference server (CUDA/Linux primary, CPU fallback)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-local-llm",
@@ -148,7 +164,8 @@
       "category": "ai",
       "description": "Local LLM inference via Ollama (primary) or llama.cpp (fallback)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-llm",
@@ -156,7 +173,8 @@
       "category": "ai",
       "description": "Bridge CHP capabilities to LLM tool-calling APIs (OpenAI, Anthropic, generic)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-smolagents",
@@ -164,7 +182,8 @@
       "category": "ai",
       "description": "Code-writing meta-agent (smolagents) whose tools are CHP capabilities",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-memory",
@@ -172,7 +191,8 @@
       "category": "ai",
       "description": "Governed scoped key-value memory for agents",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-vector",
@@ -180,7 +200,8 @@
       "category": "ai",
       "description": "Semantic embedding search with injectable backend",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-evaluation",
@@ -188,7 +209,8 @@
       "category": "ai",
       "description": "LLM and capability evaluation rubrics",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-git",
@@ -196,7 +218,8 @@
       "category": "code",
       "description": "Git repository inspection and operations",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-github",
@@ -204,7 +227,8 @@
       "category": "code",
       "description": "GitHub repository, pull request, issue, and CI inspection as governed capabilities",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-radicle",
@@ -212,7 +236,8 @@
       "category": "code",
       "description": "Radicle p2p code forge (sync, patch, issue, repo identity)",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-ci",
@@ -220,7 +245,8 @@
       "category": "code",
       "description": "Run package test suites as governed evidence-producing invocations",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-jobs",
@@ -228,7 +254,8 @@
       "category": "infra",
       "description": "Run any capability as a polled background job",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-launchd",
@@ -236,7 +263,8 @@
       "category": "infra",
       "description": "Govern macOS launchd (LaunchAgent) services",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-process",
@@ -244,7 +272,8 @@
       "category": "infra",
       "description": "Governed subprocess/CLI execution",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-container",
@@ -252,7 +281,8 @@
       "category": "infra",
       "description": "Docker/OCI container execution",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-kubernetes",
@@ -260,7 +290,8 @@
       "category": "infra",
       "description": "Kubernetes cluster management as governed capabilities",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-secrets",
@@ -268,7 +299,8 @@
       "category": "infra",
       "description": "Runtime credential injection from env/file/memory backends",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-release",
@@ -276,7 +308,8 @@
       "category": "infra",
       "description": "Release pipeline operations (bump, sync, tag, publish)",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-workflow",
@@ -284,7 +317,8 @@
       "category": "infra",
       "description": "Durable workflow execution tracking with injectable backend",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-state-machine",
@@ -292,7 +326,8 @@
       "category": "infra",
       "description": "Governed finite state machines",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-delegation",
@@ -300,7 +335,8 @@
       "category": "agents",
       "description": "Governed work handoff and delegation lifecycle",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-planning",
@@ -308,7 +344,8 @@
       "category": "agents",
       "description": "Observable agent cognition (planning and reflection)",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-composition",
@@ -316,7 +353,8 @@
       "category": "agents",
       "description": "Compose capabilities into named reusable workflows",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-organization",
@@ -324,7 +362,8 @@
       "category": "agents",
       "description": "Organizational hierarchy and people lookup",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-safety",
@@ -332,7 +371,8 @@
       "category": "agents",
       "description": "Risk assessment and guardrail evaluation",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-conformance",
@@ -340,7 +380,8 @@
       "category": "agents",
       "description": "Static and runtime violation checker for capability implementations",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-asyncapi",
@@ -348,7 +389,8 @@
       "category": "agents",
       "description": "AsyncAPI spec parsing and channel-based messaging",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-rpa",
@@ -356,7 +398,8 @@
       "category": "agents",
       "description": "Browser/UI automation (RPA)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-aws",
@@ -364,7 +407,8 @@
       "category": "cloud",
       "description": "AWS infrastructure operations as governed capabilities",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-azure",
@@ -372,7 +416,8 @@
       "category": "cloud",
       "description": "Azure infrastructure operations as governed capabilities",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-gcp",
@@ -380,7 +425,8 @@
       "category": "cloud",
       "description": "Google Cloud Platform infrastructure operations",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-synology",
@@ -388,7 +434,8 @@
       "category": "cloud",
       "description": "Synology DSM file operations, tasks, and Container Manager",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-tailscale",
@@ -396,7 +443,8 @@
       "category": "cloud",
       "description": "Tailscale mesh networking for multi-host CHP clusters",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-vercel",
@@ -404,7 +452,8 @@
       "category": "cloud",
       "description": "Vercel deployment platform as governed capabilities",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-raspi",
@@ -412,7 +461,8 @@
       "category": "cloud",
       "description": "Raspberry Pi physical-world access (GPIO, camera, system stats)",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-messages",
@@ -420,7 +470,8 @@
       "category": "messaging",
       "description": "Conversation transcript storage across JSONL and remote CHP backends",
       "status": "certified",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-email",
@@ -428,7 +479,8 @@
       "category": "messaging",
       "description": "Outbound email via SMTP or Resend",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-notification",
@@ -436,7 +488,8 @@
       "category": "messaging",
       "description": "Multi-channel notification routing",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-slack",
@@ -444,7 +497,8 @@
       "category": "messaging",
       "description": "Slack messaging, interactive approvals, and signed-interaction ingest",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-postgres",
@@ -452,7 +506,8 @@
       "category": "data",
       "description": "Governed PostgreSQL query, mutation, and schema introspection",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-spreadsheet",
@@ -460,7 +515,8 @@
       "category": "data",
       "description": "CSV and spreadsheet read/write",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-form",
@@ -468,7 +524,8 @@
       "category": "data",
       "description": "Structured form definition, submission, and retrieval",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-knowledge-graph",
@@ -476,7 +533,8 @@
       "category": "data",
       "description": "Knowledge graph with injectable graph backend",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-preference",
@@ -484,7 +542,8 @@
       "category": "data",
       "description": "Per-agent/per-user preference storage",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-calendar",
@@ -492,7 +551,8 @@
       "category": "data",
       "description": "Calendar event management",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-notion",
@@ -500,7 +560,8 @@
       "category": "data",
       "description": "Notion pages and databases as governed capabilities",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-jira",
@@ -508,7 +569,8 @@
       "category": "data",
       "description": "Jira Cloud issue management",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-linear",
@@ -516,7 +578,8 @@
       "category": "data",
       "description": "Linear project management via GraphQL",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-audit",
@@ -524,7 +587,8 @@
       "category": "platform",
       "description": "Queryable audit log over the host evidence store",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-registry",
@@ -532,7 +596,8 @@
       "category": "platform",
       "description": "Governed capability discovery registry over the host catalog",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-auth",
@@ -540,7 +605,8 @@
       "category": "platform",
       "description": "Machine-to-machine OAuth2 client credentials and JWT validation",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-host",
@@ -548,7 +614,8 @@
       "category": "infra",
       "description": "Report and update the CHP host runtime on a node (governed self-update)",
       "status": "certified",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-mlx",
@@ -556,7 +623,8 @@
       "category": "ai",
       "description": "Apple Silicon native text generation via a local mlx_lm server",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-devloop",
@@ -564,7 +632,8 @@
       "category": "platform",
       "description": "bounded recursive self-improvement (propose + gate new capabilities)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-flywheel",
@@ -572,7 +641,8 @@
       "category": "platform",
       "description": "the recursive flywheel's decision steps (curate + promotion gate + evaluate_and_gate)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-matrix",
@@ -580,7 +650,8 @@
       "category": "messaging",
       "description": "Matrix messaging + human-in-the-loop approvals as governed CHP capabilities (composes through chp.adapters.http)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-capscan",
@@ -588,7 +659,8 @@
       "category": "platform",
       "description": "Codebase capability scanner \u2014 surfaces candidate adapters & capabilities (powers onboarding)",
       "status": "experimental",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-stewards",
@@ -596,7 +668,8 @@
       "category": "platform",
       "description": "Run the offline steward fleet (emission/conformance/doc/onboarding/demand) on-demand",
       "status": "experimental",
-      "tier": 1
+      "tier": 1,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-anchore",
@@ -604,7 +677,8 @@
       "category": "cloud",
       "description": "CHP adapter \u2014 anchore.io API as governed capabilities (openapi-backed, generated)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-telemetry",
@@ -612,7 +686,8 @@
       "category": "platform",
       "description": "emit agent/LLM runs as standard OpenTelemetry GenAI spans",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     },
     {
       "id": "chp-adapter-wiremock",
@@ -620,7 +695,8 @@
       "category": "code",
       "description": "CHP adapter \u2014 WireMock admin API as governed capabilities (openapi-backed; test the factory)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "publisher_key_id": "d20d8b42b94c3375"
     }
   ],
   "community": []
