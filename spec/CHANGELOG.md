@@ -5,7 +5,7 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
-## [Unreleased] — additive over 0.2
+## [0.2.1] — additive over 0.2 — **released 2026-07-09**
 
 ### Added
 - **Deferred execution rides the submitting correlation** (chp-v0.2.md §7,
