@@ -348,6 +348,7 @@ class HostAdapter(BaseAdapter):
             "properties": {
                 "version": {"type": "string", "description": "Pin chp-core/chp-host to this version."},
                 "channel": {"type": "string", "enum": ["github", "pypi"]},
+                "require_provenance": {"type": "boolean", "default": False, "description": "Verify every package's signed provenance BEFORE upgrading any (spec section 9, atomic)."},
             },
             "additionalProperties": False,
         },
@@ -358,6 +359,16 @@ class HostAdapter(BaseAdapter):
         before = _host_version()
         # `chp-host update` restarts by default (the flag is --no-restart).
         args = ["update"]
+        if payload.get("require_provenance"):
+            args += ["--require-provenance"]
+            store_path = getattr(getattr(getattr(ctx, "host", None), "store", None), "path", None)
+            if store_path and store_path != ":memory:":
+                child = ctx.child_correlation()
+                args += ["--evidence-store", str(store_path),
+                         "--correlation-id", str(child.correlation_id),
+                         "--host-id", str(getattr(ctx.host, "host_id", "") or "unknown")]
+                if child.causation_id:
+                    args += ["--causation-id", str(child.causation_id)]
         if payload.get("version"):
             args += ["--version", str(payload["version"])]
         if payload.get("channel"):

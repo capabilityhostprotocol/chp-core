@@ -1747,6 +1747,31 @@ def _cmd_update(args: argparse.Namespace) -> int:
     # the old GitHub-release --find-links page was never populated by release.yml.
     cmd = [sys.executable, "-m", "pip", "install", "--upgrade", *targets]
 
+    if getattr(args, "require_provenance", False):
+        # §9 gate, ATOMIC across the whole set: verify every target's artifact
+        # before installing ANY of them (a half-verified upgrade is the same
+        # failure class as a silently-partial evidence bundle).
+        import argparse as _argparse
+        verified_wheels: list[str] = []
+        for target in targets:
+            package = target.split("==")[0].split("[")[0]
+            shim = _argparse.Namespace(
+                package=package, version=(pin if "==" in target else None),
+                provenance=None,
+                publisher_key=getattr(args, "publisher_key", None),
+                publisher_domain=getattr(args, "publisher_domain", None),
+                evidence_store=getattr(args, "evidence_store", None),
+                correlation_id=getattr(args, "correlation_id", None),
+                causation_id=getattr(args, "causation_id", None),
+                host_id=getattr(args, "host_id", None),
+            )
+            stmt = _verify_install_provenance(shim, None, _log)
+            if stmt is None:
+                _log(f"ERROR: provenance gate refused {package} — NO packages updated.")
+                return 1
+            verified_wheels.append(stmt["_wheel_path"])
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", *verified_wheels]
+
     _log(f"==> Updating {len(targets)} CHP packages (from chp-host {before})"
          f"{f' → pin {pin}' if pin else ''}...")
     if subprocess.run(cmd).returncode != 0:
@@ -1872,6 +1897,62 @@ def _append_install_event(args: argparse.Namespace, event_type: str, payload: di
     ))
 
 
+_REGISTRY_URL = ("https://raw.githubusercontent.com/capabilityhostprotocol/"
+                 "chp-core/main/registry/adapters.json")
+
+
+def _registry_publisher_pin(package: str, log) -> str | None:
+    """The official registry's publisher_key_id for *package*, best-effort.
+
+    Sources in order: a local repo checkout (./registry/adapters.json walking
+    up from cwd), $CHP_REGISTRY_URL, then the public registry on GitHub. The
+    registry rides the same trust domain as the release assets the statement
+    itself comes from — it narrows TOFU, it does not replace verification."""
+    import json as _json
+    import urllib.request
+
+    candidates: list[str] = []
+    d = Path.cwd()
+    for _ in range(4):
+        candidates.append(str(d / "registry" / "adapters.json"))
+        d = d.parent
+    url = os.environ.get("CHP_REGISTRY_URL", _REGISTRY_URL)
+
+    data = None
+    for c in candidates:
+        try:
+            data = _json.loads(Path(c).read_text())
+            break
+        except Exception:
+            continue
+    if data is None:
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310
+                data = _json.loads(resp.read().decode())
+        except Exception:
+            return None
+    for entry in data.get("official", []):
+        if entry.get("id") == package or entry.get("pypi") == package:
+            pin = entry.get("publisher_key_id")
+            if pin:
+                log(f"==> registry pre-pin for {package}: publisher key {pin}")
+            return pin
+    return None
+
+
+def _cmd_publishers_trust(args: argparse.Namespace) -> int:
+    """Explicit pre-pin: trust <key_id> for <package> before any install."""
+    from .publishers import pin_or_check_publisher
+    status, detail = pin_or_check_publisher(
+        args.package, args.key_id, getattr(args, "public_key", None), trust="pinned")
+    if status == "mismatch":
+        print(f"REFUSED: {args.package} already pinned to {detail} — "
+              f"run `chp-host publishers reset {args.package}` first", file=sys.stderr)
+        return 1
+    print(f"publisher {args.key_id} {status} for {args.package}")
+    return 0
+
+
 def _verify_install_provenance(args: argparse.Namespace, url: str | None, log) -> dict | None:
     """The §9 gate: pip-download the artifact, hash it, verify the publisher's
     signed statement (+ publisher pin), refuse on any failure. Returns the
@@ -1932,10 +2013,20 @@ def _verify_install_provenance(args: argparse.Namespace, url: str | None, log) -
         _reject("provenance verification failed", {"checks": v.checks, "reason": v.reason})
         return None
 
-    # 4. Publisher trust: explicit domain assertion, else pin-or-TOFU.
+    # 4. Publisher trust: explicit domain assertion, else registry pre-pin,
+    #    else pin-or-TOFU.
     pub = stmt.get("publisher") or {}
     sig_key = (stmt.get("signature") or {}).get("key_id")
     want_domain = getattr(args, "publisher_domain", None)
+    if not getattr(args, "publisher_key", None) and not want_domain:
+        registry_pin = _registry_publisher_pin(args.package, log)
+        if registry_pin and registry_pin != sig_key:
+            _reject("registry pre-pin mismatch — statement signed by a key the "
+                    "official registry does not list for this package",
+                    {"presented": sig_key, "registry_pin": registry_pin})
+            return None
+        if registry_pin:
+            args.publisher_key = registry_pin  # upgrades the pin trust below
     if want_domain and v.anchored_domain != want_domain:
         _reject("publisher domain anchor mismatch",
                 {"expected": want_domain, "anchored": v.anchored_domain})
@@ -2257,6 +2348,15 @@ def build_parser() -> argparse.ArgumentParser:
     update_cmd = sub.add_parser(
         "update", help="Upgrade CHP packages on this node and restart its services.")
     update_cmd.add_argument("--version", help="Pin chp-core/chp-host to this version (enables rollback).")
+    update_cmd.add_argument("--require-provenance", dest="require_provenance",
+                            action="store_true",
+                            help="Verify every package's signed provenance BEFORE upgrading any (atomic).")
+    update_cmd.add_argument("--publisher-key", dest="publisher_key", default=None)
+    update_cmd.add_argument("--publisher-domain", dest="publisher_domain", default=None)
+    update_cmd.add_argument("--evidence-store", dest="evidence_store", default=None)
+    update_cmd.add_argument("--correlation-id", dest="correlation_id", default=None)
+    update_cmd.add_argument("--causation-id", dest="causation_id", default=None)
+    update_cmd.add_argument("--host-id", dest="host_id", default=None)
     update_cmd.add_argument("--channel", choices=["github", "pypi"], default="pypi",  # deprecated no-op
                             help="Install source (default: github release + PyPI fallback).")
     update_cmd.add_argument("--no-restart", dest="restart", action="store_false",
@@ -2304,6 +2404,12 @@ def build_parser() -> argparse.ArgumentParser:
     publishers_sub = publishers_cmd.add_subparsers(dest="publishers_command", required=True)
     pub_list = publishers_sub.add_parser("list", help="Show pinned publishers.")
     pub_list.set_defaults(func=_cmd_publishers_list)
+    pub_trust = publishers_sub.add_parser(
+        "trust", help="Pre-pin a publisher key for a package (before any install).")
+    pub_trust.add_argument("package")
+    pub_trust.add_argument("key_id")
+    pub_trust.add_argument("--public-key", dest="public_key", default=None)
+    pub_trust.set_defaults(func=_cmd_publishers_trust)
     pub_reset = publishers_sub.add_parser(
         "reset", help="Clear a package's publisher pin (deliberate recovery).")
     pub_reset.add_argument("package")
