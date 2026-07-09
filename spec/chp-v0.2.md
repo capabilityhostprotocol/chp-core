@@ -423,7 +423,8 @@ publisher's signed claim that they built an exact artifact:
 attestation (binding + temporal validity at `created_at`); the DID anchor when
 present; and — when the verifier holds the artifact — `wheel_sha256` equality.
 Vector: `test-vectors/adapter-provenance.json` (verified by both reference
-implementations and `verify.mjs`).
+implementations and `verify.mjs`). Ecosystem interop (sigstore, SLSA,
+PEP 740): [docs/security/provenance-interop.md](../docs/security/provenance-interop.md).
 
 **Install-time gate.** An installer operating in required-provenance mode MUST
 obtain the artifact *without executing it*, hash it, verify the statement, and
@@ -441,6 +442,14 @@ assertion when the operator has one; otherwise trust-on-first-use — the first
 signed by a different key MUST be refused until an operator deliberately
 resets the pin. A registry entry MAY carry `publisher_key_id` to pre-pin. The
 statement is discovered beside the artifact (the reference convention:
-`<artifact-filename>.chp-provenance.json` attached to the release) or supplied
-explicitly. Publisher-key rotation continuity is a stated gap of this tier
-(statements carry no key history); recovery is the deliberate pin reset.
+`<artifact-filename>.chp-provenance.json` attached to the release, with a
+repository-committed `provenance/v<version>/` directory as fallback) or
+supplied explicitly.
+
+**Publisher-key rotation** reuses §3.2: a statement MAY carry the publisher's
+`key_history` (continuity statements, omitted when empty — pre-rotation
+statements are byte-identical). A verifier pinned to an earlier key MUST
+accept the new key only by walking the chain from its OWN pin, each hop
+verified under the key trusted so far — self-published history cannot
+self-vouch. An unwalkable change of key remains a hard mismatch; recovery is
+the deliberate pin reset.

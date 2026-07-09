@@ -763,7 +763,8 @@ def build_provenance_statement(package: str, version: str, wheel_sha256: str,
                                host_key: HostKey, *, publisher_id: str,
                                created_at: str,
                                valid_until: str | None = None,
-                               anchors: list[dict] | None = None) -> dict:
+                               anchors: list[dict] | None = None,
+                               key_history: list[dict] | None = None) -> dict:
     """A publisher's signed claim: "I built this exact artifact" (proposal 0001,
     chp-v0.2.md §9).
 
@@ -791,6 +792,13 @@ def build_provenance_statement(package: str, version: str, wheel_sha256: str,
             publisher_id, host_key, valid_from=created_at,
             valid_until=valid_until, anchors=anchors),
     }
+    # Rotation continuity (§3.2, applied to publishers): the statement carries
+    # the key's rotation lineage so a verifier pinned to an OLD key can walk to
+    # this one. Omit-when-empty — pre-rotation statements are byte-identical.
+    # The history cannot self-vouch: the walk verifies each hop under the key
+    # the VERIFIER already trusts.
+    if key_history:
+        stmt["publisher"]["key_history"] = key_history
     stmt["signature"] = {
         "algorithm": SIGNATURE_ALGORITHM,
         "key_id": host_key.key_id,

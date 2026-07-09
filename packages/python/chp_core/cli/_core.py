@@ -640,6 +640,7 @@ def cmd_provenance_sign(args: argparse.Namespace) -> int:
         print(f"no signing key in {key_dir} — run `chp keygen` first", file=sys.stderr)
         return 1
     anchors = signing.load_configured_anchors(key_dir) or None
+    key_history = signing.load_key_history(key_dir) or None
 
     written = []
     for raw in args.files:
@@ -654,7 +655,8 @@ def cmd_provenance_sign(args: argparse.Namespace) -> int:
         sha = hashlib.sha256(p.read_bytes()).hexdigest()
         stmt = signing.build_provenance_statement(
             package, version, sha, key,
-            publisher_id=args.publisher_id, created_at=utc_now(), anchors=anchors)
+            publisher_id=args.publisher_id, created_at=utc_now(), anchors=anchors,
+            key_history=key_history)
         out = p.with_name(p.name + ".chp-provenance.json")
         out.write_text(json.dumps(stmt, indent=2, sort_keys=True) + "\n")
         written.append({"artifact": p.name, "package": package, "version": version,

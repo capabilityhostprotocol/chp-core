@@ -106,6 +106,13 @@
               "type": "string"
             }
           }
+        },
+        "key_history": {
+          "type": "array",
+          "description": "OPTIONAL rotation lineage (spec section 3.2 applied to publishers): continuity statements, each signed by the OLD key it names, so a verifier pinned to an earlier key can walk to the signing key. Omitted when empty. The history cannot self-vouch - the walk verifies each hop under the verifier's OWN pin.",
+          "items": {
+            "type": "object"
+          }
         }
       }
     },

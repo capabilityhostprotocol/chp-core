@@ -77,3 +77,44 @@ class TestRegistryPrePin:
         sub = root / "a" / "b"; sub.mkdir(parents=True)
         monkeypatch.chdir(sub)
         assert _registry_publisher_pin("chp-adapter-x", lambda m: None) == "cafecafecafecafe"
+
+
+class TestPublisherRotationContinuity:
+    def test_rotated_key_accepted_via_continuity_chain(self, tmp_path, monkeypatch):
+        from chp_core import signing
+        _isolate(tmp_path, monkeypatch)
+        old = signing.generate_keypair(tmp_path / "pk")
+        publishers.pin_or_check_publisher("chp-adapter-x", old.key_id, old.public_key_b64)
+        new, _stmt = signing.rotate_keypair(tmp_path / "pk")
+        history = signing.load_key_history(tmp_path / "pk")
+        status, key = publishers.pin_or_check_publisher(
+            "chp-adapter-x", new.key_id, new.public_key_b64, key_history=history)
+        assert status == "rotated" and key == new.key_id
+        entry = publishers.load_publishers()["publishers"]["chp-adapter-x"]
+        assert entry["key_id"] == new.key_id and entry["trust"] == "rotated"
+
+    def test_attacker_self_history_rejected(self, tmp_path, monkeypatch):
+        from chp_core import signing
+        _isolate(tmp_path, monkeypatch)
+        honest = signing.generate_keypair(tmp_path / "honest")
+        publishers.pin_or_check_publisher("chp-adapter-x", honest.key_id, honest.public_key_b64)
+        # attacker publishes a "history" rooted at THEIR OWN key, not the pin
+        signing.generate_keypair(tmp_path / "evil")
+        evil_new, _ = signing.rotate_keypair(tmp_path / "evil")
+        evil_history = signing.load_key_history(tmp_path / "evil")
+        status, pinned = publishers.pin_or_check_publisher(
+            "chp-adapter-x", evil_new.key_id, evil_new.public_key_b64,
+            key_history=evil_history)
+        assert status == "mismatch" and pinned == honest.key_id
+
+    def test_two_hop_rotation_walks(self, tmp_path, monkeypatch):
+        from chp_core import signing
+        _isolate(tmp_path, monkeypatch)
+        k1 = signing.generate_keypair(tmp_path / "pk")
+        publishers.pin_or_check_publisher("chp-adapter-x", k1.key_id, k1.public_key_b64)
+        signing.rotate_keypair(tmp_path / "pk")
+        k3, _ = signing.rotate_keypair(tmp_path / "pk")
+        history = signing.load_key_history(tmp_path / "pk")
+        status, key = publishers.pin_or_check_publisher(
+            "chp-adapter-x", k3.key_id, k3.public_key_b64, key_history=history)
+        assert status == "rotated" and key == k3.key_id

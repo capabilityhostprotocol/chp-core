@@ -1869,6 +1869,7 @@ def _record_install_provenance(args: argparse.Namespace, package: str,
 
 
 _PROVENANCE_RELEASE_BASE = "https://github.com/capabilityhostprotocol/chp-core/releases/download"
+_PROVENANCE_RAW_BASE = "https://raw.githubusercontent.com/capabilityhostprotocol/chp-core/main"
 
 
 def _append_install_event(args: argparse.Namespace, event_type: str, payload: dict) -> None:
@@ -1989,20 +1990,28 @@ def _verify_install_provenance(args: argparse.Namespace, url: str | None, log) -
     wheel_sha = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
 
     # 2. Fetch the statement: explicit --provenance, else the release-asset convention.
-    prov_src = getattr(args, "provenance", None)
-    if not prov_src:
-        # Lockstep versioning: the wheel filename determines the asset name.
-        ver = wheel_path.name.split("-")[1]
-        prov_src = f"{_PROVENANCE_RELEASE_BASE}/v{ver}/{wheel_path.name}.chp-provenance.json"
-    try:
-        if str(prov_src).startswith(("http://", "https://")):
-            with urllib.request.urlopen(prov_src, timeout=20) as resp:  # noqa: S310
-                stmt = _json.loads(resp.read().decode())
-        else:
-            stmt = _json.loads(Path(prov_src).read_text())
-    except Exception as exc:
-        _reject("provenance statement unavailable", {"source": str(prov_src),
-                                                     "error": str(exc)[:200]})
+    ver = wheel_path.name.split("-")[1]
+    explicit = getattr(args, "provenance", None)
+    # Discovery fallback chain (§9): explicit source, else the release asset,
+    # else the repository-committed provenance/ directory (survives release-
+    # asset issues + CDN lag; same trust domain — the public repo).
+    sources = [explicit] if explicit else [
+        f"{_PROVENANCE_RELEASE_BASE}/v{ver}/{wheel_path.name}.chp-provenance.json",
+        f"{_PROVENANCE_RAW_BASE}/provenance/v{ver}/{wheel_path.name}.chp-provenance.json",
+    ]
+    stmt, errors = None, []
+    for prov_src in sources:
+        try:
+            if str(prov_src).startswith(("http://", "https://")):
+                with urllib.request.urlopen(prov_src, timeout=20) as resp:  # noqa: S310
+                    stmt = _json.loads(resp.read().decode())
+            else:
+                stmt = _json.loads(Path(prov_src).read_text())
+            break
+        except Exception as exc:
+            errors.append(f"{prov_src}: {str(exc)[:120]}")
+    if stmt is None:
+        _reject("provenance statement unavailable", {"sources_tried": errors})
         return None
 
     # 3. Verify statement + artifact hash offline.
@@ -2034,7 +2043,8 @@ def _verify_install_provenance(args: argparse.Namespace, url: str | None, log) -
     trust = ("anchored" if want_domain
              else "pinned" if getattr(args, "publisher_key", None) else "tofu")
     status, pinned = pin_or_check_publisher(args.package, str(sig_key),
-                                            pub.get("public_key"), trust=trust)
+                                            pub.get("public_key"), trust=trust,
+                                            key_history=pub.get("key_history"))
     if status == "mismatch":
         _reject("publisher key mismatch — possible supply-chain substitution",
                 {"presented": sig_key, "pinned": pinned,

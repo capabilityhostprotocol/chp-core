@@ -39,14 +39,22 @@ def save_publishers(data: dict) -> None:
 
 
 def pin_or_check_publisher(package: str, key_id: str, public_key: str | None,
-                           trust: str = "tofu") -> tuple[str, str | None]:
+                           trust: str = "tofu",
+                           key_history: list | None = None) -> tuple[str, str | None]:
     """Returns (status, detail):
       - ("pinned", key_id)   first verified publisher for this package — recorded.
       - ("ok", key_id)       matches the pin.
-      - ("mismatch", pinned) a DIFFERENT key signed this package's statement —
-                             refuse; recover deliberately via reset_publisher.
-    A trust upgrade (tofu → pinned/anchored) is recorded on match.
+      - ("rotated", key_id)  the key changed BUT a valid continuity chain (each
+                             hop signed by the key we already trusted) links the
+                             pinned key to the presented one — re-pinned.
+      - ("mismatch", pinned) a DIFFERENT key with no valid continuity — refuse;
+                             recover deliberately via reset_publisher.
+    ``key_history`` is the publisher's rotation lineage from the statement
+    (spec §3.2 applied to §9). The walk trusts each hop only when it verifies
+    under the key ALREADY pinned — self-published history cannot self-vouch.
     """
+    from chp_core.signing import verify_continuity
+
     data = load_publishers()
     entry = data["publishers"].get(package)
     if entry is None:
@@ -58,11 +66,26 @@ def pin_or_check_publisher(package: str, key_id: str, public_key: str | None,
         save_publishers(data)
         return ("pinned", key_id)
     if entry.get("key_id") == key_id:
-        rank = {"tofu": 0, "pinned": 1, "anchored": 2}
+        rank = {"tofu": 0, "pinned": 1, "rotated": 1, "anchored": 2}
         if rank.get(trust, 0) > rank.get(entry.get("trust", "tofu"), 0):
             entry["trust"] = trust
             save_publishers(data)
         return ("ok", key_id)
+    # Rotation path: walk pinned → presented, each hop verified under the key
+    # trusted so far (starting from OUR pin — mesh.py's exact argument).
+    trusted_id, trusted_pub = entry.get("key_id"), entry.get("public_key")
+    for stmt in key_history or []:
+        if (stmt.get("old_key_id") == trusted_id
+                and (trusted_pub is None or stmt.get("old_public_key") == trusted_pub)
+                and verify_continuity(stmt)):
+            trusted_id = stmt.get("new_key_id")
+            trusted_pub = stmt.get("new_public_key")
+            if trusted_id == key_id:
+                entry["key_id"] = key_id
+                entry["public_key"] = trusted_pub
+                entry["trust"] = "rotated"
+                save_publishers(data)
+                return ("rotated", key_id)
     return ("mismatch", entry.get("key_id"))
 
 
