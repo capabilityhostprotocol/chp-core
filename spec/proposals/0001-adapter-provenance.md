@@ -1,6 +1,6 @@
 # 0001: Signed Adapter Provenance
 
-- **Status:** proposal
+- **Status:** shipped (2026-07-09)
 - **Issue:** rad:42d7152
 - **Affects:** chp-governance-v0.2.md (adapter namespace §5, new provenance §), reserved-names (event types), host wire surface (install path); canonical bytes: **no** (new signed statement object, additive)
 
@@ -60,9 +60,20 @@ statement is a new `kind`, versioned by its own field set under the
 omit-when-empty rule. Byte-compat gate: all published vectors unchanged; a new
 `adapter-provenance.json` vector lands with the implementation.
 
-## Shipped as (fill on landing)
+## Shipped as
 
-- Spec: —
-- Vectors: —
-- Guards: —
-- Implementations: —
+- Spec: chp-v0.2.md §9 (Supply Chain — Adapter Provenance); reserved
+  `SUPPLY_CHAIN_EVIDENCE_TYPES` (reserved-names.md); declared in
+  CHANGELOG [0.2.2].
+- **Refinement vs this proposal:** `record_sha256` was dropped from the signed
+  statement — pip rewrites RECORD at install, so it is not a pre-install
+  invariant. The statement signs `wheel_sha256` (the artifact file); the
+  installed-RECORD fingerprint remains evidence-side in `host_adapter_installed`.
+- Vectors: `test-vectors/adapter-provenance.json` (+ schema
+  `adapter-provenance.schema.json`).
+- Guards: `provenance_vector_verifies` (protocol_checks).
+- Implementations: Python `signing.build/verify_provenance_statement`,
+  `chp provenance sign|verify`, `chp verify-evidence --bundle` dispatch,
+  `chp-host install-adapter --require-provenance` + `~/.chp/publishers.json`
+  pin store (`chp-host publishers list|reset`); TypeScript
+  `verifyProvenanceStatement` (chp-sdk) + `verify.mjs` reference branch.

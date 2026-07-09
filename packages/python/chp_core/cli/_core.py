@@ -246,6 +246,22 @@ def cmd_verify_evidence(args: argparse.Namespace) -> int:
 
         with open(args.bundle) as fh:
             bundle = json.load(fh)
+        # Adapter provenance statements (supply chain, chp-v0.2.md §9).
+        if bundle.get("kind") == "adapter-provenance":
+            pv = signing.verify_provenance_statement(
+                bundle, expected_key_id=getattr(args, "expect_key", None))
+            print(json.dumps({
+                "kind": "adapter-provenance",
+                "package": bundle.get("package"),
+                "version": bundle.get("version"),
+                "publisher": (bundle.get("publisher") or {}).get("host_id"),
+                "anchored_domain": pv.anchored_domain,
+                "anchored_did": pv.anchored_did,
+                "valid": pv.valid,
+                "checks": pv.checks,
+                "reason": pv.reason,
+            }, indent=2))
+            return 0 if pv.valid else 1
         # Task bundles (cross-host, chp-v0.2.md §8) dispatch on kind.
         if bundle.get("kind") == "task-bundle":
             tv = signing.verify_task_bundle(bundle)
@@ -587,3 +603,86 @@ def print_json(value: Any, data: Any | None = None) -> None:
         return
     print(f"\n## {value}")
     print(json.dumps(data, indent=2, sort_keys=True))
+
+
+# ---------------------------------------------------------------------------
+# chp provenance — supply-chain statements (chp-v0.2.md §9, proposal 0001)
+# ---------------------------------------------------------------------------
+
+def _dist_name_version(filename: str) -> tuple[str, str]:
+    """(package, version) from a wheel or sdist filename.
+
+    Wheels: {distribution}-{version}(-{build})?-{python}-{abi}-{platform}.whl —
+    distribution uses underscores; normalize back to hyphens (PEP 503-ish).
+    Sdists: {name}-{version}.tar.gz.
+    """
+    if filename.endswith(".whl"):
+        parts = filename[:-4].split("-")
+        return parts[0].replace("_", "-"), parts[1]
+    if filename.endswith(".tar.gz"):
+        stem = filename[: -len(".tar.gz")]
+        name, _, version = stem.rpartition("-")
+        return name.replace("_", "-"), version
+    raise ValueError(f"not a wheel or sdist: {filename}")
+
+
+def cmd_provenance_sign(args: argparse.Namespace) -> int:
+    import hashlib
+    import sys
+    from pathlib import Path
+
+    from .. import signing
+    from ..types import utc_now
+
+    key_dir = args.key_dir or signing.resolve_key_dir(args.publisher_id)
+    key = signing.load_host_key(key_dir)
+    if key is None or not key.can_sign:
+        print(f"no signing key in {key_dir} — run `chp keygen` first", file=sys.stderr)
+        return 1
+    anchors = signing.load_configured_anchors(key_dir) or None
+
+    written = []
+    for raw in args.files:
+        p = Path(raw)
+        if p.name.endswith(".chp-provenance.json"):
+            continue  # allow globs over a dist dir that already has statements
+        try:
+            package, version = _dist_name_version(p.name)
+        except ValueError as exc:
+            print(f"skipping {p.name}: {exc}", file=sys.stderr)
+            continue
+        sha = hashlib.sha256(p.read_bytes()).hexdigest()
+        stmt = signing.build_provenance_statement(
+            package, version, sha, key,
+            publisher_id=args.publisher_id, created_at=utc_now(), anchors=anchors)
+        out = p.with_name(p.name + ".chp-provenance.json")
+        out.write_text(json.dumps(stmt, indent=2, sort_keys=True) + "\n")
+        written.append({"artifact": p.name, "package": package, "version": version,
+                        "wheel_sha256": sha, "statement": str(out)})
+    print(json.dumps({"publisher": args.publisher_id, "key_id": key.key_id,
+                      "signed": written}, indent=2))
+    return 0 if written else 1
+
+
+def cmd_provenance_verify(args: argparse.Namespace) -> int:
+    import hashlib
+    from pathlib import Path
+
+    from .. import signing
+
+    with open(args.statement) as fh:
+        stmt = json.load(fh)
+    sha = None
+    if args.wheel:
+        sha = hashlib.sha256(Path(args.wheel).read_bytes()).hexdigest()
+    v = signing.verify_provenance_statement(
+        stmt, expected_key_id=args.expect_key, wheel_sha256=sha)
+    print(json.dumps({
+        "kind": "adapter-provenance",
+        "package": stmt.get("package"), "version": stmt.get("version"),
+        "publisher": (stmt.get("publisher") or {}).get("host_id"),
+        "anchored_domain": v.anchored_domain, "anchored_did": v.anchored_did,
+        "artifact_checked": sha is not None,
+        "valid": v.valid, "checks": v.checks, "reason": v.reason,
+    }, indent=2))
+    return 0 if v.valid else 1

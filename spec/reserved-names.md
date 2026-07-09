@@ -25,6 +25,7 @@ extensions MUST be reverse-DNS namespaced (`com.acme.…`) — see
 | `SAFETY_EVIDENCE_TYPES` | `safety_action_approved`, `safety_action_blocked`, `safety_assessment_completed`, `safety_assessment_started`, `safety_guardrail_triggered` |
 | `SESSION_EVIDENCE_TYPES` | `agent_session_completed`, `agent_session_resumed`, `agent_session_started` |
 | `STATE_MACHINE_EVIDENCE_TYPES` | `state_machine_blocked`, `state_machine_cancelled`, `state_machine_completed`, `state_machine_created`, `state_machine_failed`, `state_machine_transition_completed`, `state_machine_transition_started` |
+| `SUPPLY_CHAIN_EVIDENCE_TYPES` | `host_adapter_install_rejected`, `host_adapter_installed` |
 | `TRANSFORMATION_EVIDENCE_TYPES` | `transformation_completed`, `transformation_failed`, `transformation_started` |
 | `VERSION_CONTROL_EVIDENCE_TYPES` | `rc_tag_pushed`, `release_tag_pushed`, `version_bumped`, `version_control_diff_summarized`, `version_control_merge_readiness_verified`, `version_control_precommit_checked`, `version_control_release_bundle_generated`, `version_control_repo_inspected` |
 | `WORKFLOW_EVIDENCE_TYPES` | `workflow_completed`, `workflow_failed`, `workflow_started`, `workflow_step_completed`, `workflow_step_failed`, `workflow_step_started` |

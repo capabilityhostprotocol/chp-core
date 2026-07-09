@@ -72,6 +72,14 @@ FEDERATION_EVIDENCE_TYPES = {
     "task_participants_declared",
 }
 
+# Supply chain (chp-v0.2.md §9): the adapter-install lifecycle as evidence —
+# what code arrived (with its publisher-signed provenance statement when
+# verified) and what was REFUSED (a rejection is evidence, like a denial).
+SUPPLY_CHAIN_EVIDENCE_TYPES = {
+    "host_adapter_installed",
+    "host_adapter_install_rejected",
+}
+
 RETRIEVAL_EVIDENCE_TYPES = {
     "retrieval_started",
     "retrieval_completed",

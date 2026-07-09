@@ -12,6 +12,8 @@ from ._core import (
     cmd_invoke,
     cmd_anchor_did,
     cmd_keygen,
+    cmd_provenance_sign,
+    cmd_provenance_verify,
     cmd_revoke_key,
     cmd_rotate_key,
     cmd_replay,
@@ -641,6 +643,25 @@ def build_parser() -> argparse.ArgumentParser:
     retention_apply_p.add_argument("--dry-run", action="store_true")
     retention_apply_p.add_argument("--vacuum", action="store_true", help="Compact the store after pruning.")
     retention_apply_p.set_defaults(func=cmd_retention_apply)
+
+    provenance_p = subcommands.add_parser(
+        "provenance",
+        help="Supply-chain provenance statements for adapter artifacts (spec §9).")
+    provenance_sub = provenance_p.add_subparsers(dest="provenance_command", required=True)
+    prov_sign = provenance_sub.add_parser(
+        "sign", help="Sign wheels/sdists: writes <file>.chp-provenance.json beside each.")
+    prov_sign.add_argument("files", nargs="+", help="Wheel/sdist files (globs ok).")
+    prov_sign.add_argument("--publisher-id", required=True, dest="publisher_id",
+                           help="Publisher identity the statements attest (a host_id).")
+    prov_sign.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
+    prov_sign.set_defaults(func=cmd_provenance_sign)
+    prov_verify = provenance_sub.add_parser(
+        "verify", help="Verify a provenance statement (and optionally the artifact).")
+    prov_verify.add_argument("statement", help="Path to a .chp-provenance.json statement.")
+    prov_verify.add_argument("--wheel", default=None, help="Artifact file to hash-check against the statement.")
+    prov_verify.add_argument("--expect-key", default=None, dest="expect_key",
+                             help="Require this publisher key_id.")
+    prov_verify.set_defaults(func=cmd_provenance_verify)
 
     keygen_p = subcommands.add_parser("keygen", help="Generate a host ed25519 signing keypair.")
     keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")

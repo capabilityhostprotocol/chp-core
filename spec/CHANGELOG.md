@@ -5,6 +5,20 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.2.2] — additive over 0.2.1 — **released 2026-07-09**
+
+### Added
+- **Adapter provenance** (chp-v0.2.md §9, [proposals/0001](proposals/0001-adapter-provenance.md)
+  → shipped): publisher-signed `adapter-provenance` statements over
+  `{kind, package, version, wheel_sha256, created_at, canonicalization}`;
+  install-time verification gate (hash-before-execute, refusal as the reserved
+  `host_adapter_install_rejected` event); publisher trust via explicit
+  pin/domain-anchor or per-package TOFU. New reserved family
+  `SUPPLY_CHAIN_EVIDENCE_TYPES`. *Vector: `test-vectors/adapter-provenance.json`
+  (both implementations + `verify.mjs`); guard `provenance_vector_verifies`.
+  Refinement vs the proposal: `record_sha256` stays evidence-side (pip rewrites
+  RECORD at install).*
+
 ## [0.2.1] — additive over 0.2 — **released 2026-07-09**
 
 ### Added

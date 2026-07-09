@@ -215,6 +215,72 @@ export async function verifyBundleResolved(
   }
 }
 
+// ── Adapter provenance — supply chain (chp-v0.2.md §9, proposal 0001) ───────
+
+const PROVENANCE_HEADER_FIELDS = [
+  'kind', 'package', 'version', 'wheel_sha256', 'created_at', 'canonicalization',
+] as const;
+
+/** Verify a publisher's adapter-provenance statement: header signature,
+ * publisher attestation (binding + temporal), DID anchor when present, and —
+ * when `wheelSha256` is supplied — that the artifact on hand is the signed one. */
+export function verifyProvenanceStatement(
+  stmt: Record<string, JsonValue>,
+  opts: { expectedKeyId?: string; wheelSha256?: string } = {},
+): BundleVerification {
+  const checks: Record<string, boolean> = {};
+  let anchoredDid: string | null = null;
+  checks.structure = stmt.kind === 'adapter-provenance'
+    && !!stmt.package && !!stmt.version && !!stmt.wheel_sha256;
+
+  const pub = (stmt.publisher as Record<string, JsonValue> | undefined) ?? {};
+  const pubKey = String(pub.public_key ?? '');
+  const sig = (stmt.signature as Record<string, JsonValue> | undefined) ?? {};
+  if (opts.expectedKeyId !== undefined && sig.key_id !== opts.expectedKeyId) {
+    return { valid: false, assurance: 'signed', checks, reason: `signed by unexpected key ${String(sig.key_id)}` };
+  }
+
+  const header: Record<string, JsonValue> = {};
+  for (const f of PROVENANCE_HEADER_FIELDS) header[f] = stmt[f] ?? null;
+  checks.signature = sig.algorithm === 'ed25519' && !!pubKey
+    && verifyCanon(pubKey, header, String(sig.signature ?? ''));
+
+  const att = pub.host_identity as Record<string, JsonValue> | undefined;
+  if (att) {
+    const claim: Record<string, JsonValue> = {
+      host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
+      valid_from: att.valid_from, valid_until: att.valid_until,
+    };
+    if ('anchors' in att) claim.anchors = att.anchors;
+    const created = (stmt.created_at as string | null) ?? null;
+    const vf = att.valid_from as string | null;
+    const vu = att.valid_until as string | null;
+    const temporalOk = (vf === null || created === null || vf <= created)
+      && (vu === null || created === null || created <= vu);
+    checks.publisher_identity = att.host_id === pub.host_id
+      && att.public_key === pubKey && temporalOk
+      && verifyCanon(pubKey, claim, att.signature as string);
+    const dAnchor = didAnchor(att);
+    if (dAnchor) {
+      checks.did_anchor = verifyDidAnchor(dAnchor, pubKey, String(pub.host_id ?? ''));
+      if (checks.did_anchor) anchoredDid = dAnchor.did as string;
+    }
+  } else {
+    checks.publisher_identity = false; // a provenance claim must say WHO
+  }
+
+  if (opts.wheelSha256 !== undefined) {
+    checks.artifact_hash = opts.wheelSha256 === stmt.wheel_sha256;
+  }
+
+  const valid = Object.values(checks).every(Boolean);
+  return {
+    valid, assurance: 'signed', checks, anchoredDid,
+    reason: valid ? undefined : 'provenance checks failed: '
+      + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
+  };
+}
+
 // ── Task bundles — cross-host verification unit (chp-v0.2.md §8) ────────────
 
 export interface TaskBundleVerification {

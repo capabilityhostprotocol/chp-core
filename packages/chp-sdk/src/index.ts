@@ -40,6 +40,7 @@ export {
   verifyDidAnchor,
   WELL_KNOWN_IDENTITY_PATH,
   verifyTaskBundle,
+  verifyProvenanceStatement,
   type BundleVerification,
   type TaskBundleVerification,
 } from './verify.js';

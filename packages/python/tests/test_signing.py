@@ -516,3 +516,49 @@ class TestAggregatedTaskBundle:
         task, _ = self._task(tmp_path)
         v = signing.verify_task_bundle(task)
         assert "participation" not in v.checks
+
+
+# ---------------------------------------------------------------------------
+# Adapter provenance (chp-v0.2.md §9, proposal 0001)
+# ---------------------------------------------------------------------------
+
+class TestAdapterProvenance:
+    def _stmt(self, tmp_path, **kw):
+        import hashlib
+        key = signing.generate_keypair(tmp_path / "pubkey")
+        sha = hashlib.sha256(b"wheel bytes").hexdigest()
+        stmt = signing.build_provenance_statement(
+            "chp-adapter-x", "1.2.3", sha, key,
+            publisher_id="acme-release", created_at="2026-07-09T00:00:00Z", **kw)
+        return stmt, key, sha
+
+    def test_round_trip_with_artifact_hash(self, tmp_path):
+        stmt, key, sha = self._stmt(tmp_path)
+        v = signing.verify_provenance_statement(stmt, wheel_sha256=sha)
+        assert v.valid and v.checks["artifact_hash"] and v.checks["publisher_identity"]
+
+    def test_tampered_artifact_fails_artifact_hash(self, tmp_path):
+        import hashlib
+        stmt, key, _ = self._stmt(tmp_path)
+        v = signing.verify_provenance_statement(
+            stmt, wheel_sha256=hashlib.sha256(b"EVIL").hexdigest())
+        assert not v.valid and v.checks["artifact_hash"] is False
+        assert v.checks["signature"] is True  # the statement itself is intact
+
+    def test_relabel_breaks_signature(self, tmp_path):
+        stmt, *_ = self._stmt(tmp_path)
+        for field in ("package", "version", "wheel_sha256"):
+            bad = dict(stmt); bad[field] = "tampered"
+            assert signing.verify_provenance_statement(bad).checks["signature"] is False
+
+    def test_expected_key_pin(self, tmp_path):
+        stmt, key, sha = self._stmt(tmp_path)
+        assert signing.verify_provenance_statement(stmt, expected_key_id=key.key_id).valid
+        v = signing.verify_provenance_statement(stmt, expected_key_id="deadbeefdeadbeef")
+        assert not v.valid and "unexpected key" in v.reason
+
+    def test_missing_attestation_fails(self, tmp_path):
+        stmt, *_ = self._stmt(tmp_path)
+        bad = dict(stmt); bad["publisher"] = {k: v for k, v in stmt["publisher"].items()
+                                             if k != "host_identity"}
+        assert signing.verify_provenance_statement(bad).checks["publisher_identity"] is False

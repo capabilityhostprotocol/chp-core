@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 
@@ -385,3 +385,62 @@ undetectably. Absence-proofs beyond declared sets are out of scope.
 
 `spec/test-vectors/task-bundle.json` is the fixture (two fixed-seed hosts with
 cross-host causation); `verify.mjs` verifies it from these rules alone.
+
+## 9. Supply Chain — Adapter Provenance
+
+Evidence is signed, task assemblies are signed, identities anchor to external
+roots — this section closes the remaining unsigned link: the **adapter code
+that produces the evidence**. An **adapter-provenance statement** is a
+publisher's signed claim that they built an exact artifact:
+
+```json
+{
+  "kind": "adapter-provenance",
+  "package": "chp-adapter-http", "version": "0.10.0",
+  "wheel_sha256": "hex64",
+  "created_at": "…", "canonicalization": "chp-stable-v1",
+  "publisher": {
+    "host_id": "…", "public_key": "base64…",
+    "host_identity": { …attestation, anchors ride inside (§3.1)… }
+  },
+  "signature": { "algorithm": "ed25519", "key_id": "…", "signature": "base64…" }
+}
+```
+
+- **The signature covers the canonical header** `{kind, package, version,
+  wheel_sha256, created_at, canonicalization}` — relabelling the package,
+  version, or artifact hash breaks it.
+- **`wheel_sha256` is the SHA-256 of the artifact file** — checkable *before
+  anything executes*. The installed-files fingerprint (`record_sha256`) is
+  deliberately NOT in the signed statement: installers rewrite `RECORD` at
+  install time, so it is not a pre-install invariant; it remains the
+  evidence-side fingerprint in `host_adapter_installed`.
+- **The publisher is a host identity** (§3): the attestation binds
+  `host_id ↔ public_key`, and anchors (§3.1) answer "whose?" through the same
+  roots as evidence bundles. No separate publisher PKI.
+
+**Verification** (all MUST pass): structure; header signature; publisher
+attestation (binding + temporal validity at `created_at`); the DID anchor when
+present; and — when the verifier holds the artifact — `wheel_sha256` equality.
+Vector: `test-vectors/adapter-provenance.json` (verified by both reference
+implementations and `verify.mjs`).
+
+**Install-time gate.** An installer operating in required-provenance mode MUST
+obtain the artifact *without executing it*, hash it, verify the statement, and
+refuse on any failure — recording the refusal as the reserved
+`host_adapter_install_rejected` event (a refusal is evidence, like a denial).
+A verified install SHOULD embed the statement in its `host_adapter_installed`
+evidence, upgrading the record from self-reported to publisher-signed. Both
+events are reserved (`SUPPLY_CHAIN_EVIDENCE_TYPES`) and, when the install was
+scheduled by an invocation, MUST ride the submitting correlation (§7, deferred
+execution).
+
+**Publisher trust** mirrors host trust: an explicit key pin or domain-anchor
+assertion when the operator has one; otherwise trust-on-first-use — the first
+*verified* install pins the publisher's key per package, and a later statement
+signed by a different key MUST be refused until an operator deliberately
+resets the pin. A registry entry MAY carry `publisher_key_id` to pre-pin. The
+statement is discovered beside the artifact (the reference convention:
+`<artifact-filename>.chp-provenance.json` attached to the release) or supplied
+explicitly. Publisher-key rotation continuity is a stated gap of this tier
+(statements carry no key history); recovery is the deliberate pin reset.

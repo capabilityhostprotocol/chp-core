@@ -391,6 +391,10 @@ class HostAdapter(BaseAdapter):
                 "adapter_name": {"type": "string", "description": "Short entry-point name to add to this host's profile, e.g. 'mlx'."},
                 "extras": {"type": "string", "description": "Optional-dependency extra to also install, e.g. 'serve' → chp-adapter-mlx[serve] (pulls the adapter's runtime tooling)."},
                 "restart": {"type": "boolean", "default": True},
+                "require_provenance": {"type": "boolean", "default": False, "description": "Verify the publisher's signed provenance statement against the artifact BEFORE installing (spec section 9)."},
+                "publisher_key": {"type": "string", "description": "Require this publisher key_id."},
+                "publisher_domain": {"type": "string", "description": "Require this domain anchor on the publisher attestation."},
+                "provenance": {"type": "string", "description": "Statement path/URL (default: GitHub release asset convention)."},
             },
             "required": ["package"],
             "additionalProperties": False,
@@ -427,6 +431,11 @@ class HostAdapter(BaseAdapter):
             profile = _profile_path_from_argv()
             if profile:
                 args += ["--profile", profile]
+        if payload.get("require_provenance"):
+            args += ["--require-provenance"]
+            for flag in ("publisher_key", "publisher_domain", "provenance"):
+                if payload.get(flag):
+                    args += [f"--{flag.replace('_', '-')}", str(payload[flag])]
         if payload.get("restart") is False:
             args += ["--no-restart"]
         pid = _spawn_detached_cli(args, "host-install-adapter-child.log")

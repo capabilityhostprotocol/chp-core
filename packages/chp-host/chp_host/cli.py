@@ -1756,6 +1756,14 @@ def _cmd_update(args: argparse.Namespace) -> int:
     after = _query_version("chp-host")
     _log(f"==> chp-host {before} → {after}")
 
+    # Provenance floor on the update path (§9): fingerprint what's now on disk.
+    for pkg in ("chp-core", "chp-host"):
+        try:
+            fp = _installed_fingerprint(pkg)
+            _log(f"==> provenance: {pkg}=={fp['version']} record_sha256={fp['record_sha256'][:16]}…")
+        except Exception:
+            pass
+
     if getattr(args, "restart", True):
         units = _restart_chp_services()
         _log(f"==> Restarted: {', '.join(units)}" if units
@@ -1801,11 +1809,12 @@ def _installed_fingerprint(package: str) -> dict:
 
 
 def _record_install_provenance(args: argparse.Namespace, package: str,
-                               source: str, log) -> None:
+                               source: str, log, statement: dict | None = None) -> None:
     """Post-install provenance: always append to ~/.chp/adapter-provenance.json;
     when the scheduling capability passed evidence coordinates, also append a
     `host_adapter_installed` event under the SUBMITTING correlation (deferred
-    execution rides the submitting chain — chp-v0.2.md §7)."""
+    execution rides the submitting chain — chp-v0.2.md §7). A verified §9
+    statement upgrades the record from self-reported to publisher-signed."""
     try:
         fp = _installed_fingerprint(package)
     except Exception as exc:  # fingerprinting must never fail the install
@@ -1813,6 +1822,8 @@ def _record_install_provenance(args: argparse.Namespace, package: str,
         return
     entry = {"package": package, "source": source, **fp,
              "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if statement is not None:
+        entry["provenance"] = statement  # the verified adapter-provenance statement
     try:
         prov_path = Path.home() / ".chp" / "adapter-provenance.json"
         prov_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1821,34 +1832,142 @@ def _record_install_provenance(args: argparse.Namespace, package: str,
         prov_path.write_text(json.dumps(existing, indent=2))
     except Exception as exc:
         log(f"WARNING: could not write adapter-provenance.json: {exc}")
-    log(f"==> provenance: {package}=={fp['version']} record_sha256={fp['record_sha256'][:16]}…")
+    log(f"==> provenance: {package}=={fp['version']} record_sha256={fp['record_sha256'][:16]}…"
+        + (" [publisher-signed]" if statement else ""))
 
+    try:
+        _append_install_event(args, "host_adapter_installed", entry)
+        if getattr(args, "correlation_id", None):
+            log(f"==> evidence: host_adapter_installed appended under {args.correlation_id}")
+    except Exception as exc:
+        log(f"WARNING: could not append install evidence: {exc}")
+
+
+_PROVENANCE_RELEASE_BASE = "https://github.com/capabilityhostprotocol/chp-core/releases/download"
+
+
+def _append_install_event(args: argparse.Namespace, event_type: str, payload: dict) -> None:
+    """Append a supply-chain event under the SUBMITTING correlation (§7 deferred
+    execution) when the scheduling capability passed evidence coordinates."""
     store_path = getattr(args, "evidence_store", None)
     corr_id = getattr(args, "correlation_id", None)
     if not store_path or not corr_id:
         return
-    try:
-        from chp_core.store import SQLiteEvidenceStore
-        from chp_core.types import CorrelationContext, ExecutionEvidence, new_id
+    from chp_core.store import SQLiteEvidenceStore
+    from chp_core.types import CorrelationContext, ExecutionEvidence, new_id
 
-        store = SQLiteEvidenceStore(store_path)
-        store.append(ExecutionEvidence(
-            event_id=new_id("evt"),
-            event_type="host_adapter_installed",
-            invocation_id=new_id("inv"),
-            capability_id="chp.adapters.host.install_adapter",
-            capability_version="1.0.0",
-            host_id=getattr(args, "host_id", None) or "unknown",
-            correlation=CorrelationContext(
-                correlation_id=corr_id,
-                causation_id=getattr(args, "causation_id", None) or None,
-            ),
-            payload=entry,
-            redacted=False,
-        ))
-        log(f"==> evidence: host_adapter_installed appended under {corr_id}")
+    SQLiteEvidenceStore(store_path).append(ExecutionEvidence(
+        event_id=new_id("evt"),
+        event_type=event_type,
+        invocation_id=new_id("inv"),
+        capability_id="chp.adapters.host.install_adapter",
+        capability_version="1.0.0",
+        host_id=getattr(args, "host_id", None) or "unknown",
+        correlation=CorrelationContext(
+            correlation_id=corr_id,
+            causation_id=getattr(args, "causation_id", None) or None,
+        ),
+        payload=payload,
+        redacted=False,
+    ))
+
+
+def _verify_install_provenance(args: argparse.Namespace, url: str | None, log) -> dict | None:
+    """The §9 gate: pip-download the artifact, hash it, verify the publisher's
+    signed statement (+ publisher pin), refuse on any failure. Returns the
+    verified statement dict (with `_wheel_path` for the exact-bytes install),
+    or None after logging + emitting `host_adapter_install_rejected`."""
+    import hashlib
+    import json as _json
+    import tempfile
+    import urllib.request
+
+    from chp_core import signing as _signing
+
+    from .publishers import pin_or_check_publisher
+
+    def _reject(reason: str, detail: dict | None = None) -> None:
+        log(f"REFUSED: {reason}")
+        _append_install_event(args, "host_adapter_install_rejected",
+                              {"package": args.package, "reason": reason, **(detail or {})})
+
+    # 1. Download (not install) the exact artifact.
+    tmp = tempfile.mkdtemp(prefix="chp-provenance-")
+    spec = url or (f"{args.package}=={args.version}" if getattr(args, "version", None)
+                   else args.package)
+    dl = subprocess.run([sys.executable, "-m", "pip", "download", "--no-deps",
+                         "-d", tmp, spec], capture_output=True, text=True)
+    if dl.returncode != 0:
+        _reject("artifact download failed", {"stderr": dl.stderr[-300:]})
+        return None
+    wheels = sorted(Path(tmp).glob("*.whl")) or sorted(Path(tmp).glob("*.tar.gz"))
+    if not wheels:
+        _reject("no artifact produced by pip download")
+        return None
+    wheel_path = wheels[0]
+    wheel_sha = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
+
+    # 2. Fetch the statement: explicit --provenance, else the release-asset convention.
+    prov_src = getattr(args, "provenance", None)
+    if not prov_src:
+        # Lockstep versioning: the wheel filename determines the asset name.
+        ver = wheel_path.name.split("-")[1]
+        prov_src = f"{_PROVENANCE_RELEASE_BASE}/v{ver}/{wheel_path.name}.chp-provenance.json"
+    try:
+        if str(prov_src).startswith(("http://", "https://")):
+            with urllib.request.urlopen(prov_src, timeout=20) as resp:  # noqa: S310
+                stmt = _json.loads(resp.read().decode())
+        else:
+            stmt = _json.loads(Path(prov_src).read_text())
     except Exception as exc:
-        log(f"WARNING: could not append install evidence: {exc}")
+        _reject("provenance statement unavailable", {"source": str(prov_src),
+                                                     "error": str(exc)[:200]})
+        return None
+
+    # 3. Verify statement + artifact hash offline.
+    v = _signing.verify_provenance_statement(
+        stmt, expected_key_id=getattr(args, "publisher_key", None) or None,
+        wheel_sha256=wheel_sha)
+    if not v.valid:
+        _reject("provenance verification failed", {"checks": v.checks, "reason": v.reason})
+        return None
+
+    # 4. Publisher trust: explicit domain assertion, else pin-or-TOFU.
+    pub = stmt.get("publisher") or {}
+    sig_key = (stmt.get("signature") or {}).get("key_id")
+    want_domain = getattr(args, "publisher_domain", None)
+    if want_domain and v.anchored_domain != want_domain:
+        _reject("publisher domain anchor mismatch",
+                {"expected": want_domain, "anchored": v.anchored_domain})
+        return None
+    trust = ("anchored" if want_domain
+             else "pinned" if getattr(args, "publisher_key", None) else "tofu")
+    status, pinned = pin_or_check_publisher(args.package, str(sig_key),
+                                            pub.get("public_key"), trust=trust)
+    if status == "mismatch":
+        _reject("publisher key mismatch — possible supply-chain substitution",
+                {"presented": sig_key, "pinned": pinned,
+                 "hint": "recover deliberately: chp-host publishers reset <package>"})
+        return None
+    log(f"==> provenance VERIFIED: {stmt.get('package')}=={stmt.get('version')} "
+        f"published by {pub.get('host_id')} (key {sig_key}, pin {status})")
+    stmt["_wheel_path"] = str(wheel_path)
+    return stmt
+
+
+def _cmd_publishers_list(_args: argparse.Namespace) -> int:
+    from .publishers import load_publishers
+    print(json.dumps(load_publishers(), indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_publishers_reset(args: argparse.Namespace) -> int:
+    from .publishers import reset_publisher
+    if reset_publisher(args.package):
+        print(f"publisher pin cleared for {args.package} — next verified install re-pins")
+        return 0
+    print(f"no publisher pin for {args.package}")
+    return 1
 
 
 def _cmd_install_adapter(args: argparse.Namespace) -> int:
@@ -1880,12 +1999,25 @@ def _cmd_install_adapter(args: argparse.Namespace) -> int:
         target = f"{spec}[{extras}]" if extras else spec
         cmd = base + [target]  # adapters resolve from PyPI (0.10.0+)
 
+    verified_statement = None
+    if getattr(args, "require_provenance", False):
+        # Supply-chain gate (chp-v0.2.md §9): download the artifact, hash it,
+        # verify the publisher's signed statement, and only then install the
+        # EXACT bytes we verified. Refusal is evidence, like a denial.
+        verified_statement = _verify_install_provenance(args, url, _log)
+        if verified_statement is None:
+            return 1
+        wheel_path = verified_statement.pop("_wheel_path")
+        install_target = f"{wheel_path}[{extras}]" if extras else wheel_path
+        cmd = base + [install_target]
+
     _log(f"==> Installing adapter {target}{f' (+extras: {extras})' if extras else ''}...")
     if subprocess.run(cmd).returncode != 0:
         _log("ERROR: pip install failed — adapter not installed.")
         return 1
 
-    _record_install_provenance(args, args.package, url or target, _log)
+    _record_install_provenance(args, args.package, url or target, _log,
+                               statement=verified_statement)
 
     name = getattr(args, "adapter_name", None)
     profile = getattr(args, "profile", None)
@@ -2154,7 +2286,28 @@ def build_parser() -> argparse.ArgumentParser:
     install_adapter_cmd.add_argument("--correlation-id", dest="correlation_id")
     install_adapter_cmd.add_argument("--causation-id", dest="causation_id")
     install_adapter_cmd.add_argument("--host-id", dest="host_id")
+    # Supply-chain gate (chp-v0.2.md §9): verify the publisher's signed
+    # provenance statement against the downloaded artifact BEFORE installing.
+    install_adapter_cmd.add_argument("--require-provenance", dest="require_provenance",
+                                     action="store_true",
+                                     help="Refuse unless a verified provenance statement matches the artifact.")
+    install_adapter_cmd.add_argument("--publisher-key", dest="publisher_key",
+                                     help="Require this publisher key_id.")
+    install_adapter_cmd.add_argument("--publisher-domain", dest="publisher_domain",
+                                     help="Require the statement's attestation to carry this domain anchor.")
+    install_adapter_cmd.add_argument("--provenance", dest="provenance",
+                                     help="Statement path or URL (default: the GitHub release asset convention).")
     install_adapter_cmd.set_defaults(func=_cmd_install_adapter, restart=True)
+
+    publishers_cmd = sub.add_parser(
+        "publishers", help="Publisher key pins for adapter provenance (spec §9).")
+    publishers_sub = publishers_cmd.add_subparsers(dest="publishers_command", required=True)
+    pub_list = publishers_sub.add_parser("list", help="Show pinned publishers.")
+    pub_list.set_defaults(func=_cmd_publishers_list)
+    pub_reset = publishers_sub.add_parser(
+        "reset", help="Clear a package's publisher pin (deliberate recovery).")
+    pub_reset.add_argument("package")
+    pub_reset.set_defaults(func=_cmd_publishers_reset)
 
     svc_install = sub.add_parser(
         "install-service",

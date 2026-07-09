@@ -397,6 +397,26 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "aggregated_task_bundle_vector_verifies", False, {"error": str(exc)})
 
+    # Adapter-provenance vector: the supply-chain statement verifies.
+    prov_vec = repo_root / "spec" / "test-vectors" / "adapter-provenance.json"
+    if prov_vec.exists():
+        try:
+            import hashlib
+
+            from .signing import verify_provenance_statement
+
+            pv = verify_provenance_statement(
+                read_json(prov_vec),
+                wheel_sha256=hashlib.sha256(b"chp fixture wheel bytes v1").hexdigest())
+            add_check(
+                checks,
+                "provenance_vector_verifies",
+                pv.valid,
+                {"checks": pv.checks, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "provenance_vector_verifies", False, {"error": str(exc)})
+
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
 

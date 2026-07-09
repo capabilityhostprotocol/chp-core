@@ -750,6 +750,108 @@ def _member_sort_key(bundle: dict) -> tuple[str, str]:
     return (str(bundle.get("host_id") or ""), str(bundle.get("root_hash") or ""))
 
 
+_PROVENANCE_HEADER_FIELDS = ("kind", "package", "version", "wheel_sha256",
+                             "created_at", "canonicalization")
+
+
+def provenance_header(stmt: dict) -> dict:
+    """The publisher-signed header of an adapter-provenance statement (§9)."""
+    return {k: stmt.get(k) for k in _PROVENANCE_HEADER_FIELDS}
+
+
+def build_provenance_statement(package: str, version: str, wheel_sha256: str,
+                               host_key: HostKey, *, publisher_id: str,
+                               created_at: str,
+                               valid_until: str | None = None,
+                               anchors: list[dict] | None = None) -> dict:
+    """A publisher's signed claim: "I built this exact artifact" (proposal 0001,
+    chp-v0.2.md §9).
+
+    Signs the canonical header {kind, package, version, wheel_sha256,
+    created_at, canonicalization} with the publisher's CHP key and attaches the
+    publisher's host-identity attestation (anchors ride inside it, same
+    omit-when-empty rule as bundles). ``wheel_sha256`` is the SHA-256 of the
+    artifact FILE — verifiable before anything executes. The installed-RECORD
+    fingerprint stays evidence-side (pip rewrites RECORD at install; it is not
+    a pre-install invariant)."""
+    if not host_key.can_sign:
+        raise SigningUnavailable("publisher key has no private component; cannot sign")
+    stmt: dict = {
+        "kind": "adapter-provenance",
+        "package": package,
+        "version": version,
+        "wheel_sha256": wheel_sha256,
+        "created_at": created_at,
+        "canonicalization": CANONICALIZATION,
+    }
+    stmt["publisher"] = {
+        "host_id": publisher_id,
+        "public_key": host_key.public_key_b64,
+        "host_identity": build_attestation(
+            publisher_id, host_key, valid_from=created_at,
+            valid_until=valid_until, anchors=anchors),
+    }
+    stmt["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": host_key.key_id,
+        "signature": _sign(host_key._private, _canon(provenance_header(stmt))),
+    }
+    return stmt
+
+
+def verify_provenance_statement(stmt: dict, *,
+                                expected_key_id: str | None = None,
+                                wheel_sha256: str | None = None) -> BundleVerification:
+    """Offline-verify an adapter-provenance statement: header signature,
+    publisher attestation (binding + temporal), DID anchor when present, and —
+    when ``wheel_sha256`` is supplied — that the artifact on hand IS the one
+    the publisher signed."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = (stmt.get("kind") == "adapter-provenance"
+                           and bool(stmt.get("package")) and bool(stmt.get("version"))
+                           and bool(stmt.get("wheel_sha256")))
+    pub = stmt.get("publisher") or {}
+    pub_key = str(pub.get("public_key") or "")
+    sig = stmt.get("signature") or {}
+    anchored_domain: str | None = None
+    anchored_did: str | None = None
+
+    if expected_key_id is not None and sig.get("key_id") != expected_key_id:
+        return BundleVerification(
+            False, "signed", checks,
+            f"signed by unexpected key {sig.get('key_id')!r} (expected {expected_key_id!r})")
+
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM
+                           and bool(pub_key)
+                           and _verify_sig(pub_key, _canon(provenance_header(stmt)),
+                                           str(sig.get("signature") or "")))
+
+    att = pub.get("host_identity")
+    if att:
+        checks["publisher_identity"] = verify_attestation(
+            att, public_key=pub_key, expected_host_id=pub.get("host_id"),
+            at_time=stmt.get("created_at"))
+        anchored_domain = _domain_anchor(att)
+        did_anchor = _did_anchor(att)
+        if did_anchor is not None:
+            checks["did_anchor"] = verify_did_anchor(
+                did_anchor, pub_key, str(pub.get("host_id", "")))
+            if checks["did_anchor"]:
+                anchored_did = str(did_anchor.get("did"))
+    else:
+        checks["publisher_identity"] = False  # a provenance claim must say WHO
+
+    if wheel_sha256 is not None:
+        checks["artifact_hash"] = wheel_sha256 == stmt.get("wheel_sha256")
+
+    valid = all(checks.values())
+    reason = None if valid else "provenance checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason,
+                              anchored_domain=anchored_domain,
+                              anchored_did=anchored_did)
+
+
 _TASK_HEADER_FIELDS = ("kind", "correlation_id", "protocol_version", "created_at",
                        "canonicalization", "task_root_hash")
 
