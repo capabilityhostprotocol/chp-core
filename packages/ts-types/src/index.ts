@@ -11,6 +11,10 @@
  */
 
 export * from "./v0_1.js";
+// The generated reserved-names registry (denial codes + evidence-type
+// families) — always in lockstep with the Python reference and
+// spec/reserved-names.md via scripts/gen-reserved-names.py.
+export * from "./reserved.js";
 
 export const CHP_VERSION = "0.1";
 export const VERSION = "0.1.0";

@@ -5,6 +5,13 @@
  * Every capability execution produces one or more Evidence records.
  * These form the basis of the capability graph and audit trail.
  *
+ * @deprecated This module's EvidenceType/EVIDENCE_TYPES list predates the
+ * reserved-names registry and does NOT reflect the protocol's reserved
+ * vocabulary. Use the generated `reserved.js` exports
+ * (RESERVED_DENIAL_CODES, *_EVIDENCE_TYPES, ALL_RESERVED_EVIDENCE_TYPES)
+ * — they are kept in lockstep with the Python reference and
+ * spec/reserved-names.md by scripts/gen-reserved-names.py.
+ *
  * @module evidence
  */
 

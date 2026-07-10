@@ -375,6 +375,29 @@ def check_alignment(repo_root: Path) -> JSON:
              "hint": "run: python scripts/gen-reserved-names.py"},
         )
 
+    # The generated TS mirror must match source too — same rule, same fix.
+    # (The legacy hand-written evidence.ts list is deprecated and unguarded.)
+    reserved_ts = repo_root / "packages" / "ts-types" / "src" / "reserved.ts"
+    if reserved_ts.exists():
+        ts_doc = read_text(reserved_ts)
+        from . import types as _types
+
+        ts_missing: list[str] = [c for c in reserved if f'"{c}"' not in ts_doc]
+        for fam_name in dir(_types):
+            if fam_name.endswith("_EVIDENCE_TYPES"):
+                fam = getattr(_types, fam_name)
+                if isinstance(fam, (set, frozenset)):
+                    if f"export const {fam_name}" not in ts_doc:
+                        ts_missing.append(fam_name)
+                    ts_missing += [m for m in fam if f'"{m}"' not in ts_doc]
+        add_check(
+            checks,
+            "ts_reserved_names_current",
+            not ts_missing,
+            {"missing": sorted(set(ts_missing))[:10],
+             "hint": "run: python scripts/gen-reserved-names.py"},
+        )
+
     # Task-bundle vector must verify (guards the cross-host verification unit).
     task_vec = repo_root / "spec" / "test-vectors" / "task-bundle.json"
     if task_vec.exists():
