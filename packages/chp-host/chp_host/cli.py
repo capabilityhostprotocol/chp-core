@@ -1720,6 +1720,16 @@ def _query_version(pkg: str = "chp-host") -> str:
 
 def _restart_chp_services() -> list[str]:
     """Restart this node's CHP services; return the units restarted."""
+    # Containerized node (no launchd/systemd): the restart IS a clean process
+    # exit — the container's restart policy revives it on the upgraded code in
+    # the writable layer. Without this branch, `chp-host update` upgrades the
+    # packages but the server keeps running the OLD code while /health reports
+    # the NEW version (metadata is read from disk) — the NAS bug of 2026-07-10.
+    if Path("/.dockerenv").exists() or os.environ.get("CHP_CONTAINER") == "1":
+        import signal
+        subprocess.run(["sync"], capture_output=True)
+        os.kill(1, signal.SIGTERM)
+        return ["container-pid-1 (restart policy revives)"]
     if sys.platform == "darwin":
         r = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
         labels = sorted({

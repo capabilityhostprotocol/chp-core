@@ -87,3 +87,17 @@ class TestHostProfile:
         profile = HostProfile.load(path)
         assert profile.host_id == "cloud"
         assert profile.port == 9001
+
+
+class TestContainerRestart:
+    def test_container_branch_kills_pid1(self, monkeypatch, tmp_path):
+        """In a container (no launchd/systemd) the restart IS a clean pid-1
+        exit — the restart policy revives the process on the upgraded code."""
+        import chp_host.cli as cli
+
+        killed = {}
+        monkeypatch.setenv("CHP_CONTAINER", "1")
+        monkeypatch.setattr(cli.os, "kill", lambda pid, sig: killed.update(pid=pid, sig=sig))
+        units = cli._restart_chp_services()
+        assert killed["pid"] == 1
+        assert units == ["container-pid-1 (restart policy revives)"]
