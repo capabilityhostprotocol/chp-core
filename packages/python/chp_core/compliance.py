@@ -104,6 +104,9 @@ class SQLiteComplianceManager:
                         cursor = self._store._conn.execute(sql, params)
                         total_redacted += cursor.rowcount
 
+            # Retention mutated events — resync the maintained correlation
+            # heads (spec §12 serving cache) to the new lawful state.
+            self._store._rebuild_heads_locked()
             self._store._conn.commit()
 
         return ComplianceReport(
@@ -144,6 +147,9 @@ class SQLiteComplianceManager:
                     "DELETE FROM evidence_events WHERE timestamp < ? AND capability_id GLOB ?",
                     (before_ts, capability_id_pattern),
                 )
+            # Retention mutated events — resync the maintained correlation
+            # heads (spec §12 serving cache) to the new lawful state.
+            self._store._rebuild_heads_locked()
             self._store._conn.commit()
         return cursor.rowcount
 

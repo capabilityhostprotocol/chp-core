@@ -73,8 +73,18 @@ class TestStoreHead:
             "AND sequence = (SELECT MAX(sequence) FROM evidence_events WHERE correlation_id = ?)",
             ("0" * 64, "corr-one", "corr-one"))
         host.store._conn.commit()
+        # The AUDIT path (fresh=True — what chp witness verify uses) recomputes
+        # from raw events and MUST see the rewrite. The serving cache may not —
+        # which is exactly why audits never trust it.
         assert host.store.get_store_head(
-            at_sequence=head["sequence"])["store_head"] != head["store_head"]
+            at_sequence=head["sequence"], fresh=True)["store_head"] != head["store_head"]
+
+    def test_serving_and_audit_paths_agree_on_honest_stores(self):
+        host = _host_with_history()
+        serving = host.store.get_store_head()
+        audit = host.store.get_store_head(at_sequence=serving["sequence"], fresh=True)
+        assert serving["store_head"] == audit["store_head"]
+        assert serving["leaves"] == audit["leaves"]
 
 
 class TestReceiptDispositions:

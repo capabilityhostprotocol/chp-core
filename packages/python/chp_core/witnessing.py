@@ -114,7 +114,9 @@ def verify_receipt_against_store(store, receipt: JSON) -> JSON:
         result["verdict"] = "snapshot_invalid"
         return result
 
-    current = store.get_store_head(at_sequence=int(sequence))["leaves"]
+    # AUDIT-GRADE recompute: never the maintained cache — a store editor
+    # could have edited correlation_heads too. Raw events only.
+    current = store.get_store_head(at_sequence=int(sequence), fresh=True)["leaves"]
     dispositions = {"verified": 0, "purged": 0, "redacted": 0, "tampered": 0}
     tampered: list[str] = []
     for correlation_id, witnessed_hash in snapshot.items():

@@ -125,7 +125,57 @@ class SQLiteEvidenceStore:
                 SELECT sequence FROM evidence_events
                 """
             )
+            # Maintained per-correlation heads (spec §12): O(1) upkeep per
+            # append so /head serves in constant time on multi-million-row
+            # stores (the naive GROUP BY scan took ~60s on 2M rows — and held
+            # this lock). SERVING optimization only: audit-grade recomputation
+            # (chp witness verify) always scans raw events (fresh=True),
+            # because an attacker editing SQLite could edit this cache too.
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS correlation_heads (
+                  correlation_id TEXT PRIMARY KEY,
+                  head_sequence INTEGER NOT NULL,
+                  head_hash TEXT
+                )
+                """
+            )
+            heads_empty = self._conn.execute(
+                "SELECT 1 FROM correlation_heads LIMIT 1").fetchone() is None
+            has_events = self._conn.execute(
+                "SELECT 1 FROM evidence_events LIMIT 1").fetchone() is not None
+            if heads_empty and has_events:
+                self._rebuild_heads_locked()  # one-time backfill on upgrade
             self._conn.commit()
+
+    def _rebuild_heads_locked(self) -> None:
+        """Recompute correlation_heads from raw events (caller holds lock).
+        Used for the one-time backfill and after retention mutations."""
+        self._conn.execute("DELETE FROM correlation_heads")
+        # SQLite bare-column-with-MAX: content_hash comes from the max-sequence row.
+        self._conn.execute(
+            """
+            INSERT INTO correlation_heads (correlation_id, head_sequence, head_hash)
+            SELECT correlation_id, MAX(sequence), content_hash
+            FROM evidence_events GROUP BY correlation_id
+            """
+        )
+
+    def rebuild_heads(self) -> None:
+        """Public head rebuild — retention (purge/redact) calls this after
+        mutating events so the serving cache matches the new lawful state."""
+        with self._lock:
+            self._rebuild_heads_locked()
+            self._conn.commit()
+
+    def _upsert_head_locked(self, correlation_id: str, sequence: int,
+                            content_hash: str | None) -> None:
+        self._conn.execute(
+            "INSERT INTO correlation_heads (correlation_id, head_sequence, head_hash) "
+            "VALUES (?, ?, ?) ON CONFLICT(correlation_id) DO UPDATE SET "
+            "head_sequence = excluded.head_sequence, head_hash = excluded.head_hash",
+            (correlation_id, sequence, content_hash),
+        )
 
     def append(self, event: ExecutionEvidence | ConversationEvent) -> ExecutionEvidence | ConversationEvent:
         if isinstance(event, ConversationEvent):
@@ -186,6 +236,8 @@ class SQLiteEvidenceStore:
                 prev_hash,
             ),
         )
+        self._upsert_head_locked(
+            event.correlation.correlation_id, event.sequence, content_hash)
 
     def _append_evidence(self, event: ExecutionEvidence) -> ExecutionEvidence:
         with self._lock:
@@ -274,6 +326,8 @@ class SQLiteEvidenceStore:
                 prev_hash,
             ),
         )
+        self._upsert_head_locked(
+            event.correlation.correlation_id, event.sequence, chain_hash)
 
     def append_many(self, events: Iterable[ExecutionEvidence]) -> list[ExecutionEvidence]:
         """Append a batch of events in a single transaction (one commit).
@@ -521,36 +575,67 @@ class SQLiteEvidenceStore:
             row = self._conn.execute("SELECT COUNT(*) AS count FROM evidence_events").fetchone()
         return int(row["count"])
 
-    def get_store_head(self, at_sequence: int | None = None) -> JSON:
+    def get_store_head(self, at_sequence: int | None = None, *,
+                       fresh: bool = False) -> JSON:
         """The witnessable store digest (`chp-store-head-v1`, spec §12).
 
-        Chains are per-correlation over one GLOBAL sequence, so the store-level
-        commitment is: for every correlation, its head ``content_hash`` at
-        sequence ≤ N; the store head is SHA256 over the sorted
-        ``correlation_id\\x00head_hash\\n`` lines. Chains are append-only and
-        the sequence never rewinds, so the head AS-OF any witnessed N is
-        recomputable later — rewriting any event at sequence ≤ N changes some
-        correlation's head and the recomputed root stops matching what a peer
-        countersigned. Returns ``{scheme, sequence, store_head, leaves}``;
-        ``leaves`` (correlation_id -> head hash, None when redacted) feed the
-        received-witness snapshot that makes retention verifiable per-leaf."""
+        Chains are per-correlation over one GLOBAL sequence: for every
+        correlation, its head ``content_hash`` at sequence ≤ N; the store head
+        is SHA256 over the sorted ``correlation_id\x00head_hash\n`` lines.
+        Chains are append-only and the sequence never rewinds, so the head
+        AS-OF any witnessed N is recomputable later.
+
+        Two trust modes:
+
+        - default (serving): reads the maintained ``correlation_heads`` table —
+          constant-time on multi-million-row stores. For a historical
+          ``at_sequence``, only correlations whose head moved since N need an
+          index point-query (the witness-exchange case: N is seconds old).
+        - ``fresh=True`` (audit): full recomputation from raw events, never
+          touching the cache — the mode ``chp witness verify`` uses, because a
+          store editor could edit the cache too. Slow on huge stores; audits
+          run against copies.
+        """
         with self._lock:
-            if at_sequence is None:
-                row = self._conn.execute(
-                    "SELECT MAX(sequence) AS s FROM evidence_events").fetchone()
-                at_sequence = int(row["s"] or 0)
-            # SQLite bare-column-with-MAX: content_hash comes FROM the row that
-            # holds MAX(sequence) per group (documented SQLite behavior).
-            rows = self._conn.execute(
-                """
-                SELECT correlation_id, content_hash, MAX(sequence)
-                FROM evidence_events
-                WHERE sequence <= ?
-                GROUP BY correlation_id
-                """,
-                (at_sequence,),
-            ).fetchall()
-        leaves = {row["correlation_id"]: row["content_hash"] for row in rows}
+            if fresh:
+                if at_sequence is None:
+                    row = self._conn.execute(
+                        "SELECT MAX(sequence) AS s FROM evidence_events").fetchone()
+                    at_sequence = int(row["s"] or 0)
+                rows = self._conn.execute(
+                    """
+                    SELECT correlation_id, content_hash, MAX(sequence)
+                    FROM evidence_events WHERE sequence <= ?
+                    GROUP BY correlation_id
+                    """,
+                    (at_sequence,),
+                ).fetchall()
+                leaves = {row["correlation_id"]: row["content_hash"] for row in rows}
+            elif at_sequence is None:
+                rows = self._conn.execute(
+                    "SELECT correlation_id, head_sequence, head_hash FROM correlation_heads"
+                ).fetchall()
+                at_sequence = max((int(r["head_sequence"]) for r in rows), default=0)
+                leaves = {r["correlation_id"]: r["head_hash"] for r in rows}
+            else:
+                rows = self._conn.execute(
+                    "SELECT correlation_id, head_sequence, head_hash FROM correlation_heads"
+                ).fetchall()
+                leaves = {}
+                for r in rows:
+                    if int(r["head_sequence"]) <= at_sequence:
+                        leaves[r["correlation_id"]] = r["head_hash"]
+                    else:
+                        # Head moved past N — point-query the head AS-OF N
+                        # (index-assisted; excludes correlations born after N).
+                        old = self._conn.execute(
+                            "SELECT content_hash FROM evidence_events "
+                            "WHERE correlation_id = ? AND sequence <= ? "
+                            "ORDER BY sequence DESC LIMIT 1",
+                            (r["correlation_id"], at_sequence),
+                        ).fetchone()
+                        if old is not None:
+                            leaves[r["correlation_id"]] = old["content_hash"]
         digest = hashlib.sha256()
         for correlation_id in sorted(leaves):
             digest.update(f"{correlation_id}\x00{leaves[correlation_id] or ''}\n".encode())
