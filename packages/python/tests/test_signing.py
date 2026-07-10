@@ -562,3 +562,86 @@ class TestAdapterProvenance:
         bad = dict(stmt); bad["publisher"] = {k: v for k, v in stmt["publisher"].items()
                                              if k != "host_identity"}
         assert signing.verify_provenance_statement(bad).checks["publisher_identity"] is False
+
+# ---------------------------------------------------------------------------
+# Mandates (chp-v0.2.md §10, proposal 0002)
+# ---------------------------------------------------------------------------
+
+class TestMandates:
+    def _mandate(self, tmp_path, **kw):
+        key = signing.generate_keypair(tmp_path / "pubkey")
+        mandate = signing.build_mandate(
+            "principal-a", key, delegate_id="steward-x",
+            scope=["demo.echo", "chp.adapters.audit.*"],
+            valid_from="2026-07-09T00:00:00Z", valid_until="2026-07-10T00:00:00Z",
+            created_at="2026-07-09T00:00:00Z", **kw)
+        return mandate, key
+
+    def test_round_trip_in_scope_in_window(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        v = signing.verify_mandate(
+            mandate, at_time="2026-07-09T12:00:00Z",
+            capability_id="demo.echo", delegate_id="steward-x")
+        assert v.valid and v.checks["scope"] and v.checks["principal_identity"]
+
+    def test_wildcard_scope_grammar(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        assert signing.scope_allows(mandate["scope"], "chp.adapters.audit.stats")
+        assert not signing.scope_allows(mandate["scope"], "chp.adapters.git.push")
+
+    def test_expired_fails_temporal_only(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        v = signing.verify_mandate(mandate, at_time="2026-07-11T00:00:00Z")
+        assert not v.valid and v.checks["temporal"] is False
+        assert v.checks["signature"] is True
+
+    def test_not_yet_valid_fails_temporal(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        assert not signing.verify_mandate(mandate, at_time="2026-07-08T00:00:00Z").valid
+
+    def test_out_of_scope_fails_scope(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        v = signing.verify_mandate(mandate, capability_id="demo.other")
+        assert not v.valid and v.checks["scope"] is False
+
+    def test_wrong_delegate_fails_delegate(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        v = signing.verify_mandate(mandate, delegate_id="someone-else")
+        assert not v.valid and v.checks["delegate"] is False
+
+    def test_widened_scope_breaks_signature(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        bad = dict(mandate); bad["scope"] = ["*"]
+        assert signing.verify_mandate(bad).checks["signature"] is False
+        for field in ("delegate_id", "valid_until", "mandate_id"):
+            bad = dict(mandate); bad[field] = "tampered"
+            assert signing.verify_mandate(bad).checks["signature"] is False
+
+    def test_expected_principal_key_pin(self, tmp_path):
+        mandate, key = self._mandate(tmp_path)
+        assert signing.verify_mandate(mandate, expected_principal_key=key.key_id).valid
+        v = signing.verify_mandate(mandate, expected_principal_key="deadbeefdeadbeef")
+        assert not v.valid and "unexpected key" in v.reason
+
+    def test_missing_attestation_fails(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        bad = dict(mandate)
+        bad["principal"] = {k: v for k, v in mandate["principal"].items()
+                            if k != "host_identity"}
+        assert signing.verify_mandate(bad).checks["principal_identity"] is False
+
+    def test_scope_sorted_and_key_history_omitted_when_empty(self, tmp_path):
+        mandate, _ = self._mandate(tmp_path)
+        assert mandate["scope"] == sorted(mandate["scope"])
+        assert "key_history" not in mandate["principal"]
+
+    def test_unsigned_key_cannot_issue(self, tmp_path):
+        mandate, key = self._mandate(tmp_path)
+        public_only = signing.HostKey(key_id=key.key_id,
+                                      public_key_b64=key.public_key_b64, _private=None)
+        import pytest
+        with pytest.raises(signing.SigningUnavailable):
+            signing.build_mandate("principal-a", public_only, delegate_id="d",
+                                  scope=["x"], valid_from="2026-01-01T00:00:00Z",
+                                  valid_until="2026-01-02T00:00:00Z",
+                                  created_at="2026-01-01T00:00:00Z")

@@ -42,13 +42,13 @@ types emitted for the exercised call, in order.
   `{"echo": "<value>"}`); the exact shape isn't asserted, only `outcome:success`.
 - `conformance.fail`'s handler MUST raise so the host records `execution_failed`
   (a runtime failure, not a denial).
-- `conformance.guarded` is denied at the **invariant** gate (pipeline gate 6),
+- `conformance.guarded` is denied at the **invariant** gate (pipeline gate 7),
   *before* safety — so it emits no safety events even on a safety-configured host.
-- `conformance.risky` is denied at the **policy** gate (gate 5), before invariants,
+- `conformance.risky` is denied at the **policy** gate (gate 6), before invariants,
   autonomy, and safety — so it too emits no governance side-events, only
   `execution_denied`.
 - `conformance.unsafe` is the only fixture that exercises the safety pipeline;
-  its assessment pair is emitted because it passed gates 1–8 and reached gate 9.
+  its assessment pair is emitted because it passed gates 1–9 and reached gate 10.
 - Numbers in emitted event payloads (e.g. a safety `score`) are **string-encoded**
   per `chp-stable-v1` ([chp-v0.2.md](../spec/chp-v0.2.md) §2 rule 6) — the runner
   does not assert their value, only the event types.
@@ -59,9 +59,16 @@ types emitted for the exercised call, in order.
 <start the host under test on PORT with the config above>
 python conformance/runner.py --url http://localhost:PORT --key <key> --suite wire
 ```
-A conforming host prints `[wire] 17/17`.
+A conforming host prints `[wire] 18/18`.
 
 The scoped-key check additionally needs a **scoped caller key** configured on
 the host under test — `conformance-scoped:<key>:conformance.echo` (binding §2
 `name:key:scope` form) — and the same `<key>` exported to the runner as
 `CHP_CONFORMANCE_SCOPED_KEY`.
+
+The mandate check (spec §10) needs no extra fixtures or configuration: the
+runner issues mandates from a fresh in-memory principal key the host has never
+met (verification is offline). It first probes the connection — if transport
+auth binds a verified caller, the mandates it issues name that caller as
+`delegate_id` (the §10 delegate-binding rule); on an unauthenticated
+connection any delegate name is acceptable.

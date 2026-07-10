@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, signBundle, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import type {
@@ -232,23 +232,56 @@ export class LocalCapabilityHost {
     if (!modes.includes(env.mode!)) {
       return this.deny(env, { code: 'unsupported_mode', message: `mode ${env.mode} unsupported`, retryable: false });
     }
-    // Gate 5: policy
+    // Gate 5: mandate (§10) — verify at HOST time, bind delegate to any
+    // transport-verified caller, narrow to scope, rebind the subject.
+    if (env.mandate) {
+      const subj = (env.subject ?? {}) as Record<string, JsonValue>;
+      const verifiedCaller = subj.verified ? String(subj.id ?? '') : undefined;
+      const mv = verifyMandate(env.mandate, {
+        atTime: nowIso(),
+        ...(verifiedCaller !== undefined ? { delegateId: verifiedCaller } : {}),
+      });
+      if (!mv.valid) {
+        return this.deny(env, {
+          code: 'mandate_invalid',
+          message: mv.reason ?? 'mandate failed verification',
+          retryable: false,
+          details: { checks: mv.checks, mandate_id: env.mandate.mandate_id ?? null },
+        });
+      }
+      if (!scopeAllows((env.mandate.scope as JsonValue[]) ?? [], d.id)) {
+        return this.deny(env, {
+          code: 'policy_blocked',
+          message: `capability '${d.id}' is outside mandate '${String(env.mandate.mandate_id)}'s scope`,
+          retryable: false,
+        });
+      }
+      const principal = (env.mandate.principal ?? {}) as Record<string, JsonValue>;
+      env.subject = {
+        id: env.mandate.delegate_id ?? null,
+        type: 'mandate',
+        verified: true,
+        mandate_id: env.mandate.mandate_id ?? null,
+        principal: principal.host_id ?? null,
+      };
+    }
+    // Gate 6: policy
     const pd = this.checkPolicy(d);
     if (pd) return this.deny(env, pd);
-    // Gate 6: invariants
+    // Gate 7: invariants
     const inv = this.checkInvariants(d, env);
     if (inv) return this.deny(env, inv);
-    // Gate 7: autonomy budget / approval
+    // Gate 8: autonomy budget / approval
     const auto = this.checkAutonomy(d, env);
     if (auto) return this.deny(env, auto);
-    // Gate 8: input schema (minimal required-fields check; full JSON Schema out of scope)
+    // Gate 9: input schema (minimal required-fields check; full JSON Schema out of scope)
     const sch = this.checkInputSchema(d, env);
     if (sch) return this.deny(env, sch);
-    // Gate 9: safety
+    // Gate 10: safety
     const saf = this.checkSafety(d, env);
     if (saf) return this.deny(env, saf);
 
-    // Gate 10: execute
+    // Gate 11: execute
     const started = this.emit('execution_started', env, { capability_uri: `${d.id}:${d.version}` }, null);
     const ctx: Ctx = {
       envelope: env,

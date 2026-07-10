@@ -5,6 +5,30 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.2.3] — additive over 0.2.2 — **released 2026-07-09**
+
+### Added
+- **Signed mandates — delegated authority on the wire** (chp-v0.2.md §10,
+  [proposals/0002](proposals/0002-mandates.md) → shipped): a principal's
+  signed, expiring, capability-scoped grant to a named delegate — the third
+  member of the statement family. `InvocationEnvelope` gains optional
+  `mandate` (omit-when-absent, additive); the pipeline gains normative
+  **gate 5 (Mandate)** — verify offline at host time, bind the delegate to any
+  transport-verified caller, rebind the evidence subject to
+  `{type: "mandate", id: delegate, principal, mandate_id, verified: true}`.
+  New reserved denial code **`mandate_invalid`** (10 codes); out-of-scope is
+  `policy_blocked` (binding §2 semantics). A mandate narrows and attributes —
+  it never bypasses transport auth or later gates. Pipeline gates renumber
+  10→11 (editorial; wire behavior additive). Wire suite **17→18** (the new
+  check: never-met principal, valid/out-of-scope/expired/tampered).
+  *Vector: `test-vectors/mandate.json` (both implementations + `verify.mjs`);
+  guard `mandate_vector_verifies`; both reference hosts pass 18/18.*
+- **DelegationContext correlation hygiene**: the handoff context defaults to
+  the caller's correlation (`envelope.context_ref`) instead of minting an
+  isolated one (§7 — evidence must stay reachable from its cause). The
+  delegation *lifecycle* stays implementation-defined; mandates are its
+  foundation.
+
 ## [0.2.2] — additive over 0.2.1 — **released 2026-07-09**
 
 ### Added

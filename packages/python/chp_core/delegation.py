@@ -69,7 +69,11 @@ class DelegationContext:
     ) -> None:
         self._envelope = envelope
         self._store_path = store_path or default_store_path()
-        self._correlation_id = correlation_id or new_id("del_corr")
+        # Chain the caller's correlation (envelope.context_ref) so the handoff
+        # rides the work that caused it (§7 deferred-execution rule) — an
+        # isolated correlation would detach the delegation from its cause.
+        # A fresh del_corr is the last resort, not the default.
+        self._correlation_id = correlation_id or envelope.context_ref or new_id("del_corr")
         self._resolved = False
 
     @property

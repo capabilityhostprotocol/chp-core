@@ -633,6 +633,7 @@ class DenialReason:
         "budget_exceeded",                # AutonomyProfile budget (calls/tokens/cost) exhausted
         "approval_required",              # human approval gate not satisfied
         "safety_blocked",                 # a safety guardrail blocked the invocation
+        "mandate_invalid",                # presented mandate failed verification (§10)
     })
 
     def to_dict(self) -> JSON:
@@ -650,6 +651,9 @@ class InvocationEnvelope:
     subject: JSON = field(default_factory=lambda: {"id": "local", "type": "user"})
     requested_at: str = field(default_factory=utc_now)
     metadata: JSON = field(default_factory=dict)
+    # OPTIONAL presented authority (chp-v0.2.md §10): a principal-signed
+    # mandate the host verifies before executing. None = today's behavior.
+    mandate: JSON | None = None
 
     @classmethod
     def from_mapping(cls, value: JSON) -> "InvocationEnvelope":
@@ -663,11 +667,14 @@ class InvocationEnvelope:
             payload=dict(value.get("payload") or value.get("arguments") or {}),
             requested_at=value.get("requested_at") or utc_now(),
             metadata=dict(value.get("metadata") or {}),
+            mandate=dict(value["mandate"]) if value.get("mandate") else None,
         )
 
     def to_dict(self) -> JSON:
         data = asdict(self)
         data["correlation"] = self.correlation.to_dict()
+        if data.get("mandate") is None:
+            del data["mandate"]  # additive field: absent stays absent on the wire
         return data
 
 

@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.3 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 
@@ -453,3 +453,65 @@ accept the new key only by walking the chain from its OWN pin, each hop
 verified under the key trusted so far — self-published history cannot
 self-vouch. An unwalkable change of key remains a hard mismatch; recovery is
 the deliberate pin reset.
+
+## 10. Mandates — Delegated Authority
+
+Evidence proves what happened; anchors prove who; provenance proves what code
+ran. This section makes **authority itself** verifiable: today "agent A acts
+through host B" rides a static pre-shared key — out-of-band, unscoped in
+time, unverifiable by third parties. A **mandate** is a principal's signed,
+expiring, capability-scoped grant to a named delegate:
+
+```json
+{
+  "kind": "mandate", "mandate_id": "mnd_…",
+  "delegate_id": "steward-x",
+  "scope": ["demo.echo", "chp.adapters.audit.*"],
+  "valid_from": "…", "valid_until": "…",
+  "created_at": "…", "canonicalization": "chp-stable-v1",
+  "principal": { "host_id": "…", "public_key": "…",
+                 "host_identity": { …attestation (§3), anchors (§3.1)… },
+                 "key_history": [ …§3.2, omitted when empty… ] },
+  "signature": { "algorithm": "ed25519", "key_id": "…", "signature": "…" }
+}
+```
+
+The third member of the statement family (signed bundles §3, adapter
+provenance §9), and it composes the existing primitives rather than adding new
+ones: the signature covers the canonical header (`kind, mandate_id,
+delegate_id, scope, valid_from, valid_until, created_at, canonicalization` —
+`scope` sorted at signing time); the principal's attestation answers *whose
+authority* through the same trust roots as everything else (§3.1 anchors, §3.2
+rotation continuity, omit-when-empty byte rules); `scope` uses the
+[http-binding](chp-http-binding.md) §2 grammar (exact capability id or
+trailing-`*` prefix). `valid_until` is REQUIRED — unbounded authority is what
+this object replaces. Schema:
+[mandate.schema.json](../schemas/mandate.schema.json); fixture:
+`spec/test-vectors/mandate.json` (verified by both reference implementations
+and `verify.mjs`).
+
+**Presentation.** An `InvocationEnvelope` MAY carry a `mandate` (additive —
+an envelope without one behaves exactly as before). The receiving host
+verifies it **offline** at pipeline gate 5
+([chp-invocation-pipeline.md](chp-invocation-pipeline.md) §3): signature,
+principal attestation, the validity window **at host time** (never the
+client-asserted `requested_at`), and — when transport auth has already
+verified a caller — that the mandate names that caller as `delegate_id`.
+Verification failure is a PROCESSED denial with the reserved code
+`mandate_invalid` (`retryable: false`); an invocation outside a valid
+mandate's scope is `policy_blocked` (the §2 caller-key semantics).
+
+**Subject binding.** A valid, in-scope mandate rebinds the evidence subject to
+`{id: <delegate_id>, type: "mandate", verified: true, mandate_id, principal:
+<principal host_id>}` — "B acted under A's mandate M" lands in the signed
+chain with no new event types, replayable and offline-verifiable. A mandate
+**narrows and attributes — it never bypasses**: transport auth still gates the
+connection, and every later pipeline gate still applies.
+
+**Principal trust.** The attestation verifies offline with no prior
+relationship; anchors (§3.1) upgrade *self-declared* to *externally rooted*.
+A verifier MAY additionally require the principal's key to match a mesh pin.
+Revocation lists, `max_invocations` enforcement, and sub-delegation are
+deliberately out of scope for v0.2.3 — expiry (`valid_until`) is the v1
+revocation story, mirroring the §3.2 posture that authority recovery is a
+deliberate operator act.

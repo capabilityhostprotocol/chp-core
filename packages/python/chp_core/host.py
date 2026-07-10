@@ -511,6 +511,51 @@ class LocalCapabilityHost:
                 ),
             )
 
+        # Mandate gate (chp-v0.2.md §10): presented authority must verify —
+        # signature, principal attestation, validity window AT HOST TIME (never
+        # the client-asserted requested_at), and, when transport auth already
+        # verified a caller, that the mandate names THAT caller as delegate.
+        # Invalid/expired/tampered/wrong-delegate → processed mandate_invalid
+        # denial; a valid mandate binds the subject to "delegate under
+        # principal's mandate" and narrows the invocation to its scope
+        # (out-of-scope = policy_blocked, the §2 semantics).
+        if envelope.mandate is not None:
+            from .signing import scope_allows, verify_mandate
+            from .types import utc_now
+            subj = envelope.subject if isinstance(envelope.subject, dict) else {}
+            verified_caller = subj.get("id") if subj.get("verified") else None
+            mv = verify_mandate(
+                envelope.mandate, at_time=utc_now(),
+                delegate_id=verified_caller)
+            if not mv.valid:
+                return self._deny(
+                    envelope,
+                    DenialReason(
+                        code="mandate_invalid",
+                        message=mv.reason or "mandate failed verification",
+                        retryable=False,
+                        details={"checks": mv.checks,
+                                 "mandate_id": envelope.mandate.get("mandate_id")},
+                    ),
+                )
+            if not scope_allows(envelope.mandate.get("scope") or [], descriptor.id):
+                return self._deny(
+                    envelope,
+                    DenialReason(
+                        code="policy_blocked",
+                        message=f"capability {descriptor.id!r} is outside mandate "
+                                f"{envelope.mandate.get('mandate_id')!r}'s scope",
+                        retryable=False,
+                    ),
+                )
+            envelope.subject = {
+                "id": envelope.mandate.get("delegate_id"),
+                "type": "mandate",
+                "verified": True,
+                "mandate_id": envelope.mandate.get("mandate_id"),
+                "principal": (envelope.mandate.get("principal") or {}).get("host_id"),
+            }
+
         # Governance gate — enforced on every invocation path (host.invoke,
         # ctx.ainvoke, HTTP /invoke), not just the Claude Code hook. Blocks by
         # allowlist / capability id / risk tier / input pattern.

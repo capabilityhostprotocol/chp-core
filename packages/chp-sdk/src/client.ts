@@ -85,7 +85,7 @@ export class RemoteCapabilityHost {
   async invoke(
     capabilityId: string,
     payload: JsonValue = {},
-    opts: { correlation?: JsonValue; subject?: JsonValue; mode?: string; version?: string } = {},
+    opts: { correlation?: JsonValue; subject?: JsonValue; mode?: string; version?: string; mandate?: JsonValue } = {},
   ): Promise<InvocationResult> {
     const body: Record<string, JsonValue> = {
       capability_id: capabilityId,
@@ -95,6 +95,9 @@ export class RemoteCapabilityHost {
       subject: opts.subject ?? { id: 'remote', type: 'user' },
     };
     if (opts.version) body.version = opts.version;
+    // Presented authority (§10): the delegate host verifies it; the evidence
+    // subject becomes "delegate under principal's mandate".
+    if (opts.mandate) body.mandate = opts.mandate;
     return this.req('/invoke', {
       method: 'POST',
       headers: this.headers(true),

@@ -148,6 +148,10 @@ export interface InvocationEnvelope {
   payload: JsonObject;
   requested_at: string;
   metadata?: JsonObject;
+  /** OPTIONAL presented authority (chp-v0.2.md §10, additive): a
+   * principal-signed, expiring, capability-scoped mandate naming the caller
+   * as delegate. Omitted on the wire when absent. */
+  mandate?: JsonObject;
 }
 
 export interface DenialReason {

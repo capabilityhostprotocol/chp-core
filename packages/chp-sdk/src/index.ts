@@ -41,6 +41,8 @@ export {
   WELL_KNOWN_IDENTITY_PATH,
   verifyTaskBundle,
   verifyProvenanceStatement,
+  verifyMandate,
+  scopeAllows,
   type BundleVerification,
   type TaskBundleVerification,
 } from './verify.js';

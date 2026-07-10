@@ -389,3 +389,24 @@ def test_prior_cognition_events_still_present() -> None:
         "reflection_started", "reflection_completed", "outcome_scored",
     }
     assert prior.issubset(COGNITION_EVIDENCE_TYPES)
+
+
+def test_delegation_chains_callers_correlation_via_context_ref(tmp_path: Path) -> None:
+    """§7 hygiene: a handoff rides the correlation that caused it — an isolated
+    del_corr is the last resort, not the default."""
+    store = str(tmp_path / "ev.sqlite")
+    env = DelegationEnvelope(
+        delegation_id="del-1", from_session="s", to_agent="a",
+        work_parcel="x", context_ref="corr-caller-123")
+    with DelegationContext(env, store_path=store) as ctx:
+        assert ctx.correlation_id == "corr-caller-123"
+    assert "delegation_created" in _types(store, "corr-caller-123")
+
+
+def test_delegation_explicit_correlation_outranks_context_ref(tmp_path: Path) -> None:
+    store = str(tmp_path / "ev.sqlite")
+    env = DelegationEnvelope(
+        delegation_id="del-1", from_session="s", to_agent="a",
+        work_parcel="x", context_ref="corr-caller-123")
+    with DelegationContext(env, store_path=store, correlation_id="corr-explicit") as ctx:
+        assert ctx.correlation_id == "corr-explicit"

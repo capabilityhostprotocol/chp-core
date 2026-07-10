@@ -692,6 +692,7 @@ class RemoteCapabilityHost:
         subject: JSON | None = None,
         mode: str = "sync",
         metadata: JSON | None = None,
+        mandate: JSON | None = None,
     ) -> InvocationResult:
         if isinstance(correlation, CorrelationContext):
             corr_dict: JSON = correlation.to_dict()
@@ -707,6 +708,10 @@ class RemoteCapabilityHost:
         }
         if version is not None:
             body["version"] = version
+        if mandate is not None:
+            # Presented authority (§10): the delegate host verifies it; the
+            # evidence subject becomes "delegate under principal's mandate".
+            body["mandate"] = mandate
         data = self._post("/invoke", body)
         return self._parse_result(data)
 

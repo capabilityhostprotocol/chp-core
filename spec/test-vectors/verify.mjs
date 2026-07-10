@@ -139,6 +139,33 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (adapter-provenance, ${input.package}==${input.version}, published by ${pub.host_id})`
     : "INVALID");
+} else if (input.kind === "mandate") {
+  // Mandate (chp-v0.2.md §10): the principal key signs the canonical header
+  // — a bounded, expiring, capability-scoped grant to a named delegate.
+  const principal = input.principal ?? {};
+  const pPub = createPublicKey({
+    key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                        Buffer.from(principal.public_key ?? "", "base64")]),
+    format: "der", type: "spki",
+  });
+  const vCanon = (obj, sigB64) =>
+    edVerify(null, Buffer.from(canon(obj), "utf8"), pPub, Buffer.from(sigB64, "base64"));
+  const header = { kind: input.kind, mandate_id: input.mandate_id,
+                   delegate_id: input.delegate_id, scope: input.scope,
+                   valid_from: input.valid_from, valid_until: input.valid_until,
+                   created_at: input.created_at, canonicalization: input.canonicalization };
+  ok = input.signature?.algorithm === "ed25519" && vCanon(header, input.signature.signature);
+  const att = principal.host_identity;
+  if (att) {
+    const claim = { host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
+                    valid_from: att.valid_from, valid_until: att.valid_until,
+                    ...("anchors" in att ? { anchors: att.anchors } : {}) };
+    if (!(att.host_id === principal.host_id && att.public_key === principal.public_key
+          && vCanon(claim, att.signature))) { console.error("principal attestation INVALID"); ok = false; }
+  } else { console.error("mandate missing principal attestation"); ok = false; }
+  console.log(ok
+    ? `VALID (mandate ${input.mandate_id}: ${principal.host_id} → ${input.delegate_id}, scope [${(input.scope ?? []).join(", ")}], until ${input.valid_until})`
+    : "INVALID");
 } else if (input.kind === "task-bundle") {
   // Task bundle (chp-v0.2.md §8): every member verifies; canonical member order
   // (host_id, root_hash); task_root_hash = SHA256 over member root_hashes + "\n";

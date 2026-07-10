@@ -262,6 +262,24 @@ def cmd_verify_evidence(args: argparse.Namespace) -> int:
                 "reason": pv.reason,
             }, indent=2))
             return 0 if pv.valid else 1
+        # Mandates (delegated authority, chp-v0.2.md §10) dispatch on kind.
+        if bundle.get("kind") == "mandate":
+            mv = signing.verify_mandate(
+                bundle, expected_principal_key=getattr(args, "expect_key", None))
+            print(json.dumps({
+                "kind": "mandate",
+                "mandate_id": bundle.get("mandate_id"),
+                "principal": (bundle.get("principal") or {}).get("host_id"),
+                "delegate_id": bundle.get("delegate_id"),
+                "scope": bundle.get("scope"),
+                "valid_until": bundle.get("valid_until"),
+                "anchored_domain": mv.anchored_domain,
+                "anchored_did": mv.anchored_did,
+                "valid": mv.valid,
+                "checks": mv.checks,
+                "reason": mv.reason,
+            }, indent=2))
+            return 0 if mv.valid else 1
         # Task bundles (cross-host, chp-v0.2.md §8) dispatch on kind.
         if bundle.get("kind") == "task-bundle":
             tv = signing.verify_task_bundle(bundle)
@@ -664,6 +682,74 @@ def cmd_provenance_sign(args: argparse.Namespace) -> int:
     print(json.dumps({"publisher": args.publisher_id, "key_id": key.key_id,
                       "signed": written}, indent=2))
     return 0 if written else 1
+
+
+def cmd_mandate_issue(args: argparse.Namespace) -> int:
+    import sys
+    from datetime import datetime, timedelta, timezone
+
+    from .. import signing
+    from ..types import utc_now
+
+    key_dir = args.key_dir or signing.resolve_key_dir(args.principal_id)
+    key = signing.load_host_key(key_dir)
+    if key is None or not key.can_sign:
+        print(f"no signing key in {key_dir} — run `chp keygen` first", file=sys.stderr)
+        return 1
+    anchors = signing.load_configured_anchors(key_dir) or None
+    key_history = signing.load_key_history(key_dir) or None
+
+    now = utc_now()
+    valid_until = args.valid_until
+    if valid_until is None:
+        base = datetime.fromisoformat(now.replace("Z", "+00:00"))
+        hours = float(args.ttl_hours)
+        valid_until = (base + timedelta(hours=hours)).astimezone(
+            timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    mandate = signing.build_mandate(
+        args.principal_id, key,
+        delegate_id=args.delegate,
+        scope=[s for s in (e.strip() for e in args.scope.split(",")) if s],
+        valid_from=now, valid_until=valid_until, created_at=now,
+        anchors=anchors, key_history=key_history)
+    text = json.dumps(mandate, indent=2, sort_keys=True) + "\n"
+    if args.out:
+        from pathlib import Path
+        Path(args.out).write_text(text)
+        print(json.dumps({"mandate_id": mandate["mandate_id"],
+                          "delegate_id": args.delegate,
+                          "scope": mandate["scope"],
+                          "valid_until": valid_until,
+                          "written": args.out}, indent=2))
+    else:
+        print(text, end="")
+    return 0
+
+
+def cmd_mandate_verify(args: argparse.Namespace) -> int:
+    from .. import signing
+
+    with open(args.mandate) as fh:
+        mandate = json.load(fh)
+    at_time = args.at_time
+    if at_time is None:
+        from ..types import utc_now
+        at_time = utc_now()
+    v = signing.verify_mandate(
+        mandate, at_time=at_time, capability_id=args.capability,
+        delegate_id=args.delegate, expected_principal_key=args.expect_key)
+    print(json.dumps({
+        "kind": "mandate",
+        "mandate_id": mandate.get("mandate_id"),
+        "principal": (mandate.get("principal") or {}).get("host_id"),
+        "delegate_id": mandate.get("delegate_id"),
+        "scope": mandate.get("scope"),
+        "valid_until": mandate.get("valid_until"),
+        "checked_at": at_time,
+        "anchored_domain": v.anchored_domain, "anchored_did": v.anchored_did,
+        "valid": v.valid, "checks": v.checks, "reason": v.reason,
+    }, indent=2))
+    return 0 if v.valid else 1
 
 
 def cmd_provenance_verify(args: argparse.Namespace) -> int:

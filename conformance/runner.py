@@ -1570,6 +1570,84 @@ async def check_scoped_caller_key(host: Any) -> None:
     assert code == "policy_blocked", f"out-of-scope denial must use policy_blocked, got {code!r}"
 
 
+def _denial_code(result: Any) -> Any:
+    denial = result_value(result, "denial")
+    return denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
+
+
+async def check_mandate_gate(host: Any) -> None:
+    """v0.2 §10 (pipeline gate 5): delegated authority on the wire. The runner
+    plays PRINCIPAL with a fresh in-memory key — the host under test has never
+    met it (verification is offline; principal pinning is a MAY). A valid,
+    in-scope mandate succeeds and the evidence subject becomes the delegate
+    acting under the principal's authority; out-of-scope → policy_blocked;
+    expired or tampered → mandate_invalid. All PROCESSED denials, never 403."""
+    import base64
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from chp_core import signing
+
+    # Whose name must the mandate carry? Probe: a transport-authenticated
+    # connection binds a verified caller the mandate MUST name as delegate;
+    # an unauthenticated one accepts any delegate name.
+    probe = await invoke_host(host, "conformance.echo", {"value": "probe"},
+                              correlation={"correlation_id": "conf-mandate-probe"})
+    assert result_value(probe, "outcome") == "success", f"probe invoke failed: {probe}"
+    probe_subj = (host.replay("conf-mandate-probe")[0].get("subject") or {})
+    delegate = probe_subj.get("id") if probe_subj.get("verified") else "conformance-runner"
+
+    priv = ed25519.Ed25519PrivateKey.generate()
+    pub = base64.b64encode(priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+    key = signing.HostKey(key_id=signing.key_id_for(base64.b64decode(pub)),
+                          public_key_b64=pub, _private=priv)
+    now = datetime.now(timezone.utc)
+
+    def _iso(dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _mandate(scope: list[str], hours: float = 1) -> dict:
+        return signing.build_mandate(
+            "conformance-principal", key, delegate_id=delegate, scope=scope,
+            valid_from=_iso(now - timedelta(minutes=1)),
+            valid_until=_iso(now + timedelta(hours=hours)),
+            created_at=_iso(now))
+
+    # 1. Valid + in-scope → success; the signed chain carries the mandate subject.
+    ok = await invoke_host(host, "conformance.echo", {"value": "mandated"},
+                           correlation={"correlation_id": "conf-mandate-ok"},
+                           mandate=_mandate(["conformance.echo"]))
+    assert result_value(ok, "outcome") == "success", f"mandated invoke failed: {ok}"
+    subj = (host.replay("conf-mandate-ok")[0].get("subject") or {})
+    assert subj.get("type") == "mandate" and subj.get("verified") is True, (
+        f"evidence subject must be the mandate binding, got: {subj}")
+    assert subj.get("id") == delegate and subj.get("principal") == "conformance-principal", (
+        f"mandate subject must name delegate + principal, got: {subj}")
+
+    # 2. Out-of-scope capability → PROCESSED policy_blocked (§2 semantics).
+    denied = await invoke_host(host, "conformance.fail", {},
+                               mandate=_mandate(["conformance.echo"]))
+    assert result_value(denied, "outcome") == "denied", f"out-of-scope must deny: {denied}"
+    assert _denial_code(denied) == "policy_blocked", (
+        f"out-of-mandate-scope must be policy_blocked, got {_denial_code(denied)!r}")
+
+    # 3. Expired mandate → mandate_invalid (never becomes valid again).
+    expired = await invoke_host(host, "conformance.echo", {"value": "late"},
+                                mandate=_mandate(["conformance.echo"], hours=-1))
+    assert _denial_code(expired) == "mandate_invalid", (
+        f"expired mandate must be mandate_invalid, got {_denial_code(expired)!r}")
+
+    # 4. Tampered mandate (scope widened after signing) → mandate_invalid.
+    bad = _mandate(["conformance.echo"])
+    bad["scope"] = ["*"]
+    tampered = await invoke_host(host, "conformance.echo", {"value": "x"}, mandate=bad)
+    assert _denial_code(tampered) == "mandate_invalid", (
+        f"tampered mandate must be mandate_invalid, got {_denial_code(tampered)!r}")
+
+
 WIRE_CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -1588,6 +1666,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("identity document (v0.2 §3.1)", check_identity_document),
     ("export bundle verifies (v0.2 §4a)", check_export_bundle),
     ("capability-scoped caller key (binding §2)", check_scoped_caller_key),
+    ("mandate gate (v0.2 §10)", check_mandate_gate),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

@@ -19,7 +19,7 @@ black-box runner against it:
 python conformance/runner.py --url http://localhost:PORT --key <key> --suite wire
 ```
 
-A conforming host prints **`[wire] 17/17`**. The 17 checks: capability
+A conforming host prints **`[wire] 18/18`**. The 18 checks: capability
 declaration + discovery, envelope invocation, correlation propagation, evidence
 on success / failure / denial, replay by correlation, standard denial codes, the
 four governance gates (approval-required, budget-exceeded, risk-tier,
@@ -27,9 +27,13 @@ safety-guardrail), chain verification over `/verify`, the public identity
 document at `/.well-known/chp-identity` (spec §3.1 — assurance tier declared;
 at the signed tier the self-attestation must verify), the export route
 (binding §4a — the exported bundle must verify offline at the declared tier),
-and capability-scoped caller keys (binding §2 — an out-of-scope invocation is a
+capability-scoped caller keys (binding §2 — an out-of-scope invocation is a
 PROCESSED `policy_blocked` denial with evidence, never a transport 403; the
-runner needs `CHP_CONFORMANCE_SCOPED_KEY`, see FIXTURES.md).
+runner needs `CHP_CONFORMANCE_SCOPED_KEY`, see FIXTURES.md), and the mandate
+gate (spec §10 — the runner plays a never-met principal; a valid in-scope
+mandate succeeds with the delegate-under-principal subject in evidence, while
+out-of-scope / expired / tampered are processed `policy_blocked` /
+`mandate_invalid` denials).
 
 The runner drives your host purely over HTTP through the reference client. What
 it asserts (outcomes, reserved denial codes, event sequences, the 200-for-denied
@@ -82,6 +86,6 @@ library) · `wire` (black-box HTTP, needs `--url`) · `all`.
 
 ## Claiming conformance
 
-A host that prints `17/17` on suite `wire` **and** passes the §2 interop checks
+A host that prints `18/18` on suite `wire` **and** passes the §2 interop checks
 is CHP-conformant at the tier it declares in `/host` (`assurance`:
 `hash-chain` or `signed`). Record the runner output as your evidence.

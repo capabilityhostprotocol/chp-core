@@ -48,6 +48,9 @@ export interface InvocationEnvelope {
   mode?: string;
   correlation?: Correlation;
   subject?: JsonValue;
+  /** OPTIONAL presented authority (chp-v0.2.md §10) — a principal-signed
+   * mandate the host verifies before executing. Absent = today's behavior. */
+  mandate?: Record<string, JsonValue> | null;
 }
 
 export interface DenialReason {

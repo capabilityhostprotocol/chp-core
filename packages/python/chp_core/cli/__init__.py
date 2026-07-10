@@ -12,6 +12,8 @@ from ._core import (
     cmd_invoke,
     cmd_anchor_did,
     cmd_keygen,
+    cmd_mandate_issue,
+    cmd_mandate_verify,
     cmd_provenance_sign,
     cmd_provenance_verify,
     cmd_revoke_key,
@@ -662,6 +664,38 @@ def build_parser() -> argparse.ArgumentParser:
     prov_verify.add_argument("--expect-key", default=None, dest="expect_key",
                              help="Require this publisher key_id.")
     prov_verify.set_defaults(func=cmd_provenance_verify)
+
+    mandate_p = subcommands.add_parser(
+        "mandate",
+        help="Delegated-authority mandates: signed, expiring, capability-scoped grants (spec §10).")
+    mandate_sub = mandate_p.add_subparsers(dest="mandate_command", required=True)
+    mnd_issue = mandate_sub.add_parser(
+        "issue", help="Issue a mandate: this host grants a delegate bounded authority.")
+    mnd_issue.add_argument("--principal-id", required=True, dest="principal_id",
+                           help="Issuing identity (a host_id with a signing key).")
+    mnd_issue.add_argument("--delegate", required=True,
+                           help="Identity being authorized (the acting caller name).")
+    mnd_issue.add_argument("--scope", required=True,
+                           help="Comma-separated capability ids or trailing-* prefixes.")
+    mnd_issue.add_argument("--ttl-hours", default="24", dest="ttl_hours",
+                           help="Validity window from now (default 24h).")
+    mnd_issue.add_argument("--valid-until", default=None, dest="valid_until",
+                           help="Explicit expiry (overrides --ttl-hours).")
+    mnd_issue.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
+    mnd_issue.add_argument("--out", default=None, help="Write the mandate here instead of stdout.")
+    mnd_issue.set_defaults(func=cmd_mandate_issue)
+    mnd_verify = mandate_sub.add_parser(
+        "verify", help="Verify a mandate offline (signature, identity, window, scope).")
+    mnd_verify.add_argument("mandate", help="Path to a mandate JSON file.")
+    mnd_verify.add_argument("--capability", default=None,
+                            help="Check this capability id is in scope.")
+    mnd_verify.add_argument("--delegate", default=None,
+                            help="Check the mandate names this delegate.")
+    mnd_verify.add_argument("--at-time", default=None, dest="at_time",
+                            help="Check the validity window at this time (default: now).")
+    mnd_verify.add_argument("--expect-key", default=None, dest="expect_key",
+                            help="Require this principal key_id.")
+    mnd_verify.set_defaults(func=cmd_mandate_verify)
 
     keygen_p = subcommands.add_parser("keygen", help="Generate a host ed25519 signing keypair.")
     keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")

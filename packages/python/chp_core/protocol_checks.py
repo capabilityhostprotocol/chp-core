@@ -417,6 +417,26 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "provenance_vector_verifies", False, {"error": str(exc)})
 
+    # Mandate vector: the delegated-authority statement verifies (§10).
+    mandate_vec = repo_root / "spec" / "test-vectors" / "mandate.json"
+    if mandate_vec.exists():
+        try:
+            from .signing import verify_mandate
+
+            mandate = read_json(mandate_vec)
+            mv = verify_mandate(
+                mandate, at_time=mandate["valid_from"],
+                capability_id="demo.echo",
+                delegate_id=mandate["delegate_id"])
+            add_check(
+                checks,
+                "mandate_vector_verifies",
+                mv.valid,
+                {"checks": mv.checks, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "mandate_vector_verifies", False, {"error": str(exc)})
+
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
 

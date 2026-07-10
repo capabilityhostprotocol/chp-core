@@ -281,6 +281,85 @@ export function verifyProvenanceStatement(
   };
 }
 
+// ── Mandates — delegated authority on the wire (chp-v0.2.md §10, proposal 0002)
+
+const MANDATE_HEADER_FIELDS = [
+  'kind', 'mandate_id', 'delegate_id', 'scope',
+  'valid_from', 'valid_until', 'created_at', 'canonicalization',
+] as const;
+
+/** The http-binding §2 scope grammar: exact capability id or trailing-`*` prefix. */
+export function scopeAllows(scope: JsonValue[], capabilityId: string): boolean {
+  return scope.some((s) => {
+    const entry = String(s);
+    return capabilityId === entry
+      || (entry.endsWith('*') && capabilityId.startsWith(entry.slice(0, -1)));
+  });
+}
+
+/** Offline-verify a mandate: structure, header signature, principal attestation
+ * (binding + temporal), DID anchor when present, the validity window at
+ * `atTime`, delegate binding, and — when `capabilityId` is supplied — scope. */
+export function verifyMandate(
+  mandate: Record<string, JsonValue>,
+  opts: {
+    atTime?: string; capabilityId?: string;
+    delegateId?: string; expectedPrincipalKey?: string;
+  } = {},
+): BundleVerification {
+  const checks: Record<string, boolean> = {};
+  let anchoredDid: string | null = null;
+  checks.structure = mandate.kind === 'mandate'
+    && !!mandate.mandate_id && !!mandate.delegate_id
+    && Array.isArray(mandate.scope) && !!mandate.valid_until;
+
+  const principal = (mandate.principal as Record<string, JsonValue> | undefined) ?? {};
+  const pubKey = String(principal.public_key ?? '');
+  const sig = (mandate.signature as Record<string, JsonValue> | undefined) ?? {};
+  if (opts.expectedPrincipalKey !== undefined && sig.key_id !== opts.expectedPrincipalKey) {
+    return { valid: false, assurance: 'signed', checks, reason: `signed by unexpected key ${String(sig.key_id)}` };
+  }
+
+  const header: Record<string, JsonValue> = {};
+  for (const f of MANDATE_HEADER_FIELDS) header[f] = mandate[f] ?? null;
+  checks.signature = sig.algorithm === 'ed25519' && !!pubKey
+    && verifyCanon(pubKey, header, String(sig.signature ?? ''));
+
+  const att = principal.host_identity as Record<string, JsonValue> | undefined;
+  if (att) {
+    checks.principal_identity = attestationOk(
+      att, pubKey, String(principal.host_id ?? ''),
+      (mandate.created_at as string | null) ?? null);
+    const dAnchor = didAnchor(att);
+    if (dAnchor) {
+      checks.did_anchor = verifyDidAnchor(dAnchor, pubKey, String(principal.host_id ?? ''));
+      if (checks.did_anchor) anchoredDid = dAnchor.did as string;
+    }
+  } else {
+    checks.principal_identity = false; // authority must say WHOSE
+  }
+
+  if (opts.atTime !== undefined) {
+    const vf = mandate.valid_from as string | null;
+    const vu = mandate.valid_until as string | null;
+    checks.temporal = (vf === null || vf <= opts.atTime)
+      && (vu === null || opts.atTime <= vu);
+  }
+  if (opts.delegateId !== undefined) {
+    checks.delegate = mandate.delegate_id === opts.delegateId;
+  }
+  if (opts.capabilityId !== undefined) {
+    checks.scope = scopeAllows((mandate.scope as JsonValue[]) ?? [], opts.capabilityId);
+  }
+
+  const valid = Object.values(checks).every(Boolean);
+  return {
+    valid, assurance: 'signed', checks, anchoredDid,
+    reason: valid ? undefined : 'mandate checks failed: '
+      + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
+  };
+}
+
 // ── Task bundles — cross-host verification unit (chp-v0.2.md §8) ────────────
 
 export interface TaskBundleVerification {

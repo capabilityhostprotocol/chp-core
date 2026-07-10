@@ -860,6 +860,130 @@ def verify_provenance_statement(stmt: dict, *,
                               anchored_did=anchored_did)
 
 
+_MANDATE_HEADER_FIELDS = ("kind", "mandate_id", "delegate_id", "scope",
+                          "valid_from", "valid_until", "created_at",
+                          "canonicalization")
+
+
+def mandate_header(mandate: dict) -> dict:
+    """The principal-signed header of a mandate (§10)."""
+    return {k: mandate.get(k) for k in _MANDATE_HEADER_FIELDS}
+
+
+def scope_allows(scope: list, capability_id: str) -> bool:
+    """The binding-§2 scope grammar: exact capability id or trailing-`*` prefix."""
+    return any(
+        capability_id == s or (str(s).endswith("*") and capability_id.startswith(str(s)[:-1]))
+        for s in scope
+    )
+
+
+def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
+                  scope: list[str], valid_from: str, valid_until: str,
+                  created_at: str, mandate_id: str | None = None,
+                  anchors: list[dict] | None = None,
+                  key_history: list[dict] | None = None) -> dict:
+    """A principal's signed grant of BOUNDED authority to a delegate (proposal
+    0002, chp-v0.2.md §10): "delegate D may invoke capabilities in SCOPE on my
+    behalf until VALID_UNTIL."
+
+    The third member of the statement family (bundles §3, provenance §9): the
+    signature covers the canonical header, the principal's attestation (with
+    anchors) answers "whose authority?", and key_history rides omit-when-empty
+    for rotation continuity. Replaces nothing — transport auth still gates the
+    connection; a mandate narrows and attributes, it never bypasses."""
+    if not host_key.can_sign:
+        raise SigningUnavailable("principal key has no private component; cannot sign")
+    from .types import new_id
+    mandate: dict = {
+        "kind": "mandate",
+        "mandate_id": mandate_id or new_id("mnd"),
+        "delegate_id": delegate_id,
+        "scope": sorted(scope),
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "created_at": created_at,
+        "canonicalization": CANONICALIZATION,
+    }
+    mandate["principal"] = {
+        "host_id": principal_id,
+        "public_key": host_key.public_key_b64,
+        "host_identity": build_attestation(
+            principal_id, host_key, valid_from=created_at, anchors=anchors),
+    }
+    if key_history:
+        mandate["principal"]["key_history"] = key_history
+    mandate["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": host_key.key_id,
+        "signature": _sign(host_key._private, _canon(mandate_header(mandate))),
+    }
+    return mandate
+
+
+def verify_mandate(mandate: dict, *, at_time: str | None = None,
+                   capability_id: str | None = None,
+                   delegate_id: str | None = None,
+                   expected_principal_key: str | None = None) -> BundleVerification:
+    """Offline-verify a mandate: structure, header signature, principal
+    attestation (binding + temporal), DID anchor when present, the validity
+    window at ``at_time``, delegate binding when ``delegate_id`` is supplied,
+    and — when ``capability_id`` is supplied — that it is in scope."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = (mandate.get("kind") == "mandate"
+                           and bool(mandate.get("mandate_id"))
+                           and bool(mandate.get("delegate_id"))
+                           and isinstance(mandate.get("scope"), list)
+                           and bool(mandate.get("valid_until")))
+    principal = mandate.get("principal") or {}
+    pub = str(principal.get("public_key") or "")
+    sig = mandate.get("signature") or {}
+    anchored_domain: str | None = None
+    anchored_did: str | None = None
+
+    if expected_principal_key is not None and sig.get("key_id") != expected_principal_key:
+        return BundleVerification(
+            False, "signed", checks,
+            f"signed by unexpected key {sig.get('key_id')!r} "
+            f"(expected {expected_principal_key!r})")
+
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM
+                           and bool(pub)
+                           and _verify_sig(pub, _canon(mandate_header(mandate)),
+                                           str(sig.get("signature") or "")))
+
+    att = principal.get("host_identity")
+    if att:
+        checks["principal_identity"] = verify_attestation(
+            att, public_key=pub, expected_host_id=principal.get("host_id"),
+            at_time=mandate.get("created_at"))
+        anchored_domain = _domain_anchor(att)
+        did_anchor = _did_anchor(att)
+        if did_anchor is not None:
+            checks["did_anchor"] = verify_did_anchor(
+                did_anchor, pub, str(principal.get("host_id", "")))
+            if checks["did_anchor"]:
+                anchored_did = str(did_anchor.get("did"))
+    else:
+        checks["principal_identity"] = False  # authority must say WHOSE
+
+    if at_time is not None:
+        vf, vu = mandate.get("valid_from"), mandate.get("valid_until")
+        checks["temporal"] = ((vf is None or vf <= at_time)
+                              and (vu is None or at_time <= vu))
+    if delegate_id is not None:
+        checks["delegate"] = mandate.get("delegate_id") == delegate_id
+    if capability_id is not None:
+        checks["scope"] = scope_allows(mandate.get("scope") or [], capability_id)
+
+    valid = all(checks.values())
+    reason = None if valid else "mandate checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason,
+                              anchored_domain=anchored_domain,
+                              anchored_did=anchored_did)
+
+
 _TASK_HEADER_FIELDS = ("kind", "correlation_id", "protocol_version", "created_at",
                        "canonicalization", "task_root_hash")
 

@@ -43,6 +43,10 @@
       "type": "object",
       "additionalProperties": true,
       "default": {}
+    },
+    "mandate": {
+      "$ref": "https://chp.dev/schemas/v0.2/mandate.schema.json",
+      "description": "OPTIONAL presented authority (chp-v0.2.md section 10): a principal-signed, expiring, capability-scoped grant naming the caller as delegate. The host verifies it before executing; when valid, the evidence subject becomes {type: 'mandate', id: delegate_id, principal, mandate_id, verified: true}. Omitted = today's behavior (additive)."
     }
   }
 }

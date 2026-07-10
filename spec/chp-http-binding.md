@@ -1,6 +1,6 @@
 # Capability Host Protocol — HTTP Binding (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.3 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
 ([v0.1](chp-v0.1.md)) onto HTTP, so a host in any language is wire-compatible
 with the reference `RemoteCapabilityHost` client and the black-box conformance
 runner (`conformance/runner.py --url`). CHP is transport-agnostic; this is the
@@ -57,6 +57,17 @@ scope is a **processed governance denial**: outcome `denied` with the reserved
 a scope decision is governance, never a bare transport 403). An unscoped key
 is unrestricted (today's behavior). Scope is enforced by the host that
 authenticates the caller.
+
+**Mandates (delegated authority).** Beyond keys, an invocation MAY present a
+signed **mandate** in the envelope (chp-v0.2.md §10) — a principal's expiring,
+capability-scoped grant naming the caller as delegate. The mandate does not
+authenticate the connection (a key, or the open local-first default, still
+does that); it *narrows and attributes*: when transport auth has verified a
+caller, the mandate MUST name that caller as `delegate_id`, and on success the
+evidence subject becomes the delegate-under-principal binding. Mandate scope
+uses this section's grammar; verification failures are processed
+`mandate_invalid` denials and out-of-scope invocations are `policy_blocked` —
+HTTP 200 with evidence, per §1.
 
 If no keys are configured the host MAY accept all callers (local-first default).
 Network-layer confidentiality (e.g. a private mesh) MAY substitute for TLS.

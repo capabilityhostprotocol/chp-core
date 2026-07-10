@@ -19,7 +19,8 @@
         "invariant_failed",
         "budget_exceeded",
         "approval_required",
-        "safety_blocked"
+        "safety_blocked",
+        "mandate_invalid"
       ]
     },
     "message": {

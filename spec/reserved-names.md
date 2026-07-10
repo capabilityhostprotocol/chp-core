@@ -41,6 +41,7 @@ ordering are normative in [chp-invocation-pipeline.md](chp-invocation-pipeline.m
 - `capability_not_found`
 - `input_schema_validation_failed`
 - `invariant_failed`
+- `mandate_invalid`
 - `policy_blocked`
 - `safety_blocked`
 - `unsupported_mode`
