@@ -573,4 +573,6 @@ not an operational side channel.
 retry that helps; `retryable: true` plus `retry_after_s` tells the caller when
 a retry becomes worthwhile. This spec deliberately defines no automatic client
 retry, no active prober, and no unhealthy-state persistence — named deferrals
-in proposal 0003, waiting on demand.
+in proposal 0003, waiting on demand. (The reference implementation provides
+a client retry and an active prober as opt-in, non-normative features; the
+spec still defines neither.)

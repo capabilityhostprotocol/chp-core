@@ -84,6 +84,15 @@ consumer needs faster detection), client-side backoff in
 restarts, a gateway wire-conformance fixture (spawn-mesh harness), jobs-adapter
 retry/dead-letter, and any load-shedding vocabulary.
 
+> **Discharge annotation (2026-07-10, rad:eccd999):** three deferrals landed
+> as follow-through — the **gateway conformance fixture** (the `mesh` suite,
+> `[mesh] 8/8`, MESH-FIXTURES.md), the **active prober**
+> (`MultiHostRouter.start_prober`, `gateway.probe_interval_s`, default off),
+> and **client backoff** (`RemoteCapabilityHost(retries=, retry_cap_s=)`,
+> consuming `retryable` + `retry_after_s`, default off). All non-normative:
+> the spec still defines none of them. Unhealthy-set persistence,
+> jobs retry/dead-letter, and load-shedding vocabulary remain deferred.
+
 ## Shipped as
 
 - Spec: chp-v0.2.md **§11 Routing & Reachability**; binding §3 routing-

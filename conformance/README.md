@@ -44,6 +44,24 @@ implement from the spec, not from reading a reference.
 *Worked example:* `node packages/chp-host-ts/dist/bin/serve.js --port 8899 --key k`
 then `python conformance/runner.py --url http://localhost:8899 --key k --suite wire`.
 
+### 1a. Mesh conformance (routing intermediary under test)
+
+A **gateway** that routes invocations across member hosts has its own
+obligations (spec §11 + §10 Forwarding): processed `host_unreachable` denials
+(HTTP 200, never a bare 5xx), mandates forwarded unchanged, its own health
+transitions merged into stitched replays, partial replays disclosed, partial
+exports refused with 503. The `mesh` suite proves them black-box: the runner
+hosts two reference member hosts, your gateway routes between them, and the
+runner induces failure by killing its own member:
+
+```bash
+python conformance/runner.py --gateway-url http://localhost:PORT --suite mesh
+```
+
+A conforming intermediary prints **`[mesh] 8/8`**. Topology, gateway config
+requirements (evidence store, keyless members, members-first start order),
+and the ordered check list: [MESH-FIXTURES.md](MESH-FIXTURES.md).
+
 ## 2. Canonicalization + signing interop (bytes under test)
 
 Your `chp-stable-v1` implementation must reproduce the published bytes exactly,

@@ -497,3 +497,92 @@ def test_capability_scoped_key_denies_out_of_scope_with_evidence(monkeypatch) ->
         assert denials and denials[-1]["capability_id"] == "out.of.scope"
     finally:
         server.shutdown(); server.server_close()
+
+
+class RetryBackoffTests(unittest.TestCase):
+    """Opt-in client retry (reference feature): consumes retryable +
+    retry_after_s; default OFF; RemoteCapabilityHost only."""
+
+    def _denied(self, code="host_unreachable", retryable=True, retry_after=3):
+        return {
+            "invocation_id": "inv_x", "capability_id": "c", "capability_version": None,
+            "correlation": {"correlation_id": "corr_x"}, "outcome": "denied",
+            "success": False, "data": None, "error": None,
+            "denial": {"code": code, "message": "down", "retryable": retryable,
+                       "details": {"retry_after_s": retry_after}},
+            "evidence_ids": [],
+        }
+
+    def _success(self):
+        return {
+            "invocation_id": "inv_x", "capability_id": "c", "capability_version": "1",
+            "correlation": {"correlation_id": "corr_x"}, "outcome": "success",
+            "success": True, "data": {"ok": 1}, "error": None, "denial": None,
+            "evidence_ids": [],
+        }
+
+    def _run(self, host, script):
+        import asyncio
+        from unittest import mock
+
+        calls = iter(script)
+
+        def fake_post(_path, _body):
+            item = next(calls)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        sleeps: list[float] = []
+        with mock.patch.object(host, "_post", side_effect=fake_post), \
+                mock.patch("time.sleep", side_effect=sleeps.append):
+            result = asyncio.run(host.ainvoke("c", {}))
+        return result, sleeps
+
+    def test_default_off_returns_denial_immediately(self):
+        from chp_core.http import RemoteCapabilityHost
+
+        host = RemoteCapabilityHost("http://x")
+        result, sleeps = self._run(host, [self._denied()])
+        self.assertEqual(result.denial.code, "host_unreachable")
+        self.assertEqual(sleeps, [])
+
+    def test_retries_unreachable_denial_with_retry_after(self):
+        from chp_core.http import RemoteCapabilityHost
+
+        host = RemoteCapabilityHost("http://x", retries=2)
+        result, sleeps = self._run(host, [self._denied(retry_after=3), self._success()])
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(sleeps, [3.0])  # the denial's own advice paces the retry
+
+    def test_retry_cap_bounds_sleep(self):
+        from chp_core.http import RemoteCapabilityHost
+
+        host = RemoteCapabilityHost("http://x", retries=1, retry_cap_s=2.0)
+        result, sleeps = self._run(host, [self._denied(retry_after=300), self._success()])
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(sleeps, [2.0])
+
+    def test_retries_connection_error_with_backoff(self):
+        from chp_core.http import RemoteCapabilityHost
+
+        host = RemoteCapabilityHost("http://x", retries=2)
+        result, sleeps = self._run(
+            host, [ConnectionError("down"), ConnectionError("down"), self._success()])
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(sleeps, [1.0, 2.0])  # 2^0, 2^1
+
+    def test_exhausted_retries_reraise(self):
+        from chp_core.http import RemoteCapabilityHost
+
+        host = RemoteCapabilityHost("http://x", retries=1)
+        with self.assertRaises(ConnectionError):
+            self._run(host, [ConnectionError("down"), ConnectionError("down")])
+
+    def test_non_retryable_denial_never_retried(self):
+        from chp_core.http import RemoteCapabilityHost
+
+        host = RemoteCapabilityHost("http://x", retries=3)
+        result, sleeps = self._run(host, [self._denied(code="policy_blocked", retryable=False)])
+        self.assertEqual(result.denial.code, "policy_blocked")
+        self.assertEqual(sleeps, [])

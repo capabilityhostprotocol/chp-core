@@ -550,6 +550,13 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
           f"(selection={selection}, evidence={store_path})...")
     asyncio.run(router.connect())
 
+    # Background health prober (reference feature): continuous §11 transition
+    # evidence instead of invocation-triggered only. Off unless configured.
+    probe_interval = float(getattr(gw, "probe_interval_s", 0) or 0) if gw else 0.0
+    if probe_interval > 0:
+        router.start_prober(probe_interval)
+        print(f"Health prober: every {probe_interval:g}s")
+
     cap_count = len(router.capability_ids)
     print(f"Routing table: {cap_count} capabilities across {len(router._descriptors)} host(s)")
     for cap_id in router.capability_ids[:10]:

@@ -1718,6 +1718,310 @@ async def run(sample: str, suite: str = "all") -> list[CheckResult]:
     return await _run_checks(host, checks)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Mesh suite (spec §11 + §10 Forwarding — routing-intermediary obligations)
+#
+# Topology: the RUNNER hosts two reference member hosts; the implementer's
+# GATEWAY-UNDER-TEST routes between them; the runner drives the gateway
+# black-box over HTTP and induces failure by killing its OWN member — the
+# suite never needs control of the implementation. See MESH-FIXTURES.md.
+#
+# The checks are ORDERED and STATEFUL (destructive checks last; check 7 reads
+# the correlation check 5 recorded) — NEVER reorder MESH_CHECKS.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class MeshHarness:
+    """The `host` argument for mesh checks: the gateway client + the runner's
+    own member hosts/servers + cross-check state."""
+
+    def __init__(self, gateway, members: dict) -> None:
+        self.gateway = gateway            # RemoteCapabilityHost at the gateway
+        self.members = members            # name -> {"host", "server", "url"}
+        self.state: dict = {}             # cross-check state (ordered suite)
+
+    def stop_member(self, name: str) -> None:
+        entry = self.members[name]
+        entry["server"].shutdown()
+        entry["server"].server_close()
+        entry["stopped"] = True
+
+
+def _make_mesh_member(host_id: str, cap_ids: list[str]):
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+
+    host = LocalCapabilityHost(host_id, store=SQLiteEvidenceStore(":memory:"))
+    for cap_id in cap_ids:
+        async def handler(_ctx, payload, _h=host_id):
+            return {"served_by": _h, **(payload or {})}
+        host.register(
+            CapabilityDescriptor(id=cap_id, version="1.0.0",
+                                 description=f"mesh fixture {cap_id}"),
+            handler,
+        )
+    return host
+
+
+def _serve_member(host, port: int):
+    import threading
+
+    from chp_core.http import create_http_server
+
+    server = create_http_server(host, bind="127.0.0.1", port=port)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _member_events(harness: "MeshHarness", correlation_id: str) -> list:
+    """All events for a correlation across the runner's member hosts."""
+    events = []
+    for entry in harness.members.values():
+        if not entry.get("stopped"):
+            events.extend(entry["host"].replay(correlation_id))
+    return events
+
+
+def _gateway_get_json(h: "MeshHarness", path: str):
+    """Raw authed GET against the gateway (routes the client doesn't wrap)."""
+    import json as _json
+    import urllib.request
+
+    base = getattr(h.gateway, "_base", "")
+    req = urllib.request.Request(f"{base}{path}", method="GET")
+    api_key = getattr(h.gateway, "_api_key", None)
+    if api_key:
+        req.add_header("X-CHP-Key", api_key)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return _json.loads(resp.read().decode())
+
+
+async def check_mesh_merged_discovery(h: "MeshHarness") -> None:
+    """The gateway's /host merges every member's catalog and annotates owners."""
+    descriptor = h.gateway.discover()  # RemoteCapabilityHost.discover is sync
+    caps = {c.get("id"): c for c in descriptor.get("capabilities", [])}
+    assert "mesh.echo" in caps and "mesh.only-a" in caps, (
+        f"gateway catalog must merge both members; saw {sorted(k for k in caps)[:10]}")
+    echo_hosts = caps["mesh.echo"].get("hosts") or []
+    assert len(echo_hosts) == 2, f"mesh.echo is owned by BOTH members, got {echo_hosts}"
+
+
+async def check_mesh_routed_invocation(h: "MeshHarness") -> None:
+    """A routed invocation succeeds and its correlation lands in the member's
+    evidence — the gateway propagated, not replaced, the correlation."""
+    corr = f"{RUN}-mesh-routed"
+    result = await invoke_host(h.gateway, "mesh.echo", {"value": "hi"},
+                               correlation={"correlation_id": corr})
+    assert result_value(result, "outcome") == "success", f"routed invoke failed: {result}"
+    types = [e["event_type"] for e in _member_events(h, corr)]
+    assert "execution_completed" in types, (
+        "the member's evidence must carry the caller's correlation")
+
+
+async def check_mesh_mandate_forwarded(h: "MeshHarness") -> None:
+    """§10 Forwarding: a mandate presented AT THE GATEWAY is verified by the
+    EXECUTING member — the delegate-under-principal subject lands in the
+    member's chain even though the transport subject was rebound at the hop.
+    The principal is a fresh key the members have never met (offline verify)."""
+    import base64
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from chp_core import signing
+
+    priv = ed25519.Ed25519PrivateKey.generate()
+    pub = base64.b64encode(priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+    key = signing.HostKey(key_id=signing.key_id_for(base64.b64decode(pub)),
+                          public_key_b64=pub, _private=priv)
+    now = datetime.now(timezone.utc)
+
+    def _iso(dt):
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    mandate = signing.build_mandate(
+        "mesh-principal", key, delegate_id="mesh-runner", scope=["mesh.echo"],
+        valid_from=_iso(now - timedelta(minutes=1)),
+        valid_until=_iso(now + timedelta(hours=1)), created_at=_iso(now))
+
+    corr = f"{RUN}-mesh-mandated"
+    result = await invoke_host(h.gateway, "mesh.echo", {"value": "delegated"},
+                               correlation={"correlation_id": corr},
+                               mandate=mandate)
+    assert result_value(result, "outcome") == "success", f"mandated invoke failed: {result}"
+    subjects = [e.get("subject") or {} for e in _member_events(h, corr)]
+    bound = [s for s in subjects if s.get("type") == "mandate"]
+    assert bound, "member evidence must carry the mandate-verified subject"
+    assert bound[0].get("id") == "mesh-runner", f"delegate mismatch: {bound[0]}"
+    assert bound[0].get("principal") == "mesh-principal", f"principal mismatch: {bound[0]}"
+
+
+async def check_mesh_export_bundle(h: "MeshHarness") -> None:
+    """/export on the gateway assembles the cross-host task bundle and it
+    verifies as a unit (hash-chain tier — no member signing required).
+    MUST run before the destructive checks (an unreachable member 503s)."""
+    from chp_core.signing import verify_task_bundle
+
+    corr = f"{RUN}-mesh-export"
+    # Both members must contribute ≥1 event: A serves its sole capability,
+    # B gets the co-owned one via affinity.
+    a = await invoke_host(h.gateway, "mesh.only-a", {},
+                          correlation={"correlation_id": corr})
+    assert result_value(a, "outcome") == "success", f"mesh.only-a failed: {a}"
+    b_url = h.members["member-b"]["url"]
+    b = await invoke_host(h.gateway, "mesh.echo", {},
+                          correlation={"correlation_id": corr},
+                          metadata={"prefer": b_url})
+    assert result_value(b, "outcome") == "success", f"prefer-B invoke failed: {b}"
+
+    task = _gateway_get_json(h, f"/export/{corr}")
+    assert task.get("kind") == "task-bundle", f"expected a task bundle, got {task.get('kind')}"
+    tv = verify_task_bundle(task)
+    assert tv.valid, f"assembled task bundle must verify: {tv.reason}"
+    host_ids = {b_.get("host_id") for b_ in task.get("bundles", [])}
+    assert host_ids == {"mesh-member-a", "mesh-member-b"}, (
+        f"both members must contribute: {host_ids}")
+    h.state["export_corr"] = corr
+
+
+async def check_mesh_failover(h: "MeshHarness") -> None:
+    """DESTRUCTIVE: member A dies; the co-owned capability fails over to B."""
+    h.stop_member("member-a")
+    corr = f"{RUN}-mesh-down"
+    h.state["down_corr"] = corr
+    result = await invoke_host(h.gateway, "mesh.echo", {},
+                               correlation={"correlation_id": corr})
+    assert result_value(result, "outcome") == "success", (
+        f"co-owned capability must fail over: {result}")
+    data = result_value(result, "data") or {}
+    assert data.get("served_by") == "mesh-member-b", f"expected member B, got {data}"
+
+
+async def check_mesh_host_unreachable(h: "MeshHarness") -> None:
+    """The solely-owned capability is now unplaceable: a PROCESSED denial —
+    HTTP 200, reserved host_unreachable, retryable, attempted hosts named."""
+    result = await invoke_host(h.gateway, "mesh.only-a", {},
+                               correlation={"correlation_id": h.state["down_corr"]})
+    assert result_value(result, "outcome") == "denied", (
+        f"must be a PROCESSED denial (HTTP 200 + outcome denied), got: {result}")
+    denial = result_value(result, "denial")
+    code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
+    assert code == "host_unreachable", f"reserved code required, got {code!r}"
+    retryable = (denial.get("retryable") if isinstance(denial, dict)
+                 else getattr(denial, "retryable", None))
+    assert retryable is True, "host_unreachable is retryable advice"
+    details = (denial.get("details") if isinstance(denial, dict)
+               else getattr(denial, "details", None)) or {}
+    assert details.get("attempted_hosts"), "details must name the attempted hosts"
+
+
+async def check_mesh_replay_disclosure(h: "MeshHarness") -> None:
+    """/replay is never silently partial: partial=true + missing_hosts, and the
+    gateway's own chain (the failover transition) merges into the timeline
+    (MESH-FIXTURES requires gateway.store)."""
+    corr = h.state["down_corr"]
+    result = h.gateway.replay_result(corr)
+    data = result if isinstance(result, dict) else result.to_dict()
+    assert data.get("partial") is True, f"partial replay must be disclosed, got {data.get('partial')}"
+    assert data.get("missing_hosts"), "missing_hosts must name the unreachable member"
+    types = [e.get("event_type") for e in data.get("events", [])]
+    assert "host_marked_unhealthy" in types, (
+        "the gateway's own §11 transition must merge into the stitched replay")
+
+
+async def check_mesh_export_refuses_partial(h: "MeshHarness") -> None:
+    """/export with a member down is a clean 503 — a silently-partial evidence
+    bundle is the failure task bundles exist to prevent."""
+    import urllib.error
+
+    try:
+        _gateway_get_json(h, f"/export/{h.state['export_corr']}")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 503, f"expected 503 on partial export, got {exc.code}"
+        return
+    raise AssertionError("partial /export must refuse with 503, not return a bundle")
+
+
+MESH_CHECKS: list[tuple[str, Check]] = [
+    # ORDERED + STATEFUL — never reorder (destructive checks last; later
+    # checks read state earlier checks recorded).
+    ("merged discovery across members", check_mesh_merged_discovery),
+    ("routed invocation propagates correlation", check_mesh_routed_invocation),
+    ("mandate forwarded unchanged (§10 Forwarding)", check_mesh_mandate_forwarded),
+    ("export assembles a verifying task bundle", check_mesh_export_bundle),
+    ("failover to the surviving owner", check_mesh_failover),
+    ("host_unreachable is a processed denial (§11)", check_mesh_host_unreachable),
+    ("partial replay disclosed + gateway chain merged", check_mesh_replay_disclosure),
+    ("export refuses partial with 503", check_mesh_export_refuses_partial),
+]
+
+
+SUITES["mesh"] = MESH_CHECKS  # driven via --gateway-url (never --url)
+
+
+async def run_mesh(gateway_url: str, *, api_key: str | None = None,
+                   member_ports: tuple[int, int] = (8951, 8952),
+                   after_members=None, gateway_timeout: float = 60.0) -> list[CheckResult]:
+    """The mesh suite: spawn the runner's two member hosts, wait for the
+    implementer's gateway to route them, drive the ordered checks, tear down.
+
+    `after_members(urls)` fires once the members are listening — the self-test
+    uses it to launch the reference gateway subprocess."""
+    import time as _time
+
+    from chp_core.http import RemoteCapabilityHost
+
+    # The runner's members are ALWAYS keyless (the gateway manifest carries no
+    # api_key_env) — ambient auth env in the runner process would 401 the
+    # gateway at the members, so it is cleared before they start (and before
+    # any after_members subprocess inherits the environment).
+    os.environ.pop("CHP_HOST_API_KEY", None)
+    os.environ.pop("CHP_HOST_API_KEYS", None)
+
+    members = {
+        "member-a": {"host": _make_mesh_member("mesh-member-a", ["mesh.echo", "mesh.only-a"])},
+        "member-b": {"host": _make_mesh_member("mesh-member-b", ["mesh.echo"])},
+    }
+    try:
+        for (name, entry), port in zip(members.items(), member_ports):
+            server = _serve_member(entry["host"], port)
+            entry["server"] = server
+            entry["url"] = f"http://127.0.0.1:{server.server_address[1]}"
+
+        if after_members is not None:
+            after_members({n: e["url"] for n, e in members.items()})
+
+        gateway = RemoteCapabilityHost(gateway_url, api_key=api_key)
+        harness = MeshHarness(gateway, members)
+
+        # Wait until the gateway has ROUTED the members (it discovers its
+        # routing table at boot — members-first start order is a MUST).
+        deadline = _time.monotonic() + gateway_timeout
+        while True:
+            try:
+                descriptor = gateway.discover()  # sync client method
+                ids = {c.get("id") for c in descriptor.get("capabilities", [])}
+                if "mesh.only-a" in ids:
+                    break
+            except Exception:
+                pass
+            if _time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"gateway at {gateway_url} never routed the runner's members "
+                    f"({[e['url'] for e in members.values()]}). Start ORDER matters: "
+                    "the members must be listening BEFORE the gateway boots "
+                    "(it discovers its routing table at connect) — see MESH-FIXTURES.md.")
+            _time.sleep(0.25)
+
+        return await _run_checks(harness, MESH_CHECKS)
+    finally:
+        for entry in members.values():
+            if not entry.get("stopped") and entry.get("server"):
+                entry["server"].shutdown()
+                entry["server"].server_close()
+
+
 async def run_url(base_url: str, *, api_key: str | None = None,
                   suite: str = "wire") -> list[CheckResult]:
     """Black-box: drive a running host over HTTP through RemoteCapabilityHost."""
@@ -1757,19 +2061,44 @@ def main() -> int:
         default=os.environ.get("CHP_HOST_API_KEY"),
         help="X-CHP-Key for the black-box host (or set CHP_HOST_API_KEY).",
     )
+    parser.add_argument(
+        "--gateway-url",
+        default=None,
+        dest="gateway_url",
+        help="Mesh suite: base URL of a running ROUTING GATEWAY under test. The "
+             "runner hosts two reference member hosts (--member-ports) the "
+             "gateway must be configured to route — see conformance/MESH-FIXTURES.md.",
+    )
+    parser.add_argument(
+        "--member-ports",
+        default="8951,8952",
+        dest="member_ports",
+        help="Mesh suite: the two localhost ports the runner's member hosts bind.",
+    )
     args = parser.parse_args()
 
-    if args.url:
+    if args.gateway_url:
+        ports = tuple(int(p) for p in args.member_ports.split(","))
+        results = asyncio.run(run_mesh(args.gateway_url, api_key=args.key,
+                                       member_ports=ports))
+    elif args.url:
         suite = args.suite if args.suite != "all" else "wire"
         results = asyncio.run(run_url(args.url, api_key=args.key, suite=suite))
     else:
+        if args.suite == "mesh":
+            print("--suite mesh needs --gateway-url (see conformance/MESH-FIXTURES.md)",
+                  file=sys.stderr)
+            return 2
         results = asyncio.run(run(args.sample, args.suite))
     for result in results:
         status = "PASS" if result.ok else "FAIL"
         suffix = f" - {result.detail}" if result.detail else ""
         print(f"{status} {result.name}{suffix}")
 
-    if args.url:
+    if args.gateway_url:
+        print(f"\n[mesh] {sum(r.ok for r in results)}/{len(results)} routing-intermediary "
+              f"checks against {args.gateway_url}")
+    elif args.url:
         print(f"\n[wire] {sum(r.ok for r in results)}/{len(results)} black-box HTTP checks "
               f"against {args.url}")
     if args.suite == "normative":

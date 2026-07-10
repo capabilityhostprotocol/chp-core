@@ -509,6 +509,30 @@ class MultiHostRouter:
             "hosts": hosts,
         }
 
+    def start_prober(self, interval_s: float):
+        """Background health prober (non-normative reference feature — spec §11
+        deliberately defines none): a daemon thread runs :meth:`health` every
+        *interval_s* seconds so unreachability is detected — and the §11
+        transition evidence emitted — CONTINUOUSLY, not only when an invocation
+        happens to fail. ``health()`` already probes every transport and calls
+        the transition-gated markers, so the prober is pure scheduling. Runs a
+        fresh event loop per tick (the same pattern the HTTP handler threads
+        use), off any running loop. Returns a zero-arg stop callable."""
+        import threading
+
+        stop = threading.Event()
+
+        def _probe_loop() -> None:
+            while not stop.wait(interval_s):
+                try:
+                    asyncio.run(self.health())
+                except Exception:  # noqa: BLE001 — a bad tick must not kill the prober
+                    pass
+
+        threading.Thread(target=_probe_loop, daemon=True,
+                         name=f"chp-prober-{self._host_id}").start()
+        return stop.set
+
     # ── health bookkeeping ──────────────────────────────────────────────────────
 
     def _matches_prefer(self, tr: Transport, prefer: str) -> bool:

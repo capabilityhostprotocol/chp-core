@@ -281,6 +281,26 @@ export function verifyProvenanceStatement(
   };
 }
 
+// ── Key rotation continuity (chp-v0.2.md §3.2) ──────────────────────────────
+
+/** Verify a rotation continuity statement: signed by the OLD key it names.
+ * Self-contained (one hop, exactly the Python `verify_continuity` scope — the
+ * multi-hop walk from a pin lives with the pin store, not here). A verifier
+ * holding an independently-pinned old key SHOULD check `old_public_key`
+ * against its pin before trusting the statement. */
+export function verifyContinuity(statement: Record<string, JsonValue>): boolean {
+  const claim: Record<string, JsonValue> = {
+    old_key_id: statement.old_key_id ?? null,
+    old_public_key: statement.old_public_key ?? null,
+    new_key_id: statement.new_key_id ?? null,
+    new_public_key: statement.new_public_key ?? null,
+    rotated_at: statement.rotated_at ?? null,
+  };
+  const oldPub = statement.old_public_key;
+  if (!oldPub) return false;
+  return verifyCanon(String(oldPub), claim, String(statement.signature ?? ''));
+}
+
 // ── Mandates — delegated authority on the wire (chp-v0.2.md §10, proposal 0002)
 
 const MANDATE_HEADER_FIELDS = [

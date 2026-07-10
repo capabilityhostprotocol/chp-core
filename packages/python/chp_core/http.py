@@ -596,10 +596,20 @@ class RemoteCapabilityHost:
         result = remote.invoke("data.query", {"q": "..."})
     """
 
-    def __init__(self, base_url: str, *, timeout: int = 30, api_key: str | None = None) -> None:
+    def __init__(self, base_url: str, *, timeout: int = 30, api_key: str | None = None,
+                 retries: int = 0, retry_cap_s: float = 30.0) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
         self._api_key = api_key  # never emitted in evidence or logs
+        # Opt-in retry (reference feature — the binding's stance stays
+        # caller-retries; this is the battery-included caller). Retries
+        # `host_unreachable` retryable denials (provably not executed; honors
+        # the denial's retry_after_s advice) and ConnectionError (CAVEAT: a
+        # mid-flight drop may have executed — at-most-once is not guaranteed
+        # on that path; set retries=0 for non-idempotent work). Sleeps
+        # min(retry_after_s or 2^attempt, retry_cap_s). Default OFF.
+        self._retries = max(0, int(retries))
+        self._retry_cap_s = retry_cap_s
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
@@ -722,8 +732,33 @@ class RemoteCapabilityHost:
             # Presented authority (§10): the delegate host verifies it; the
             # evidence subject becomes "delegate under principal's mandate".
             body["mandate"] = mandate
-        data = self._post("/invoke", body)
-        return self._parse_result(data)
+
+        attempt = 0
+        while True:
+            try:
+                result = self._parse_result(self._post("/invoke", body))
+            except ConnectionError:
+                if attempt >= self._retries:
+                    raise
+                self._retry_sleep(attempt, None)
+                attempt += 1
+                continue
+            denial = result.denial
+            if (denial is not None and denial.code == "host_unreachable"
+                    and denial.retryable and attempt < self._retries):
+                # A host_unreachable denial provably never executed (§11) —
+                # the safe retry, paced by the intermediary's own advice.
+                retry_after = (denial.details or {}).get("retry_after_s")
+                self._retry_sleep(attempt, retry_after)
+                attempt += 1
+                continue
+            return result
+
+    def _retry_sleep(self, attempt: int, retry_after_s) -> None:
+        import time as _time
+
+        base = float(retry_after_s) if isinstance(retry_after_s, (int, float)) else float(2 ** attempt)
+        _time.sleep(min(base, self._retry_cap_s))
 
     def invoke(
         self,

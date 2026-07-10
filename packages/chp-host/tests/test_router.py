@@ -595,3 +595,36 @@ class TestMandateForwarding:
             "echo.who", {}, mandate=self._mandate(tmp_path, ["other.cap"]))
         assert result.outcome == "denied"
         assert result.denial.code == "policy_blocked"
+
+
+# ---------------------------------------------------------------------------
+# Active prober (reference feature — spec §11 defines none)
+# ---------------------------------------------------------------------------
+
+class TestProber:
+    @pytest.mark.asyncio
+    async def test_prober_detects_death_with_zero_invocations(self):
+        import time as _time
+
+        from chp_core.store import SQLiteEvidenceStore
+
+        host = make_echo_host("P", "p")
+        store = SQLiteEvidenceStore(":memory:")
+        with served(host) as url:
+            router = MultiHostRouter([HttpTransport(url, name="P")],
+                                     store=store, recheck_interval=60.0)
+            await router.connect()
+            stop = router.start_prober(0.1)
+        # member is now DOWN; no invocation is ever issued — the prober alone
+        # must observe the transition and emit the §11 event.
+        try:
+            deadline = _time.time() + 5
+            while _time.time() < deadline:
+                events = store.by_correlation(f"routing-{router._host_id}")
+                if any(e["event_type"] == "host_marked_unhealthy" for e in events):
+                    break
+                _time.sleep(0.1)
+            else:
+                raise AssertionError("prober never observed the dead member")
+        finally:
+            stop()

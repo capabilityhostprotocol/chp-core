@@ -70,6 +70,9 @@ class GatewayConfig:
     # Gateway evidence store (spec §11): routing denials + health transitions
     # on the gateway's own chain. None → the CLI default (~/.chp/gateway-mesh.sqlite).
     store: str | None = None
+    # Background health-probe interval in seconds (reference feature, spec §11
+    # defines none). 0/absent = off: no surprise /health traffic to members.
+    probe_interval_s: float = 0.0
 
 
 @dataclass
@@ -130,6 +133,7 @@ class EnvironmentConfig:
                 selection=str(gateway_raw.get("selection", "first")),
                 store=(str(Path(str(gateway_raw["store"])).expanduser())
                        if gateway_raw.get("store") else None),
+                probe_interval_s=float(gateway_raw.get("probe_interval_s", 0) or 0),
             )
             if isinstance(gateway_raw, dict)
             else None

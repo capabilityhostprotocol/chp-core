@@ -175,3 +175,12 @@ payload — `success`), `conformance.fail` (always `failure`), `conformance.guar
 enforcement), and `conformance.unsafe` (blocked by a safety guardrail —
 exercises the safety path). The runner reports which normative checks the wire
 host passed.
+
+**Routing intermediaries** have their own suite (`runner.py --gateway-url
+<base> --suite mesh`): the runner hosts two reference member hosts, the
+gateway-under-test routes between them, and the runner induces failure by
+killing its own member — proving the §3 intermediary obligations black-box
+(processed `host_unreachable`, mandate forwarding per chp-v0.2.md §10, merged
++ disclosed-partial `/replay`, 503-on-partial `/export`). The fixture profile
+(topology, keyless members, evidence-store requirement, members-first start
+order) is [conformance/MESH-FIXTURES.md](../conformance/MESH-FIXTURES.md).

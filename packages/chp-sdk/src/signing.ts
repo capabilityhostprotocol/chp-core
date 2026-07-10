@@ -7,7 +7,7 @@
  * host-identity attestation.
  */
 
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, type KeyObject } from 'node:crypto';
 import { canon, type JsonValue } from './canon.js';
 import { rootHash, type EvidenceEvent } from './hash.js';
 
@@ -209,4 +209,137 @@ export function signTaskBundle(
       },
     },
   };
+}
+
+// ── Statement family: mandates (§10), adapter provenance (§9), continuity ───
+
+const MANDATE_HEADER_FIELDS = [
+  'kind', 'mandate_id', 'delegate_id', 'scope',
+  'valid_from', 'valid_until', 'created_at', 'canonicalization',
+] as const;
+
+/** The principal-signed header of a mandate (§10). `?? null` mirrors the
+ * Python reference's `.get` semantics — deviating breaks signatures. */
+export function mandateHeader(mandate: Record<string, JsonValue>): JsonValue {
+  const h: Record<string, JsonValue> = {};
+  for (const f of MANDATE_HEADER_FIELDS) h[f] = mandate[f] ?? null;
+  return h;
+}
+
+/** A principal's signed grant of BOUNDED authority to a delegate (proposal
+ * 0002, chp-v0.2.md §10) — byte-compatible with Python `build_mandate`:
+ * scope is sorted BEFORE signing; the principal attestation uses
+ * valid_from = created_at with NO valid_until; key_history omit-when-empty. */
+export function buildMandate(
+  principalId: string,
+  key: HostKey,
+  opts: {
+    delegateId: string;
+    scope: string[];
+    validFrom: string;
+    validUntil: string;
+    createdAt: string;
+    mandateId?: string;
+    anchors?: JsonValue[] | null;
+    keyHistory?: JsonValue[] | null;
+  },
+): Record<string, JsonValue> {
+  if (!key.privateKey) throw new Error('principal key has no private component; cannot sign');
+  const mandate: Record<string, JsonValue> = {
+    kind: 'mandate',
+    mandate_id: opts.mandateId ?? `mnd_${randomBytes(16).toString('hex')}`,
+    delegate_id: opts.delegateId,
+    scope: [...opts.scope].sort(),
+    valid_from: opts.validFrom,
+    valid_until: opts.validUntil,
+    created_at: opts.createdAt,
+    canonicalization: CANONICALIZATION,
+  };
+  const principal: Record<string, JsonValue> = {
+    host_id: principalId,
+    public_key: key.publicKeyB64,
+    host_identity: buildAttestation(
+      principalId, key, opts.createdAt, null, opts.anchors ?? null),
+  };
+  if (opts.keyHistory && opts.keyHistory.length > 0) principal.key_history = opts.keyHistory;
+  mandate.principal = principal;
+  mandate.signature = {
+    algorithm: SIGNATURE_ALGORITHM,
+    key_id: key.keyId,
+    signature: signCanon(key.privateKey, mandateHeader(mandate)),
+  };
+  return mandate;
+}
+
+const PROVENANCE_HEADER_FIELDS_SIGN = [
+  'kind', 'package', 'version', 'wheel_sha256', 'created_at', 'canonicalization',
+] as const;
+
+/** The publisher-signed header of an adapter-provenance statement (§9). */
+export function provenanceHeader(stmt: Record<string, JsonValue>): JsonValue {
+  const h: Record<string, JsonValue> = {};
+  for (const f of PROVENANCE_HEADER_FIELDS_SIGN) h[f] = stmt[f] ?? null;
+  return h;
+}
+
+/** A publisher's signed claim "I built this exact artifact" (proposal 0001,
+ * chp-v0.2.md §9) — byte-compatible with Python `build_provenance_statement`.
+ * `wheelSha256` is the SHA-256 of the artifact FILE (pre-execution invariant);
+ * the publisher attestation DOES take validUntil; key_history omit-when-empty. */
+export function buildProvenanceStatement(
+  pkg: string,
+  version: string,
+  wheelSha256: string,
+  key: HostKey,
+  opts: {
+    publisherId: string;
+    createdAt: string;
+    validUntil?: string | null;
+    anchors?: JsonValue[] | null;
+    keyHistory?: JsonValue[] | null;
+  },
+): Record<string, JsonValue> {
+  if (!key.privateKey) throw new Error('publisher key has no private component; cannot sign');
+  const stmt: Record<string, JsonValue> = {
+    kind: 'adapter-provenance',
+    package: pkg,
+    version,
+    wheel_sha256: wheelSha256,
+    created_at: opts.createdAt,
+    canonicalization: CANONICALIZATION,
+  };
+  const publisher: Record<string, JsonValue> = {
+    host_id: opts.publisherId,
+    public_key: key.publicKeyB64,
+    host_identity: buildAttestation(
+      opts.publisherId, key, opts.createdAt, opts.validUntil ?? null, opts.anchors ?? null),
+  };
+  if (opts.keyHistory && opts.keyHistory.length > 0) publisher.key_history = opts.keyHistory;
+  stmt.publisher = publisher;
+  stmt.signature = {
+    algorithm: SIGNATURE_ALGORITHM,
+    key_id: key.keyId,
+    signature: signCanon(key.privateKey, provenanceHeader(stmt)),
+  };
+  return stmt;
+}
+
+/** A rotation continuity statement (§3.2): the OLD key signs a claim vouching
+ * for the new one, so a verifier pinned to the old key can follow the lineage.
+ * Byte-compatible with the statement `rotate_keypair` appends to
+ * key_history.json (the disk/archival half stays Python-side). */
+export function buildContinuityStatement(
+  oldKey: HostKey,
+  newKey: HostKey,
+  rotatedAt: string,
+): Record<string, JsonValue> {
+  if (!oldKey.privateKey) throw new Error('old key has no private component; cannot vouch');
+  const claim: Record<string, JsonValue> = {
+    old_key_id: oldKey.keyId,
+    old_public_key: oldKey.publicKeyB64,
+    new_key_id: newKey.keyId,
+    new_public_key: newKey.publicKeyB64,
+    rotated_at: rotatedAt,
+  };
+  return { ...claim, signature: signCanon(oldKey.privateKey, claim as JsonValue) };
 }

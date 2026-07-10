@@ -29,6 +29,11 @@ export {
   computeTaskRootHash,
   taskBundleHeader,
   signTaskBundle,
+  buildMandate,
+  mandateHeader,
+  buildProvenanceStatement,
+  provenanceHeader,
+  buildContinuityStatement,
 } from './signing.js';
 export {
   verifyBundle,
@@ -43,6 +48,7 @@ export {
   verifyProvenanceStatement,
   verifyMandate,
   scopeAllows,
+  verifyContinuity,
   type BundleVerification,
   type TaskBundleVerification,
 } from './verify.js';
