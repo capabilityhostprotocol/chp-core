@@ -1,0 +1,138 @@
+"""Witness receipt persistence + store-side verification (chp-v0.2.md §12).
+
+Witness records NEVER enter the evidence store — appending one would draw a
+global sequence and move the very head being witnessed. They live in sidecar
+files under ``~/.chp/witnesses/`` (the ``key_history.json``/``revocations.json``
+precedent):
+
+- ``received.json`` — statements OTHER peers signed over THIS host's head,
+  each persisted **with a leaves snapshot** taken at the witnessed sequence.
+  The signed root makes the snapshot tamper-evident, and the snapshot is what
+  lets verification distinguish lawful retention from tampering per-leaf.
+- ``issued/<host_id>.json`` — statements THIS host signed over a peer's head
+  (rolling window). Their value is location: the witnessed operator cannot
+  delete records held by the witness.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+from .types import JSON
+
+# Rolling window of issued statements kept per witnessed host.
+ISSUED_WINDOW = 50
+
+
+def witness_dir() -> Path:
+    override = os.environ.get("CHP_WITNESS_DIR")
+    return Path(override) if override else Path.home() / ".chp" / "witnesses"
+
+
+def _load_json(path: Path, default):
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return default
+
+
+def record_received(statement: JSON, leaves: dict) -> None:
+    """Persist a verified received witness statement WITH the leaves snapshot
+    at its sequence (caller has already verified signature + head match)."""
+    path = witness_dir() / "received.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    receipts = _load_json(path, [])
+    receipts.append({"statement": statement, "leaves": leaves})
+    path.write_text(json.dumps(receipts, indent=2, sort_keys=True) + "\n")
+
+
+def load_received() -> list[JSON]:
+    return _load_json(witness_dir() / "received.json", [])
+
+
+def record_issued(statement: JSON) -> None:
+    """Keep the statements this host signed over a peer's head (rolling)."""
+    host_id = str(statement.get("host_id") or "unknown")
+    path = witness_dir() / "issued" / f"{host_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    issued = _load_json(path, [])
+    issued.append(statement)
+    path.write_text(json.dumps(issued[-ISSUED_WINDOW:], indent=2, sort_keys=True) + "\n")
+
+
+def load_issued(host_id: str) -> list[JSON]:
+    return _load_json(witness_dir() / "issued" / f"{host_id}.json", [])
+
+
+def compute_root(leaves: dict) -> str:
+    """chp-store-head-v1 over a leaves mapping (correlation_id -> head hash)."""
+    digest = hashlib.sha256()
+    for correlation_id in sorted(leaves):
+        digest.update(f"{correlation_id}\x00{leaves[correlation_id] or ''}\n".encode())
+    return digest.hexdigest()
+
+
+def verify_receipt_against_store(store, receipt: JSON) -> JSON:
+    """The auditor act (§12): recompute the store head as-of the witnessed
+    sequence and judge every leaf. Lawful retention and tampering are
+    distinguishable:
+
+    - leaf matches            → ``verified``
+    - correlation absent      → ``purged``   (legal — purge deletes whole correlations)
+    - head hash now NULL      → ``redacted`` (legal — redaction can only NULL, never forge)
+    - head hash differs       → ``tampered``
+    - store correlation at ≤N missing from the snapshot → ``tampered`` (inserted history)
+
+    Returns {statement_valid, snapshot_valid, sequence, dispositions,
+    tampered_correlations, verdict}."""
+    from .signing import verify_chain_witness
+
+    statement = receipt.get("statement") or {}
+    snapshot: dict = receipt.get("leaves") or {}
+    sv = verify_chain_witness(statement)
+    sequence = statement.get("sequence")
+    result: JSON = {
+        "statement_valid": sv.valid,
+        "sequence": sequence,
+        "witness": (statement.get("witness") or {}).get("host_id"),
+    }
+    if not sv.valid:
+        result.update({"snapshot_valid": False, "verdict": "invalid_statement",
+                       "reason": sv.reason})
+        return result
+
+    # The snapshot must recompute to the SIGNED root — else the snapshot
+    # itself was doctored and per-leaf dispositions would be meaningless.
+    snapshot_valid = compute_root(snapshot) == statement.get("store_head")
+    result["snapshot_valid"] = snapshot_valid
+    if not snapshot_valid:
+        result["verdict"] = "snapshot_invalid"
+        return result
+
+    current = store.get_store_head(at_sequence=int(sequence))["leaves"]
+    dispositions = {"verified": 0, "purged": 0, "redacted": 0, "tampered": 0}
+    tampered: list[str] = []
+    for correlation_id, witnessed_hash in snapshot.items():
+        if correlation_id not in current:
+            dispositions["purged"] += 1
+        elif current[correlation_id] is None and witnessed_hash is not None:
+            dispositions["redacted"] += 1
+        elif current[correlation_id] == witnessed_hash:
+            dispositions["verified"] += 1
+        else:
+            dispositions["tampered"] += 1
+            tampered.append(correlation_id)
+    for correlation_id in current:
+        if correlation_id not in snapshot:
+            dispositions["tampered"] += 1
+            tampered.append(correlation_id)
+
+    result["dispositions"] = dispositions
+    result["tampered_correlations"] = tampered
+    result["verdict"] = "tampered" if tampered else "intact"
+    return result

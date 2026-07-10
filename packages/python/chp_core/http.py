@@ -287,6 +287,34 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if path == "/metrics":
             self._write_metrics()
             return
+        if path == "/head":
+            # Witnessing (spec §12): the store head a peer countersigns. AUTHED
+            # (the sequence discloses activity volume — mesh-count privacy).
+            # Leaves stay LOCAL: the witness signs only the root.
+            store = getattr(self.server.chp_host, "store", None)
+            if store is None or not hasattr(store, "get_store_head"):
+                self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
+                return
+            head = store.get_store_head()
+            from .types import utc_now
+            self._write_json({
+                "host_id": getattr(self.server.chp_host, "host_id",
+                                   getattr(self.server.chp_host, "_host_id", "unknown")),
+                "scheme": head["scheme"],
+                "sequence": head["sequence"],
+                "store_head": head["store_head"],
+                "at": utc_now(),
+            })
+            return
+        if path == "/witnesses":
+            # Received countersignatures over THIS host's head — the audit
+            # story a host serves about itself. Statements only; the leaves
+            # snapshots stay local (they name correlations).
+            from . import witnessing
+            self._write_json({
+                "witnesses": [r.get("statement") for r in witnessing.load_received()],
+            })
+            return
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
 
     def _write_metrics(self) -> None:
@@ -331,7 +359,10 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
             if path == "/invoke":
-                self._write_json(self._invoke(body))
+                if body.get("mode") == "stream":
+                    self._invoke_stream(body)
+                else:
+                    self._write_json(self._invoke(body))
                 return
             if path == "/v1/chat/completions":
                 # OpenAI-compatible shim → routes chat through chp.adapters.mlx.chat
@@ -347,6 +378,9 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 result = self.server.chp_host.replay_result(query)
                 self._write_json(result.to_dict() if hasattr(result, "to_dict") else result)
                 return
+            if path == "/witness":
+                self._receive_witness(body)
+                return
             self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
         except KeyError as exc:
             self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", f"Missing required field: {exc}")
@@ -358,7 +392,45 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: Any) -> None:
         return
 
-    def _invoke(self, body: JSON) -> JSON:
+    def _receive_witness(self, body: JSON) -> None:
+        """POST /witness (spec §12): accept a peer's countersignature over THIS
+        host's store head. The host MUST verify the statement signature AND
+        recompute its own head at the witnessed sequence before persisting —
+        never store an unverified or non-matching receipt. Persisted WITH the
+        leaves snapshot at that sequence (per-leaf retention dispositions)."""
+        from . import witnessing
+        from .signing import verify_chain_witness
+
+        store = getattr(self.server.chp_host, "store", None)
+        if store is None or not hasattr(store, "get_store_head"):
+            self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
+            return
+        my_id = getattr(self.server.chp_host, "host_id",
+                        getattr(self.server.chp_host, "_host_id", "unknown"))
+        sv = verify_chain_witness(body, expected_host_id=my_id)
+        if not sv.valid:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_witness",
+                              sv.reason or "witness statement failed verification")
+            return
+        try:
+            sequence = int(body.get("sequence"))
+        except (TypeError, ValueError):
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_witness", "bad sequence")
+            return
+        head = store.get_store_head(at_sequence=sequence)
+        if head["store_head"] != body.get("store_head"):
+            self._write_error(
+                HTTPStatus.CONFLICT, "head_mismatch",
+                "statement head does not match this store at that sequence")
+            return
+        witnessing.record_received(body, head["leaves"])
+        self._write_json({"accepted": True, "sequence": sequence,
+                          "witness": (body.get("witness") or {}).get("host_id")})
+
+    def _invoke_envelope_of(self, body: JSON) -> tuple[InvocationEnvelope, JSON | None]:
+        """Body → envelope with the binding-§2 transport work applied: verified
+        caller replaces any asserted subject; a scoped key's out-of-scope
+        invocation is a PROCESSED policy_blocked denial (returned second)."""
         envelope_body = dict(body)
         if "correlation_id" in envelope_body and "correlation" not in envelope_body:
             envelope_body["correlation"] = {
@@ -371,22 +443,77 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if caller is not None:
             envelope_body["subject"] = {"id": caller, "type": "api_key", "verified": True}
         envelope = InvocationEnvelope.from_mapping(envelope_body)
-        # Capability-scoped caller key (binding §2): out-of-scope is a PROCESSED
-        # governance denial — policy_blocked, HTTP 200, evidence emitted — never
-        # a bare transport 403.
         scope = getattr(self, "_caller_scope", None)
         if scope is not None and not _scope_allows(scope, envelope.capability_id):
             deny = getattr(self.server.chp_host, "_deny", None)
             if deny is not None:
                 from .types import DenialReason
-                return deny(envelope, DenialReason(
+                return envelope, deny(envelope, DenialReason(
                     code="policy_blocked",
                     message=f"capability {envelope.capability_id!r} is outside "
                             f"caller {caller!r}'s key scope",
                     retryable=False,
                 )).to_dict()
+        return envelope, None
+
+    def _invoke(self, body: JSON) -> JSON:
+        envelope, denied = self._invoke_envelope_of(body)
+        if denied is not None:
+            return denied
         result = asyncio.run(self.server.chp_host.ainvoke_envelope(envelope))
         return result.to_dict()
+
+    def _invoke_stream(self, body: JSON) -> None:
+        """mode="stream" over /invoke (binding, proposal 0006): SSE `chunk`
+        frames + one terminal `result` frame. A denial (or any outcome decided
+        BEFORE the first chunk) is a plain JSON 200 — the response never
+        commits to text/event-stream unless the stream actually opens."""
+        envelope, denied = self._invoke_envelope_of(body)
+        if denied is not None:
+            self._write_json(denied)
+            return
+        host = self.server.chp_host
+        if not hasattr(host, "ainvoke_stream"):
+            # Router/gateway streaming is a named deferral — degrade to sync.
+            result = asyncio.run(host.ainvoke_envelope(envelope))
+            self._write_json(result.to_dict())
+            return
+
+        agen = host.ainvoke_stream(envelope)
+        loop = asyncio.new_event_loop()
+        try:
+            first = loop.run_until_complete(agen.__anext__())
+            if "result" in first:
+                # No chunk was produced before the outcome (denial, skip, or a
+                # non-generator handler) — answer plain JSON.
+                self._write_json(first["result"].to_dict())
+                return
+            # A real stream: raise the per-connection socket timeout (a slow
+            # model can idle past the 30s default) and commit to SSE.
+            self.connection.settimeout(600)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def sse(event: str, data: JSON) -> None:
+                self.wfile.write(f"event: {event}\n".encode())
+                self.wfile.write(f"data: {json.dumps(data)}\n\n".encode())
+                self.wfile.flush()
+
+            sse("chunk", {"delta": first["chunk"]})
+            while True:
+                try:
+                    item = loop.run_until_complete(agen.__anext__())
+                except StopAsyncIteration:
+                    break
+                if "result" in item:
+                    sse("result", item["result"].to_dict())
+                else:
+                    sse("chunk", {"delta": item["chunk"]})
+        finally:
+            loop.run_until_complete(agen.aclose())
+            loop.close()
 
     # ── Cloud-spill: local-first, cloud-burst ──────────────────────────────
     def _cloud_endpoint(self) -> tuple[str, str] | None:
@@ -401,35 +528,67 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         models = {m.strip() for m in (os.environ.get("CHP_SPILL_MODELS") or "").split(",") if m.strip()}
         return bool(body.get("chp_spill") or (models and body.get("model") in models))
 
-    def _proxy_body(self, body: JSON) -> bytes:
-        clean = {k: v for k, v in body.items() if not k.startswith("chp_")}
-        return json.dumps(clean).encode()
+    def _spill_sync(self, body: JSON) -> JSON:
+        """GOVERNED cloud-spill (proposal 0006): the raw urlopen byte pump is
+        gone — spill is an invocation of chp.spill.chat, so it runs the gate
+        pipeline and lands on the evidence plane with token accounting. The
+        formerly-silent local-failure fallback is now a governed, evidenced
+        fallback (a policy that blocks it is the policy working)."""
+        logger.info("cloud-spill (governed, non-stream) model=%s", body.get("model"))
+        env = InvocationEnvelope.from_mapping({
+            "capability_id": "chp.spill.chat",
+            "payload": dict(body),
+        })
+        d = asyncio.run(self.server.chp_host.ainvoke_envelope(env)).to_dict()
+        if d.get("outcome") != "success":
+            return {"error": {"message": str(d.get("denial") or d.get("error") or "spill failed"),
+                              "type": "chp_spill_error"}}
+        return (d.get("data") or {}).get("response") or {}
 
-    def _proxy_json(self, body: JSON, cloud: tuple[str, str]) -> JSON:
-        base, key = cloud
-        logger.info("cloud-spill (non-stream) → %s model=%s", base, body.get("model"))
-        req = Request(f"{base}/chat/completions", data=self._proxy_body(body),
-                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-                      method="POST")
-        with urlopen(req, timeout=180) as resp:
-            return json.loads(resp.read().decode())
-
-    def _proxy_stream(self, body: JSON, cloud: tuple[str, str]) -> None:
-        base, key = cloud
-        logger.info("cloud-spill (stream) → %s model=%s", base, body.get("model"))
-        stream_body = {k: v for k, v in body.items() if not k.startswith("chp_")}
-        stream_body["stream"] = True
-        req = Request(f"{base}/chat/completions", data=json.dumps(stream_body).encode(),
-                      headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-                      method="POST")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        with urlopen(req, timeout=180) as resp:
-            for line in resp:  # pass the cloud SSE through verbatim
-                self.wfile.write(line)
+    def _spill_stream(self, body: JSON) -> None:
+        """Streaming governed spill: chp.spill.chat in stream mode; the
+        upstream's OpenAI chunk objects pass through as SSE, with the
+        execution bracket + usage evidence recorded on the host."""
+        logger.info("cloud-spill (governed, stream) model=%s", body.get("model"))
+        env = InvocationEnvelope.from_mapping({
+            "capability_id": "chp.spill.chat",
+            "payload": dict(body),
+            "mode": "stream",
+        })
+        agen = self.server.chp_host.ainvoke_stream(env)
+        loop = asyncio.new_event_loop()
+        sse_open = False
+        try:
+            while True:
+                try:
+                    item = loop.run_until_complete(agen.__anext__())
+                except StopAsyncIteration:
+                    break
+                if "result" in item:
+                    result = item["result"]
+                    if not sse_open:
+                        # Denied/failed before any chunk — OpenAI-shaped error.
+                        d = result.to_dict()
+                        self._write_json({"error": {
+                            "message": str(d.get("denial") or d.get("error") or "spill failed"),
+                            "type": "chp_spill_error"}})
+                        return
+                    break
+                if not sse_open:
+                    self.connection.settimeout(600)
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    sse_open = True
+                self.wfile.write(f"data: {json.dumps(item['chunk'])}\n\n".encode())
                 self.wfile.flush()
+            if sse_open:
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+        finally:
+            loop.run_until_complete(agen.aclose())
+            loop.close()
 
     def _mlx_chat_call(self, body: JSON) -> JSON:
         """Route an OpenAI chat body through chp.adapters.mlx.chat (capacity-routed +
@@ -454,11 +613,11 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         """Non-streaming OpenAI /v1/chat/completions over the mesh (cloud-spill aware)."""
         cloud = self._cloud_endpoint()
         if cloud and self._wants_cloud(body):
-            return self._proxy_json(body, cloud)  # explicit spill
+            return self._spill_sync(body)  # explicit spill (governed)
         d = self._mlx_chat_call(body)
         if d.get("outcome") != "success":
-            if cloud:  # local failed → burst to cloud
-                return self._proxy_json(body, cloud)
+            if cloud:  # local failed → governed burst to cloud
+                return self._spill_sync(body)
             return {"error": {"message": str(d.get("error") or d.get("denial") or "mlx.chat failed"),
                               "type": "chp_mesh_error"}}
         data = d.get("data") or {}
@@ -481,11 +640,11 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         import time as _time
         cloud = self._cloud_endpoint()
         if cloud and self._wants_cloud(body):
-            self._proxy_stream(body, cloud)  # explicit spill
+            self._spill_stream(body)  # explicit spill (governed)
             return
         d = self._mlx_chat_call(body)
-        if d.get("outcome") != "success" and cloud:  # local failed → burst to cloud
-            self._proxy_stream(body, cloud)
+        if d.get("outcome") != "success" and cloud:  # local failed → governed burst
+            self._spill_stream(body)
             return
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
@@ -559,6 +718,12 @@ def create_http_server(
     *host* may be a ``LocalCapabilityHost`` or a ``MultiHostRouter`` — both
     satisfy the duck-type surface the handler expects.
     """
+    # Governed cloud-spill (proposal 0006): when a spill endpoint is configured,
+    # the shim's spill paths invoke chp.spill.chat — register it so spill runs
+    # the gate pipeline instead of the old ungoverned byte pump.
+    if os.environ.get("CHP_SPILL_BASE_URL") and hasattr(host, "register"):
+        from .spill import register_spill_capability
+        register_spill_capability(host)
 
     return CapabilityHostHTTPServer((bind, port), host)
 
@@ -772,6 +937,62 @@ class RemoteCapabilityHost:
         """Invoke from a pre-built envelope (synchronous; mirrors the server's /invoke)."""
         data = self._post("/invoke", envelope.to_dict())
         return self._parse_result(data)
+
+    def invoke_stream(self, capability_id: str, payload: JSON | None = None, *,
+                      version: str | None = None,
+                      correlation: "CorrelationContext | JSON | None" = None,
+                      subject: JSON | None = None,
+                      metadata: JSON | None = None,
+                      mandate: JSON | None = None,
+                      timeout: int = 600):
+        """Streaming invocation (binding, proposal 0006): a GENERATOR yielding
+        chunk deltas; its return value (``StopIteration.value``, or capture via
+        ``yield from``) is the terminal :class:`InvocationResult`. A denial —
+        or any host without streaming — arrives as a plain JSON response and is
+        returned immediately with no chunks."""
+        if isinstance(correlation, CorrelationContext):
+            corr_dict: JSON = correlation.to_dict()
+        else:
+            corr_dict = dict(correlation) if correlation else {}
+        body: JSON = {
+            "capability_id": capability_id,
+            "payload": payload or {},
+            "mode": "stream",
+            "correlation": corr_dict,
+            "subject": subject or {"id": "remote", "type": "user"},
+            "metadata": metadata or {},
+        }
+        if version is not None:
+            body["version"] = version
+        if mandate is not None:
+            body["mandate"] = mandate
+
+        raw = json.dumps(body).encode("utf-8")
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["X-CHP-Key"] = self._api_key
+        req = Request(f"{self._base}/invoke", data=raw, headers=headers, method="POST")
+        resp = urlopen(req, timeout=timeout)
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/event-stream" not in content_type:
+            # The outcome was decided before any chunk (denial/skip/sync host).
+            return self._parse_result(json.loads(resp.read().decode("utf-8")))
+
+        event: str | None = None
+        result: InvocationResult | None = None
+        for raw_line in resp:
+            line = raw_line.decode("utf-8").rstrip("\n")
+            if line.startswith("event: "):
+                event = line[len("event: "):].strip()
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+                if event == "result":
+                    result = self._parse_result(data)
+                    break
+                yield data.get("delta")
+        if result is None:
+            raise ConnectionError("stream ended without a terminal result frame")
+        return result
 
     def discover(self, **filter_kwargs: Any) -> JSON:
         """Return the host descriptor, optionally filtering capabilities."""

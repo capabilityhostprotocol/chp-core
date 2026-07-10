@@ -14,6 +14,7 @@ from ._core import (
     cmd_keygen,
     cmd_mandate_issue,
     cmd_mandate_verify,
+    cmd_witness_verify,
     cmd_provenance_sign,
     cmd_provenance_verify,
     cmd_revoke_key,
@@ -696,6 +697,19 @@ def build_parser() -> argparse.ArgumentParser:
     mnd_verify.add_argument("--expect-key", default=None, dest="expect_key",
                             help="Require this principal key_id.")
     mnd_verify.set_defaults(func=cmd_mandate_verify)
+
+    witness_p = subcommands.add_parser(
+        "witness",
+        help="Mesh witnessing: peer countersignatures over store heads (spec §12).")
+    witness_sub = witness_p.add_subparsers(dest="witness_command", required=True)
+    wit_verify = witness_sub.add_parser(
+        "verify",
+        help="Recompute the store head as-of each witnessed sequence; judge every "
+             "leaf: verified / purged / redacted / TAMPERED.")
+    wit_verify.add_argument("--store", required=True, help="Evidence store to audit.")
+    wit_verify.add_argument("--receipts", default=None,
+                            help="Receipts JSON (default: ~/.chp/witnesses/received.json).")
+    wit_verify.set_defaults(func=cmd_witness_verify)
 
     keygen_p = subcommands.add_parser("keygen", help="Generate a host ed25519 signing keypair.")
     keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")

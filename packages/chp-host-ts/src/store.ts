@@ -5,7 +5,7 @@
  * the SAME correlation_id; a global sequence orders the store.
  */
 
-import { contentHash, verifyChain, type EvidenceEvent, type ChainResult } from '@capabilityhostprotocol/sdk';
+import { computeStoreHead, contentHash, verifyChain, type EvidenceEvent, type ChainResult, type StoreHead } from '@capabilityhostprotocol/sdk';
 
 export class InMemoryEvidenceStore {
   private events: EvidenceEvent[] = [];
@@ -38,5 +38,18 @@ export class InMemoryEvidenceStore {
 
   verifyChainFor(correlationId: string): ChainResult {
     return verifyChain(this.byCorrelation(correlationId));
+  }
+
+  /** The witnessable store digest (chp-store-head-v1, spec §12): per-correlation
+   * head content_hash at sequence ≤ N, digested over sorted leaves. */
+  getStoreHead(atSequence?: number): StoreHead {
+    const n = atSequence ?? this.seq;
+    const leaves = new Map<string, string | null>();
+    for (const e of this.events) {
+      if (Number(e.sequence ?? 0) <= n) {
+        leaves.set(String(e.correlation?.correlation_id ?? ''), e.content_hash ?? null);
+      }
+    }
+    return computeStoreHead(leaves, n);
   }
 }

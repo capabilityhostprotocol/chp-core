@@ -353,6 +353,18 @@ def check_alignment(repo_root: Path) -> JSON:
             and "host_marked_healthy" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Witnessing (§12, proposal 0005): section, head scheme, statement kind,
+        # and the retention dispositions that keep lawful lifecycle non-alarming.
+        add_check(
+            checks,
+            "spec_defines_witnessing",
+            "## 12. Witnessing" in spec_v02
+            and "chp-store-head-v1" in spec_v02
+            and "chain-witness" in spec_v02
+            and "`purged`" in spec_v02
+            and "`redacted`" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.
@@ -470,6 +482,23 @@ def check_alignment(repo_root: Path) -> JSON:
             )
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "mandate_vector_verifies", False, {"error": str(exc)})
+
+    # Chain-witness vector: the countersignature statement verifies (§12).
+    witness_vec = repo_root / "spec" / "test-vectors" / "chain-witness.json"
+    if witness_vec.exists():
+        try:
+            from .signing import verify_chain_witness
+
+            wv = verify_chain_witness(
+                read_json(witness_vec), expected_host_id="vector-witnessed-host")
+            add_check(
+                checks,
+                "chain_witness_vector_verifies",
+                wv.valid,
+                {"checks": wv.checks, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "chain_witness_vector_verifies", False, {"error": str(exc)})
 
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])

@@ -208,6 +208,24 @@ def reset_key(url: str) -> bool:
     return changed
 
 
+def mark_witnessed(url: str, sequence: int, store_head: str) -> None:
+    """Stamp ``last_witness`` on the remote after a successful witness exchange
+    (spec §12) — which peer head this node countersigned, and when."""
+    data = load_mesh()
+    changed = False
+    for r in data.get("agent_remotes") or []:
+        if r.get("url") == url:
+            r["last_witness"] = {
+                "sequence": sequence,
+                "store_head": store_head,
+                "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            changed = True
+            break
+    if changed:
+        save_mesh(data)
+
+
 def mark_verified(url: str) -> None:
     """Stamp ``last_verified`` (UTC now) on the remote, if present.
 

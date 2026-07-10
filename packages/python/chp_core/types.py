@@ -653,6 +653,19 @@ class DenialReason:
 
 
 @dataclass(slots=True)
+class StreamResult:
+    """The terminal yield of a STREAMING capability handler (proposal 0006).
+
+    Async generators cannot return values, so a streaming handler yields its
+    chunks and then yields ``StreamResult(data)`` as the final item — ``data``
+    becomes the InvocationResult's data exactly as a sync handler's return
+    value would. Internal contract only: never serialized to the wire (the
+    terminal SSE frame carries a standard InvocationResult)."""
+
+    data: JSON = None
+
+
+@dataclass(slots=True)
 class InvocationEnvelope:
     capability_id: str
     payload: JSON = field(default_factory=dict)

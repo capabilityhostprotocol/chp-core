@@ -752,6 +752,39 @@ def cmd_mandate_verify(args: argparse.Namespace) -> int:
     return 0 if v.valid else 1
 
 
+def cmd_witness_verify(args: argparse.Namespace) -> int:
+    """The auditor act (§12): recompute the store head as-of every witnessed
+    sequence and judge each leaf — verified / purged / redacted / TAMPERED."""
+    import sys
+
+    from .. import witnessing
+    from ..store import SQLiteEvidenceStore
+
+    if args.receipts:
+        with open(args.receipts) as fh:
+            receipts = json.load(fh)
+    else:
+        receipts = witnessing.load_received()
+    if not receipts:
+        print("no witness receipts to verify (none received yet?)", file=sys.stderr)
+        return 1
+
+    store = SQLiteEvidenceStore(args.store)
+    try:
+        results = [witnessing.verify_receipt_against_store(store, r) for r in receipts]
+    finally:
+        store.close()
+    tampered = [r for r in results if r.get("verdict") in ("tampered", "snapshot_invalid",
+                                                           "invalid_statement")]
+    print(json.dumps({
+        "receipts": len(results),
+        "intact": sum(1 for r in results if r.get("verdict") == "intact"),
+        "flagged": len(tampered),
+        "results": results,
+    }, indent=2))
+    return 1 if tampered else 0
+
+
 def cmd_provenance_verify(args: argparse.Namespace) -> int:
     import hashlib
     from pathlib import Path

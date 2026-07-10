@@ -41,6 +41,16 @@ from .types import (
 CapabilityHandler = Callable[["CapabilityExecutionContext", JSON], Any | Awaitable[Any]]
 
 
+def _usage_of(data: Any) -> JSON:
+    """Token-usage fields lifted from a handler result into the terminal
+    evidence payload (proposal 0006) — ints/strs only (chp-stable-v1 floats)."""
+    if not isinstance(data, dict):
+        return {}
+    return {k: data[k] for k in ("prompt_tokens", "completion_tokens",
+                                 "total_tokens", "model")
+            if k in data and isinstance(data[k], (int, str))}
+
+
 def _stringify_floats(value: Any) -> Any:
     """Represent every float in an evidence payload as its string form.
 
@@ -453,12 +463,23 @@ class LocalCapabilityHost:
     async def invoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
         return await self.ainvoke_envelope(envelope)
 
-    async def ainvoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
+    def _prepare(
+        self, envelope: InvocationEnvelope | JSON
+    ) -> "tuple[InvocationEnvelope, RegisteredCapability | None, InvocationResult | None]":
+        """Run the ENTIRE gate pipeline (chp-invocation-pipeline.md gates 1–10)
+        and return ``(envelope, entry, early_result)``.
+
+        ``early_result`` is the denial/skip InvocationResult when a gate fired
+        (entry is None); when every gate passed, ``entry`` is the resolved
+        registration and ``early_result`` is None. This is the ONE gate
+        implementation shared by ``ainvoke_envelope`` (sync) and
+        ``ainvoke_stream`` (SSE, proposal 0006) — a second gate copy on the
+        stream path would drift, and a drifted gate is a security bug."""
         if isinstance(envelope, dict):
             envelope = InvocationEnvelope.from_mapping(envelope)
 
         if not envelope.capability_id or not envelope.capability_id.strip():
-            return self._deny(
+            return envelope, None, self._deny(
                 envelope,
                 DenialReason(
                     code="capability_not_found",
@@ -475,7 +496,7 @@ class LocalCapabilityHost:
             registered = sorted({rc.descriptor.id for rc in self._capabilities.values()})
             suggestions = difflib.get_close_matches(
                 envelope.capability_id, registered, n=3, cutoff=0.4)
-            return self._deny(
+            return envelope, None, self._deny(
                 envelope,
                 DenialReason(
                     code="capability_not_found",
@@ -493,7 +514,7 @@ class LocalCapabilityHost:
         envelope.version = descriptor.version
 
         if not entry.enabled:
-            return self._skip(
+            return envelope, None, self._skip(
                 envelope,
                 {
                     "code": "capability_disabled",
@@ -502,7 +523,7 @@ class LocalCapabilityHost:
             )
 
         if envelope.mode not in descriptor.modes:
-            return self._deny(
+            return envelope, None, self._deny(
                 envelope,
                 DenialReason(
                     code="unsupported_mode",
@@ -528,7 +549,7 @@ class LocalCapabilityHost:
                 envelope.mandate, at_time=utc_now(),
                 delegate_id=verified_caller)
             if not mv.valid:
-                return self._deny(
+                return envelope, None, self._deny(
                     envelope,
                     DenialReason(
                         code="mandate_invalid",
@@ -539,7 +560,7 @@ class LocalCapabilityHost:
                     ),
                 )
             if not scope_allows(envelope.mandate.get("scope") or [], descriptor.id):
-                return self._deny(
+                return envelope, None, self._deny(
                     envelope,
                     DenialReason(
                         code="policy_blocked",
@@ -567,7 +588,7 @@ class LocalCapabilityHost:
                 capability_risk=descriptor.risk,
             )
             if verdict.should_block:
-                return self._deny(
+                return envelope, None, self._deny(
                     envelope,
                     DenialReason(
                         code="policy_blocked",
@@ -578,18 +599,18 @@ class LocalCapabilityHost:
 
         invariant_denial = self._check_host_invariants(descriptor, envelope)
         if invariant_denial is not None:
-            return self._deny(envelope, invariant_denial)
+            return envelope, None, self._deny(envelope, invariant_denial)
 
         autonomy_denial = self._check_autonomy_budget(descriptor, envelope)
         if autonomy_denial is not None:
-            return self._deny(envelope, autonomy_denial)
+            return envelope, None, self._deny(envelope, autonomy_denial)
 
         if descriptor.input_schema:
             try:
                 import jsonschema
                 jsonschema.validate(envelope.payload, descriptor.input_schema)
             except jsonschema.ValidationError as exc:
-                return self._deny(
+                return envelope, None, self._deny(
                     envelope,
                     DenialReason(
                         code="input_schema_validation_failed",
@@ -602,7 +623,7 @@ class LocalCapabilityHost:
                     ),
                 )
             except Exception as exc:
-                return self._deny(
+                return envelope, None, self._deny(
                     envelope,
                     DenialReason(
                         code="input_schema_validation_failed",
@@ -614,7 +635,16 @@ class LocalCapabilityHost:
 
         safety_denial = self._check_safety(descriptor, envelope)
         if safety_denial is not None:
-            return self._deny(envelope, safety_denial)
+            return envelope, None, self._deny(envelope, safety_denial)
+
+        return envelope, entry, None
+
+    async def ainvoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
+        envelope, entry, early = self._prepare(envelope)
+        if early is not None:
+            return early
+        assert entry is not None  # _prepare contract: no early result ⇒ resolved entry
+        descriptor = entry.descriptor
 
         started = self.emit_evidence(
             "execution_started",
@@ -626,12 +656,27 @@ class LocalCapabilityHost:
 
         try:
             raw = entry.handler(ctx, envelope.payload)
-            data = await raw if inspect.isawaitable(raw) else raw
+            if inspect.isasyncgen(raw):
+                # A STREAMING handler invoked in sync mode: collect the chunks
+                # and return the terminal StreamResult's data (graceful degrade
+                # — proposal 0006; the handler assembles the complete result).
+                from .types import StreamResult
+                data = None
+                async for item in raw:
+                    if isinstance(item, StreamResult):
+                        data = item.data
+            else:
+                data = await raw if inspect.isawaitable(raw) else raw
             completed = self.emit_evidence(
                 "execution_completed",
                 envelope,
-                payload={"capability_uri": descriptor.capability_uri},
+                # Host-constructed payload only (uri + lifted usage ints) —
+                # unredacted so token accounting survives (the redactor would
+                # scrub *_tokens keys as secrets).
+                payload={"capability_uri": descriptor.capability_uri,
+                         **_usage_of(data)},
                 outcome="success",
+                redacted=False,
             )
             return InvocationResult(
                 invocation_id=envelope.invocation_id,
@@ -675,6 +720,95 @@ class LocalCapabilityHost:
                 evidence_ids=[started.event_id, *ctx._evidence_ids, failed.event_id],
                 started_at=started.timestamp,
             )
+
+    async def ainvoke_stream(self, envelope: InvocationEnvelope | JSON):
+        """Streaming invocation (proposal 0006): an async generator that yields
+        ``{"chunk": <delta>}`` items and finally ``{"result": InvocationResult}``.
+
+        The SAME gate pipeline as ``ainvoke_envelope`` runs first (via
+        ``_prepare``); any denial/skip yields the result IMMEDIATELY with no
+        prior chunks — the HTTP binding uses that to answer plain JSON without
+        committing to an SSE response. Evidence brackets the stream:
+        ``execution_started`` at open, ``execution_completed`` (with lifted
+        usage) or ``execution_failed`` at close. A non-generator handler in
+        stream mode degrades to a single terminal result."""
+        envelope, entry, early = self._prepare(envelope)
+        if early is not None:
+            yield {"result": early}
+            return
+        assert entry is not None  # _prepare contract: no early result ⇒ resolved entry
+        descriptor = entry.descriptor
+
+        started = self.emit_evidence(
+            "execution_started",
+            envelope,
+            payload={"capability_uri": descriptor.capability_uri},
+            outcome=None,
+        )
+        ctx = CapabilityExecutionContext(self, envelope)
+        from .types import StreamResult
+
+        try:
+            raw = entry.handler(ctx, envelope.payload)
+            data = None
+            if inspect.isasyncgen(raw):
+                async for item in raw:
+                    if isinstance(item, StreamResult):
+                        data = item.data
+                    else:
+                        yield {"chunk": item}
+            else:
+                data = await raw if inspect.isawaitable(raw) else raw
+            completed = self.emit_evidence(
+                "execution_completed",
+                envelope,
+                # Host-constructed payload only (uri + lifted usage ints) —
+                # unredacted so token accounting survives (the redactor would
+                # scrub *_tokens keys as secrets).
+                payload={"capability_uri": descriptor.capability_uri,
+                         **_usage_of(data)},
+                outcome="success",
+                redacted=False,
+            )
+            yield {"result": InvocationResult(
+                invocation_id=envelope.invocation_id,
+                capability_id=descriptor.id,
+                capability_version=descriptor.version,
+                correlation=envelope.correlation,
+                outcome="success",
+                success=True,
+                data=data,
+                evidence_ids=[started.event_id, *ctx._evidence_ids, completed.event_id],
+                started_at=started.timestamp,
+            )}
+        except Exception as exc:
+            failed = self.emit_evidence(
+                "execution_failed",
+                envelope,
+                payload={"capability_uri": descriptor.capability_uri},
+                outcome="failure",
+                error={
+                    "type": exc.__class__.__name__,
+                    "error_type": exc.__class__.__name__,
+                    "message": str(exc),
+                    **(
+                        {"traceback": traceback.format_exc()}
+                        if os.environ.get("CHP_EVIDENCE_TRACEBACKS") == "1"
+                        else {}
+                    ),
+                },
+            )
+            yield {"result": InvocationResult(
+                invocation_id=envelope.invocation_id,
+                capability_id=descriptor.id,
+                capability_version=descriptor.version,
+                correlation=envelope.correlation,
+                outcome="failure",
+                success=False,
+                error={"type": exc.__class__.__name__, "message": str(exc)},
+                evidence_ids=[started.event_id, *ctx._evidence_ids, failed.event_id],
+                started_at=started.timestamp,
+            )}
 
     def emit_evidence(
         self,

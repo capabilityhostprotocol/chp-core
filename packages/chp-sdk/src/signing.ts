@@ -343,3 +343,70 @@ export function buildContinuityStatement(
   };
   return { ...claim, signature: signCanon(oldKey.privateKey, claim as JsonValue) };
 }
+
+// ── Chain witnessing (chp-v0.2.md §12, proposal 0005) ───────────────────────
+
+export interface StoreHead {
+  scheme: 'chp-store-head-v1';
+  sequence: number;
+  store_head: string;
+  leaves: Record<string, string | null>;
+}
+
+/** chp-store-head-v1: sha256 over sorted `correlation_id\x00head_hash\n` lines. */
+export function computeStoreHead(
+  leaves: Map<string, string | null> | Record<string, string | null>,
+  sequence: number,
+): StoreHead {
+  const entries = leaves instanceof Map ? [...leaves.entries()] : Object.entries(leaves);
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const h = createHash('sha256');
+  for (const [cid, head] of entries) h.update(`${cid}\x00${head ?? ''}\n`);
+  const obj: Record<string, string | null> = {};
+  for (const [cid, head] of entries) obj[cid] = head;
+  return { scheme: 'chp-store-head-v1', sequence, store_head: h.digest('hex'), leaves: obj };
+}
+
+const CHAIN_WITNESS_HEADER_FIELDS = [
+  'kind', 'host_id', 'sequence', 'store_head', 'witnessed_at', 'canonicalization',
+] as const;
+
+/** The witness-signed header of a chain-witness statement (§12). */
+export function chainWitnessHeader(statement: Record<string, JsonValue>): JsonValue {
+  const h: Record<string, JsonValue> = {};
+  for (const f of CHAIN_WITNESS_HEADER_FIELDS) h[f] = statement[f] ?? null;
+  return h;
+}
+
+/** A peer's signed countersignature over another host's store head (§12) —
+ * byte-compatible with Python `build_chain_witness`. The witness signs only
+ * the ROOT; the witnessed host's correlation ids never leave it. */
+export function buildChainWitness(
+  witnessedHostId: string,
+  sequence: number,
+  storeHead: string,
+  key: HostKey,
+  opts: { witnessId: string; witnessedAt: string; anchors?: JsonValue[] | null },
+): Record<string, JsonValue> {
+  if (!key.privateKey) throw new Error('witness key has no private component; cannot sign');
+  const statement: Record<string, JsonValue> = {
+    kind: 'chain-witness',
+    host_id: witnessedHostId,
+    sequence,
+    store_head: storeHead,
+    witnessed_at: opts.witnessedAt,
+    canonicalization: CANONICALIZATION,
+  };
+  statement.witness = {
+    host_id: opts.witnessId,
+    public_key: key.publicKeyB64,
+    host_identity: buildAttestation(
+      opts.witnessId, key, opts.witnessedAt, null, opts.anchors ?? null),
+  };
+  statement.signature = {
+    algorithm: SIGNATURE_ALGORITHM,
+    key_id: key.keyId,
+    signature: signCanon(key.privateKey, chainWitnessHeader(statement)),
+  };
+  return statement;
+}

@@ -5,6 +5,40 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.2.5] — additive over 0.2.4 — **released 2026-07-10**
+
+### Added
+- **Mesh witnessing — tamper-proof against the operator** (chp-v0.2.md §12,
+  [proposals/0005](proposals/0005-mesh-witnessing.md) → shipped): peers
+  countersign each other's store heads. New derived digest
+  **`chp-store-head-v1`** (per-correlation chain heads at global sequence ≤ N,
+  sha256 over sorted `correlation_id\x00head_hash\n` lines — recomputable
+  as-of any witnessed N); new statement kind **`chain-witness`** (fourth
+  statement-family member; the witness signs only the root); routes
+  `GET /head`, `POST /witness` (verify + recompute before persisting),
+  `GET /witnesses`. Receipts persist with leaves snapshots; auditing
+  (`chp witness verify`) judges per leaf — verified / **purged** (legal) /
+  **redacted** (legal) / **TAMPERED** — so lawful retention and rewriting are
+  distinguishable. Issued statements live with the WITNESS (the record the
+  operator cannot delete). Witness records never enter the evidence store.
+  Reference witnessing loop: `gateway.witness_interval_s`, default off.
+  Wire suite **18→19** ("witness round-trip"); both reference hosts 19/19.
+  *Vector: `test-vectors/chain-witness.json`; guards
+  `chain_witness_vector_verifies` + `spec_defines_witnessing`.*
+- **Governed streaming** (binding "Streaming invocations",
+  [proposals/0006](proposals/0006-governed-streaming.md) → shipped):
+  `mode:"stream"` on `/invoke` = SSE (`chunk` frames + terminal `result`
+  frame carrying the standard InvocationResult). Gates run BEFORE the stream;
+  pre-chunk outcomes answer plain JSON (never commit to SSE on a denial).
+  Evidence brackets the stream; `execution_completed` lifts usage for token
+  accounting. Reference: shared `_prepare` gate pipeline (one implementation,
+  both paths), async-generator handlers with the `StreamResult` terminal
+  sentinel, `RemoteCapabilityHost.invoke_stream`. **Cloud-spill is now
+  governed**: `chp.spill.chat` (risk `high`) replaces the raw proxy byte
+  pump — spill and its silent local-failure fallback run the pipeline with
+  `http_response` usage evidence. *No canonical-byte changes; SSE frames are
+  transport. TS streaming + a streaming wire check are named deferrals.*
+
 ## [0.2.4] — additive over 0.2.3 — **released 2026-07-10**
 
 ### Added

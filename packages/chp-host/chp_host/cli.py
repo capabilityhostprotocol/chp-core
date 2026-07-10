@@ -557,6 +557,15 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         router.start_prober(probe_interval)
         print(f"Health prober: every {probe_interval:g}s")
 
+    # Mesh witnessing (§12): countersign every peer's store head each tick —
+    # the receipts this node keeps are records peers' operators cannot delete.
+    witness_interval = float(getattr(gw, "witness_interval_s", 0) or 0) if gw else 0.0
+    if witness_interval > 0:
+        from .witness import start_witness_loop
+        witness_remotes = [(r.url, r.api_key) for r in env.resolve_remotes()]
+        if start_witness_loop(witness_remotes, host_id, witness_interval) is not None:
+            print(f"Witnessing {len(witness_remotes)} peer(s): every {witness_interval:g}s")
+
     cap_count = len(router.capability_ids)
     print(f"Routing table: {cap_count} capabilities across {len(router._descriptors)} host(s)")
     for cap_id in router.capability_ids[:10]:

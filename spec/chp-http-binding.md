@@ -1,6 +1,6 @@
 # Capability Host Protocol — HTTP Binding (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.4 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.5 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
 ([v0.1](chp-v0.1.md)) onto HTTP, so a host in any language is wire-compatible
 with the reference `RemoteCapabilityHost` client and the black-box conformance
 runner (`conformance/runner.py --url`). CHP is transport-agnostic; this is the
@@ -91,6 +91,9 @@ balancers; every other route requires auth (§2).
 | GET | `/verify/{correlation_id}` | required | — | chain-verification result (§4) |
 | GET | `/export/{correlation_id}` | required | — | this host's (signed when keyed) evidence bundle; on a gateway, the assembled cross-host **task bundle** (§4a) |
 | GET | `/metrics` | required | — | Prometheus text (`text/plain; version=0.0.4`); MAY include integrity counters (`chp_verify_requests_total{valid}`, `chp_chain_breaks_total`) so verification failures are alertable, not only evidence |
+| GET | `/head` | required | — | the witnessable store head `{host_id, scheme, sequence, store_head, at}` (chp-v0.2.md §12; authed — the sequence discloses activity volume) |
+| POST | `/witness` | required | `chain-witness` statement | `{accepted, sequence, witness}`; the host MUST verify the signature AND recompute its own head at that sequence before persisting (400 `invalid_witness` / 409 `head_mismatch`) |
+| GET | `/witnesses` | required | — | `{witnesses: [chain-witness…]}` — received countersignatures over this host's history (statements only; leaf snapshots stay local) |
 
 `/invoke` accepts a convenience form: a top-level `correlation_id` is lifted into
 `correlation.correlation_id`. Responses are JSON with sorted keys.
@@ -105,6 +108,23 @@ intermediary MUST record such denials as evidence when it maintains an
 evidence store, and SHOULD maintain one (chp-v0.2.md §11). A presented
 `mandate` MUST be forwarded unchanged on the routed envelope (§2, chp-v0.2.md
 §10 Forwarding).
+
+**Streaming invocations** ([proposal 0006](proposals/0006-governed-streaming.md)).
+`mode:"stream"` on `POST /invoke` responds with `text/event-stream`: zero or
+more `event: chunk` frames (`data: {"delta": …}`) followed by exactly one
+terminal `event: result` frame whose `data` is the standard
+`InvocationResult`. The gate pipeline runs **before** the stream opens —
+any outcome decided before the first chunk (a denial, a skip, a
+non-streaming handler) is returned as the normal JSON `200` body, and the
+response MUST NOT commit to `text/event-stream` in that case; clients switch
+on Content-Type. Evidence brackets the stream: `execution_started` at open,
+`execution_completed` (SHOULD carry usage: `prompt_tokens`,
+`completion_tokens`, `model`) or `execution_failed` at close. A capability
+advertises streaming via `modes: ["sync","stream"]`; `mode:"stream"` against
+a sync-only capability is the ordinary gate-4 `unsupported_mode` denial.
+SSE frames are transport, not canonical objects — nothing here is hashed or
+signed. Keep-alive ping frames and resumable streams are deliberately
+unspecified.
 
 `/health` MUST NOT disclose the live capability count (it stays on the authed
 `/host` descriptor) — mesh-count privacy. `version` here is the protocol version;

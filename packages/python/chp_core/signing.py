@@ -860,6 +860,106 @@ def verify_provenance_statement(stmt: dict, *,
                               anchored_did=anchored_did)
 
 
+_CHAIN_WITNESS_HEADER_FIELDS = ("kind", "host_id", "sequence", "store_head",
+                                "witnessed_at", "canonicalization")
+
+
+def chain_witness_header(statement: dict) -> dict:
+    """The witness-signed header of a chain-witness statement (§12)."""
+    return {k: statement.get(k) for k in _CHAIN_WITNESS_HEADER_FIELDS}
+
+
+def build_chain_witness(witnessed_host_id: str, sequence: int, store_head: str,
+                        witness_key: HostKey, *, witness_id: str,
+                        witnessed_at: str,
+                        anchors: list[dict] | None = None) -> dict:
+    """A peer's signed countersignature over another host's store head
+    (proposal 0005, chp-v0.2.md §12): "at global sequence N, HOST's store
+    digested to ROOT." The fourth statement-family member. The witness signs
+    only the ROOT (no correlation ids leak); because chains are append-only,
+    the witnessed host's history at sequence ≤ N is committed — a later
+    rewrite recomputes to a different root. The record's value is that it
+    lives with the WITNESS: the witnessed operator cannot delete it."""
+    if not witness_key.can_sign:
+        raise SigningUnavailable("witness key has no private component; cannot sign")
+    statement: dict = {
+        "kind": "chain-witness",
+        "host_id": witnessed_host_id,
+        "sequence": sequence,
+        "store_head": store_head,
+        "witnessed_at": witnessed_at,
+        "canonicalization": CANONICALIZATION,
+    }
+    statement["witness"] = {
+        "host_id": witness_id,
+        "public_key": witness_key.public_key_b64,
+        "host_identity": build_attestation(
+            witness_id, witness_key, valid_from=witnessed_at, anchors=anchors),
+    }
+    statement["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": witness_key.key_id,
+        "signature": _sign(witness_key._private, _canon(chain_witness_header(statement))),
+    }
+    return statement
+
+
+def verify_chain_witness(statement: dict, *,
+                         expected_host_id: str | None = None,
+                         expected_witness_key: str | None = None) -> BundleVerification:
+    """Offline-verify a chain-witness statement: structure, header signature,
+    witness attestation (binding + temporal), DID anchor when present, and —
+    when supplied — the witnessed host binding and witness key pin. Store-head
+    RECOMPUTATION is a separate act (``chp witness verify --store``): it needs
+    the store, which a statement verifier does not have."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = (statement.get("kind") == "chain-witness"
+                           and bool(statement.get("host_id"))
+                           and isinstance(statement.get("sequence"), int)
+                           and bool(statement.get("store_head")))
+    witness = statement.get("witness") or {}
+    pub = str(witness.get("public_key") or "")
+    sig = statement.get("signature") or {}
+    anchored_domain: str | None = None
+    anchored_did: str | None = None
+
+    if expected_witness_key is not None and sig.get("key_id") != expected_witness_key:
+        return BundleVerification(
+            False, "signed", checks,
+            f"signed by unexpected witness key {sig.get('key_id')!r} "
+            f"(expected {expected_witness_key!r})")
+
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM
+                           and bool(pub)
+                           and _verify_sig(pub, _canon(chain_witness_header(statement)),
+                                           str(sig.get("signature") or "")))
+
+    att = witness.get("host_identity")
+    if att:
+        checks["witness_identity"] = verify_attestation(
+            att, public_key=pub, expected_host_id=witness.get("host_id"),
+            at_time=statement.get("witnessed_at"))
+        anchored_domain = _domain_anchor(att)
+        did_anchor = _did_anchor(att)
+        if did_anchor is not None:
+            checks["did_anchor"] = verify_did_anchor(
+                did_anchor, pub, str(witness.get("host_id", "")))
+            if checks["did_anchor"]:
+                anchored_did = str(did_anchor.get("did"))
+    else:
+        checks["witness_identity"] = False  # a countersignature must say WHO witnessed
+
+    if expected_host_id is not None:
+        checks["witnessed_host"] = statement.get("host_id") == expected_host_id
+
+    valid = all(checks.values())
+    reason = None if valid else "chain-witness checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason,
+                              anchored_domain=anchored_domain,
+                              anchored_did=anchored_did)
+
+
 _MANDATE_HEADER_FIELDS = ("kind", "mandate_id", "delegate_id", "scope",
                           "valid_from", "valid_until", "created_at",
                           "canonicalization")

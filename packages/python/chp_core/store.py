@@ -521,6 +521,46 @@ class SQLiteEvidenceStore:
             row = self._conn.execute("SELECT COUNT(*) AS count FROM evidence_events").fetchone()
         return int(row["count"])
 
+    def get_store_head(self, at_sequence: int | None = None) -> JSON:
+        """The witnessable store digest (`chp-store-head-v1`, spec §12).
+
+        Chains are per-correlation over one GLOBAL sequence, so the store-level
+        commitment is: for every correlation, its head ``content_hash`` at
+        sequence ≤ N; the store head is SHA256 over the sorted
+        ``correlation_id\\x00head_hash\\n`` lines. Chains are append-only and
+        the sequence never rewinds, so the head AS-OF any witnessed N is
+        recomputable later — rewriting any event at sequence ≤ N changes some
+        correlation's head and the recomputed root stops matching what a peer
+        countersigned. Returns ``{scheme, sequence, store_head, leaves}``;
+        ``leaves`` (correlation_id -> head hash, None when redacted) feed the
+        received-witness snapshot that makes retention verifiable per-leaf."""
+        with self._lock:
+            if at_sequence is None:
+                row = self._conn.execute(
+                    "SELECT MAX(sequence) AS s FROM evidence_events").fetchone()
+                at_sequence = int(row["s"] or 0)
+            # SQLite bare-column-with-MAX: content_hash comes FROM the row that
+            # holds MAX(sequence) per group (documented SQLite behavior).
+            rows = self._conn.execute(
+                """
+                SELECT correlation_id, content_hash, MAX(sequence)
+                FROM evidence_events
+                WHERE sequence <= ?
+                GROUP BY correlation_id
+                """,
+                (at_sequence,),
+            ).fetchall()
+        leaves = {row["correlation_id"]: row["content_hash"] for row in rows}
+        digest = hashlib.sha256()
+        for correlation_id in sorted(leaves):
+            digest.update(f"{correlation_id}\x00{leaves[correlation_id] or ''}\n".encode())
+        return {
+            "scheme": "chp-store-head-v1",
+            "sequence": at_sequence,
+            "store_head": digest.hexdigest(),
+            "leaves": leaves,
+        }
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

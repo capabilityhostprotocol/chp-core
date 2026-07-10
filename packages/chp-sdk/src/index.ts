@@ -34,6 +34,10 @@ export {
   buildProvenanceStatement,
   provenanceHeader,
   buildContinuityStatement,
+  buildChainWitness,
+  chainWitnessHeader,
+  computeStoreHead,
+  type StoreHead,
 } from './signing.js';
 export {
   verifyBundle,
@@ -49,6 +53,7 @@ export {
   verifyMandate,
   scopeAllows,
   verifyContinuity,
+  verifyChainWitness,
   type BundleVerification,
   type TaskBundleVerification,
 } from './verify.js';

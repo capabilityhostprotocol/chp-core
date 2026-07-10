@@ -1655,6 +1655,74 @@ async def check_mandate_gate(host: Any) -> None:
         f"tampered mandate must be mandate_invalid, got {_denial_code(tampered)!r}")
 
 
+async def check_witness_roundtrip(host: Any) -> None:
+    """v0.2 §12: the witness exchange. The runner plays WITNESS with a fresh
+    key the host has never met: GET /head → sign a chain-witness statement →
+    POST /witness (the host must verify + accept) → GET /witnesses serves it.
+    The sequence must be monotonic across an invocation, and a statement over
+    a WRONG head must be refused (409) — never silently stored."""
+    import base64
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from chp_core import signing
+    from chp_core.types import utc_now
+
+    base = getattr(host, "_base", None)
+    assert base, "witness check requires a wire host"
+    api_key = getattr(host, "_api_key", None)
+
+    def _req(path: str, body=None):
+        req = urllib.request.Request(
+            f"{base}{path}",
+            data=_json.dumps(body).encode() if body is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"X-CHP-Key": api_key} if api_key else {})},
+            method="POST" if body is not None else "GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return _json.loads(resp.read().decode())
+
+    head = _req("/head")
+    assert head.get("scheme") == "chp-store-head-v1", f"unknown head scheme: {head}"
+    assert isinstance(head.get("sequence"), int) and head.get("store_head"), head
+
+    # Sequence monotonicity across an invocation.
+    await invoke_host(host, "conformance.echo", {"value": "witnessed"})
+    head2 = _req("/head")
+    assert head2["sequence"] > head["sequence"], (
+        "the store sequence must advance across an invocation")
+
+    priv = ed25519.Ed25519PrivateKey.generate()
+    pub = base64.b64encode(priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+    key = signing.HostKey(key_id=signing.key_id_for(base64.b64decode(pub)),
+                          public_key_b64=pub, _private=priv)
+
+    stmt = signing.build_chain_witness(
+        str(head2["host_id"]), int(head2["sequence"]), str(head2["store_head"]),
+        key, witness_id="conformance-witness", witnessed_at=utc_now())
+    accepted = _req("/witness", stmt)
+    assert accepted.get("accepted") is True, f"witness must be accepted: {accepted}"
+
+    served = _req("/witnesses")
+    heads = [w.get("store_head") for w in served.get("witnesses", [])]
+    assert head2["store_head"] in heads, "the accepted witness must be served back"
+
+    # A statement over a WRONG head must be refused, never stored.
+    bad = signing.build_chain_witness(
+        str(head2["host_id"]), int(head2["sequence"]), "0" * 64,
+        key, witness_id="conformance-witness", witnessed_at=utc_now())
+    try:
+        _req("/witness", bad)
+        raise AssertionError("a wrong-head witness must be refused")
+    except urllib.error.HTTPError as exc:
+        assert exc.code in (400, 409), f"expected 400/409 refusal, got {exc.code}"
+
+
 WIRE_CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -1674,6 +1742,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("export bundle verifies (v0.2 §4a)", check_export_bundle),
     ("capability-scoped caller key (binding §2)", check_scoped_caller_key),
     ("mandate gate (v0.2 §10)", check_mandate_gate),
+    ("witness round-trip (v0.2 §12)", check_witness_roundtrip),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

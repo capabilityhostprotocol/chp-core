@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.4 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.5 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 
@@ -576,3 +576,64 @@ retry, no active prober, and no unhealthy-state persistence — named deferrals
 in proposal 0003, waiting on demand. (The reference implementation provides
 a client retry and an active prober as opt-in, non-normative features; the
 spec still defines neither.)
+
+## 12. Witnessing — Tamper-Proof Against the Operator
+
+Evidence is tamper-evident; this section makes it tamper-proof **against the
+host's own operator** ([proposal 0005](proposals/0005-mesh-witnessing.md)).
+Signing happens at export, but the store is operator-controlled — between
+exports, history could be rewritten and re-signed. The fix: **peers
+countersign each other's chain heads**, and the countersignature lives with
+the witness, where the witnessed operator cannot delete it.
+
+**The store head (`chp-store-head-v1`).** Evidence chains are per-correlation
+over one global, never-rewinding sequence. The witnessable digest: for every
+correlation, its head `content_hash` at global sequence ≤ N; the store head is
+SHA-256 over the sorted `correlation_id\x00head_hash\n` lines. Because chains
+are append-only, the head **as-of any witnessed N is recomputable later** —
+that recomputability is the mechanism: rewriting anything at sequence ≤ N
+changes some correlation's head, and the recomputed root stops matching what
+a peer signed.
+
+**The `chain-witness` statement** — the fourth statement-family member
+(bundles §3, provenance §9, mandates §10): the witness signs the canonical
+header `{kind, host_id (witnessed), sequence, store_head, witnessed_at,
+canonicalization}`, with the witness's attestation (anchors §3.1) embedded.
+The witness signs only the **root**; the witnessed host's correlation ids
+never leave it. Schema:
+[chain-witness.schema.json](../schemas/chain-witness.schema.json); fixture:
+`spec/test-vectors/chain-witness.json` (verified by both reference
+implementations and `verify.mjs`).
+
+**Exchange.** `GET /head` (authed — the sequence discloses activity volume)
+returns `{host_id, scheme, sequence, store_head, at}`. A witness fetches it,
+builds the statement, and `POST /witness` delivers it; the witnessed host
+MUST verify the signature **and recompute its own head at that sequence**
+before persisting — never store an unverified receipt. On acceptance the
+witnessed host snapshots its leaves-at-N beside the statement (the signed
+root makes the snapshot tamper-evident). `GET /witnesses` (authed) serves
+received statements — a host publishing third-party countersignatures over
+its own history. The witness retains every statement it issued: those records
+are the threat-model core. Witness records MUST NOT enter the evidence store
+(a witness event would draw a sequence and move the head being witnessed) —
+they live in sidecar storage.
+
+**Verification and retention.** Retention lawfully deletes whole correlations
+(purge) and lawfully NULLs hashes (redaction); witnessing must not brand
+lifecycle operations as attacks. Auditing (`chp witness verify --store`)
+recomputes the head as-of each witnessed sequence and judges **per leaf**
+against the snapshot: match → `verified`; correlation absent → `purged`
+(legal); head NULLed → `redacted` (legal — redaction can only NULL, never
+forge a different valid hash); differing hash → **`tampered`**; a correlation
+present at ≤ N but missing from the snapshot → **`tampered`** (inserted
+history). Honest lifecycle and rewriting are thereby distinguishable with no
+witness-expiry rules.
+
+**Cadence and posture.** Any authed peer MAY witness any peer; the reference
+gateway carries an opt-in witnessing loop (`gateway.witness_interval_s`,
+default off — the prober pattern). A host that neither issues nor accepts
+witnesses remains conformant at the export-signing floor; witnessing upgrades
+the assurance story from tamper-evident to tamper-proof-against-the-operator.
+Witness-of-witness chains, cross-mesh witnessing, quorum policies, and
+external transparency-log anchoring are deliberately out of scope (named in
+proposal 0005).

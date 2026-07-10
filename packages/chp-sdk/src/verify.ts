@@ -301,6 +301,64 @@ export function verifyContinuity(statement: Record<string, JsonValue>): boolean 
   return verifyCanon(String(oldPub), claim, String(statement.signature ?? ''));
 }
 
+// ── Chain witnessing (chp-v0.2.md §12, proposal 0005) ───────────────────────
+
+const CHAIN_WITNESS_VERIFY_FIELDS = [
+  'kind', 'host_id', 'sequence', 'store_head', 'witnessed_at', 'canonicalization',
+] as const;
+
+/** Offline-verify a chain-witness statement: structure, header signature,
+ * witness attestation (binding + temporal), DID anchor when present, and —
+ * when supplied — the witnessed-host binding. Store-head RECOMPUTATION is a
+ * separate act that needs the store itself. */
+export function verifyChainWitness(
+  statement: Record<string, JsonValue>,
+  opts: { expectedHostId?: string; expectedWitnessKey?: string } = {},
+): BundleVerification {
+  const checks: Record<string, boolean> = {};
+  let anchoredDid: string | null = null;
+  checks.structure = statement.kind === 'chain-witness'
+    && !!statement.host_id && Number.isInteger(statement.sequence)
+    && !!statement.store_head;
+
+  const witness = (statement.witness as Record<string, JsonValue> | undefined) ?? {};
+  const pubKey = String(witness.public_key ?? '');
+  const sig = (statement.signature as Record<string, JsonValue> | undefined) ?? {};
+  if (opts.expectedWitnessKey !== undefined && sig.key_id !== opts.expectedWitnessKey) {
+    return { valid: false, assurance: 'signed', checks, reason: `signed by unexpected witness key ${String(sig.key_id)}` };
+  }
+
+  const header: Record<string, JsonValue> = {};
+  for (const f of CHAIN_WITNESS_VERIFY_FIELDS) header[f] = statement[f] ?? null;
+  checks.signature = sig.algorithm === 'ed25519' && !!pubKey
+    && verifyCanon(pubKey, header, String(sig.signature ?? ''));
+
+  const att = witness.host_identity as Record<string, JsonValue> | undefined;
+  if (att) {
+    checks.witness_identity = attestationOk(
+      att, pubKey, String(witness.host_id ?? ''),
+      (statement.witnessed_at as string | null) ?? null);
+    const dAnchor = didAnchor(att);
+    if (dAnchor) {
+      checks.did_anchor = verifyDidAnchor(dAnchor, pubKey, String(witness.host_id ?? ''));
+      if (checks.did_anchor) anchoredDid = dAnchor.did as string;
+    }
+  } else {
+    checks.witness_identity = false; // a countersignature must say WHO witnessed
+  }
+
+  if (opts.expectedHostId !== undefined) {
+    checks.witnessed_host = statement.host_id === opts.expectedHostId;
+  }
+
+  const valid = Object.values(checks).every(Boolean);
+  return {
+    valid, assurance: 'signed', checks, anchoredDid,
+    reason: valid ? undefined : 'chain-witness checks failed: '
+      + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
+  };
+}
+
 // ── Mandates — delegated authority on the wire (chp-v0.2.md §10, proposal 0002)
 
 const MANDATE_HEADER_FIELDS = [

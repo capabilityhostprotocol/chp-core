@@ -139,6 +139,32 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (adapter-provenance, ${input.package}==${input.version}, published by ${pub.host_id})`
     : "INVALID");
+} else if (input.kind === "chain-witness") {
+  // Chain witness (chp-v0.2.md §12): a peer's key signs the canonical header
+  // — a countersignature over another host's store head at a sequence.
+  const w = input.witness ?? {};
+  const wPub = createPublicKey({
+    key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                        Buffer.from(w.public_key ?? "", "base64")]),
+    format: "der", type: "spki",
+  });
+  const vCanon = (obj, sigB64) =>
+    edVerify(null, Buffer.from(canon(obj), "utf8"), wPub, Buffer.from(sigB64, "base64"));
+  const header = { kind: input.kind, host_id: input.host_id, sequence: input.sequence,
+                   store_head: input.store_head, witnessed_at: input.witnessed_at,
+                   canonicalization: input.canonicalization };
+  ok = input.signature?.algorithm === "ed25519" && vCanon(header, input.signature.signature);
+  const att = w.host_identity;
+  if (att) {
+    const claim = { host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
+                    valid_from: att.valid_from, valid_until: att.valid_until,
+                    ...("anchors" in att ? { anchors: att.anchors } : {}) };
+    if (!(att.host_id === w.host_id && att.public_key === w.public_key
+          && vCanon(claim, att.signature))) { console.error("witness attestation INVALID"); ok = false; }
+  } else { console.error("chain-witness missing witness attestation"); ok = false; }
+  console.log(ok
+    ? `VALID (chain-witness: ${w.host_id} countersigned ${input.host_id}@seq ${input.sequence}, head ${String(input.store_head).slice(0, 16)}…)`
+    : "INVALID");
 } else if (input.kind === "mandate") {
   // Mandate (chp-v0.2.md §10): the principal key signs the canonical header
   // — a bounded, expiring, capability-scoped grant to a named delegate.

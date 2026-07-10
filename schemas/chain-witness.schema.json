@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/chain-witness.schema.json",
+  "title": "ChainWitness",
+  "description": "A peer's signed countersignature over another host's evidence-store head (chp-v0.2.md section 12, proposal 0005): 'at global sequence N, HOST's store digested to ROOT' under the chp-store-head-v1 scheme (sha256 over sorted correlation_id\\x00head_hash\\n lines). The witness signs only the root — no correlation ids leak. Because chains are append-only, the witnessed history at sequence <= N is committed: a later rewrite recomputes to a different root. The statement's value is that it lives with the WITNESS — the witnessed operator cannot delete it.",
+  "type": "object",
+  "required": [
+    "kind",
+    "host_id",
+    "sequence",
+    "store_head",
+    "witnessed_at",
+    "canonicalization",
+    "witness",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "chain-witness"
+    },
+    "host_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The WITNESSED host."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The witnessed host's global store sequence at witnessing time."
+    },
+    "store_head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "chp-store-head-v1 digest of the store at `sequence`."
+    },
+    "witnessed_at": {
+      "type": "string"
+    },
+    "canonicalization": {
+      "const": "chp-stable-v1"
+    },
+    "witness": {
+      "type": "object",
+      "required": [
+        "host_id",
+        "public_key",
+        "host_identity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "public_key": {
+          "type": "string",
+          "description": "base64 raw ed25519 public key"
+        },
+        "host_identity": {
+          "type": "object",
+          "description": "Self-signed host-identity attestation (chp-v0.2.md §3). 'anchors' is omitted entirely when empty (§3.1 byte rule).",
+          "required": [
+            "host_id",
+            "public_key",
+            "key_id",
+            "valid_from",
+            "signature"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "host_id": {
+              "type": "string"
+            },
+            "public_key": {
+              "type": "string"
+            },
+            "key_id": {
+              "type": "string"
+            },
+            "valid_from": {
+              "type": "string"
+            },
+            "valid_until": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "anchors": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "description": "External trust roots vouching for the witness key. MUST be omitted when empty."
+            },
+            "signature": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "key_id",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

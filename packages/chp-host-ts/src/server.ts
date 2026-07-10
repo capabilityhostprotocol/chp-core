@@ -7,6 +7,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
+import { verifyChainWitness } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
 import type { InvocationEnvelope, JsonValue } from './types.js';
 
@@ -50,6 +51,8 @@ export function createHostServer(
   opts: { apiKey?: string; namedKeys?: string } = {},
 ): Server {
   const { apiKey } = opts;
+  // Received chain-witness statements (§12) — in-memory for the conformance host.
+  const receivedWitnesses: Record<string, JsonValue>[] = [];
   // Named per-caller keys (binding §2): "name:key[:scope1|scope2],…" — same
   // name may repeat (rotation overlap); a scoped key's out-of-scope invoke is
   // a PROCESSED policy_blocked denial, never a transport 403.
@@ -126,6 +129,42 @@ export function createHostServer(
     if (method === 'GET' && path === '/metrics') {
       res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' });
       return void res.end('# chp ts host metrics (stub)\n');
+    }
+    // Witnessing (spec §12): the store head a peer countersigns (authed —
+    // the sequence discloses activity volume), and this host's received
+    // countersignatures (statements only; receipts stay in memory here —
+    // a conformance host does not persist).
+    if (method === 'GET' && path === '/head') {
+      const head = host.store.getStoreHead();
+      return sendJson(res, 200, {
+        host_id: host.hostId, scheme: head.scheme, sequence: head.sequence,
+        store_head: head.store_head, at: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+      });
+    }
+    if (method === 'GET' && path === '/witnesses') {
+      return sendJson(res, 200, { witnesses: receivedWitnesses as unknown as JsonValue });
+    }
+    if (method === 'POST' && path === '/witness') {
+      let stmt: Record<string, JsonValue>;
+      try {
+        stmt = JSON.parse((await readBody(req)) || '{}') as Record<string, JsonValue>;
+      } catch (e) {
+        return err(res, 400, 'invalid_json', String((e as Error).message));
+      }
+      const sv = verifyChainWitness(stmt, { expectedHostId: host.hostId });
+      if (!sv.valid) {
+        return err(res, 400, 'invalid_witness', sv.reason ?? 'witness statement failed verification');
+      }
+      const mine = host.store.getStoreHead(Number(stmt.sequence));
+      if (mine.store_head !== stmt.store_head) {
+        return err(res, 409, 'head_mismatch',
+          'statement head does not match this store at that sequence');
+      }
+      receivedWitnesses.push(stmt);
+      return sendJson(res, 200, {
+        accepted: true, sequence: stmt.sequence,
+        witness: ((stmt.witness as Record<string, JsonValue> | undefined) ?? {}).host_id ?? null,
+      });
     }
 
     if (method === 'POST' && (path === '/invoke' || path === '/replay')) {

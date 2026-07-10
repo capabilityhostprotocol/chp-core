@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
+  buildChainWitness,
   buildContinuityStatement,
   buildMandate,
   buildProvenanceStatement,
+  computeStoreHead,
   keypairFromSeed,
+  verifyChainWitness,
   verifyContinuity,
   verifyMandate,
   verifyProvenanceStatement,
@@ -52,5 +58,36 @@ describe('statement builders — TS build parity (round-trip under own verifiers
     expect(verifyContinuity(stmt)).toBe(true);
     expect(verifyContinuity({ ...stmt, new_key_id: 'deadbeef' })).toBe(false);
     expect(verifyContinuity({ ...stmt, old_public_key: newKey.publicKeyB64 })).toBe(false);
+  });
+});
+
+describe('chain witnessing (§12)', () => {
+  it('buildChainWitness → verifyChainWitness valid; tamper breaks it', () => {
+    const stmt = buildChainWitness('audited-host', 42, 'ab'.repeat(32), key, {
+      witnessId: 'peer-w', witnessedAt: TS,
+    });
+    const v = verifyChainWitness(stmt, { expectedHostId: 'audited-host' });
+    expect(v.valid).toBe(true);
+    expect(verifyChainWitness({ ...stmt, store_head: 'cd'.repeat(32) }).checks.signature).toBe(false);
+    expect(verifyChainWitness(stmt, { expectedHostId: 'someone-else' }).valid).toBe(false);
+  });
+
+  it('computeStoreHead matches the Python-generated vector scheme', () => {
+    // The vector's head is computed over these exact fixture leaves in
+    // scripts/gen-test-vectors.py — cross-language head-scheme parity.
+    const alpha = createHash('sha256').update('chp fixture head alpha v1').digest('hex');
+    const beta = createHash('sha256').update('chp fixture head beta v1').digest('hex');
+    const head = computeStoreHead({ corr_alpha: alpha, corr_beta: beta }, 42);
+    const vector = JSON.parse(readFileSync(
+      fileURLToPath(new URL('../../../spec/test-vectors/chain-witness.json', import.meta.url)),
+      'utf8'));
+    expect(head.store_head).toBe(vector.store_head);
+  });
+
+  it('vector verifies under verifyChainWitness', () => {
+    const vector = JSON.parse(readFileSync(
+      fileURLToPath(new URL('../../../spec/test-vectors/chain-witness.json', import.meta.url)),
+      'utf8'));
+    expect(verifyChainWitness(vector, { expectedHostId: 'vector-witnessed-host' }).valid).toBe(true);
   });
 });
