@@ -240,6 +240,39 @@ def format_integrity_prometheus() -> str:
     ]) + "\n"
 
 
+# Process-lifetime routing counters (chp-v0.2.md §11) — the mesh's reliability
+# story as scrapeable signal, not only evidence. Incremented by MultiHostRouter.
+_ROUTING_COUNTERS = {"failovers": 0, "unreachable_denials": 0}
+
+
+def record_routing_failover() -> None:
+    _ROUTING_COUNTERS["failovers"] += 1
+
+
+def record_unreachable_denial() -> None:
+    _ROUTING_COUNTERS["unreachable_denials"] += 1
+
+
+def format_routing_prometheus(unhealthy_hosts: int | None = None) -> str:
+    """Prometheus text for routing reliability (process lifetime + live gauge)."""
+    c = _ROUTING_COUNTERS
+    lines = [
+        "# HELP chp_router_failovers_total Owner attempts skipped past a connection failure (process lifetime).",
+        "# TYPE chp_router_failovers_total counter",
+        f"chp_router_failovers_total {c['failovers']}",
+        "# HELP chp_router_unreachable_denials_total host_unreachable denials issued (process lifetime).",
+        "# TYPE chp_router_unreachable_denials_total counter",
+        f"chp_router_unreachable_denials_total {c['unreachable_denials']}",
+    ]
+    if unhealthy_hosts is not None:
+        lines += [
+            "# HELP chp_router_unhealthy_hosts Hosts currently marked unhealthy (not yet proven back).",
+            "# TYPE chp_router_unhealthy_hosts gauge",
+            f"chp_router_unhealthy_hosts {unhealthy_hosts}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
 def format_prometheus(report: SessionMetricsReport) -> str:
     """Return Prometheus text exposition format with chp_invocations_* metric names."""
     lines: list[str] = []

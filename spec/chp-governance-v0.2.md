@@ -1,6 +1,6 @@
 # Capability Host Protocol — Governance Vocabulary (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.3 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md). Governance is CHP's
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.4 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md). Governance is CHP's
 differentiator: the boundary doesn't just record *what an agent did*, it records
 *what governed it* — denials, risk tiers, autonomy budgets, human approval,
 safety guardrails — as first-class, correlated evidence on the same signed plane.
@@ -47,13 +47,15 @@ accompanies a **`skipped`** outcome, not `denied` (pipeline gate 3).
 | `approval_required` | A human-approval gate is unsatisfied (§4.1). | true |
 | `safety_blocked` | A safety guardrail blocked the invocation (§4.2). | false |
 | `mandate_invalid` | A presented mandate failed verification — bad signature, principal attestation, validity window, or delegate binding (chp-v0.2.md §10). An expired mandate is NOT retryable: a new mandate is a new object. | false |
+| `host_unreachable` | A **routing intermediary** could reach no owner of the capability (chp-v0.2.md §11). Emitted only by intermediaries — a single host never emits it. `details` SHOULD carry `attempted_hosts`, `last_error`, `retry_after_s`. | true |
 
-`retryable` is normative advice to the caller: `budget_exceeded` and
-`approval_required` describe transient governance state that may clear (budget
-resets, approval granted); the rest describe stable rejections that will recur
-for the same input. `RESERVED_CODES` in `types.py:DenialReason` is the source of
-truth; the schema examples and this table MUST match it (guarded by
-`protocol_checks`).
+`retryable` is normative advice to the caller: it marks transient state that
+may clear without changing the request — governance state (`budget_exceeded`
+resets, `approval_required` is granted) or reachability (`host_unreachable`
+clears when a host returns; `retry_after_s` says when to bother). The rest
+describe stable rejections that will recur for the same input. `RESERVED_CODES`
+in `types.py:DenialReason` is the source of truth; the schema examples and this
+table MUST match it (guarded by `protocol_checks`).
 
 A host MAY deny for a reason outside this set, but the `code` MUST then be
 reverse-DNS namespaced (§5) — e.g. `com.acme.quota_exceeded` — never a bare

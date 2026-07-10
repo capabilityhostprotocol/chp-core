@@ -342,6 +342,17 @@ def check_alignment(repo_root: Path) -> JSON:
             and "Omit-when-empty" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Routing & reachability (§11, proposal 0003): the spec must define the
+        # section, the transport denial code, and both reserved health events.
+        add_check(
+            checks,
+            "spec_defines_routing",
+            "## 11. Routing & Reachability" in spec_v02
+            and "`host_unreachable`" in spec_v02
+            and "host_marked_unhealthy" in spec_v02
+            and "host_marked_healthy" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.

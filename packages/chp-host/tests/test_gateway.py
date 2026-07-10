@@ -99,16 +99,13 @@ class TestGatewayHTTP:
         assert "note" in data
         assert "hosts" in data
 
-    def test_invoke_unknown_capability_returns_error(self):
-        import urllib.error
-        # Router raises UnknownCapabilityError (KeyError) → HTTP 400 Bad Request.
-        try:
-            _post(f"{self.base}/invoke", {"capability_id": "no.such.cap", "payload": {}})
-            pytest.fail("Expected HTTP error for unknown capability")
-        except urllib.error.HTTPError as exc:
-            assert exc.code == 400
-            body = json.loads(exc.read())
-            assert "error" in body
+    def test_invoke_unknown_capability_is_processed_denial(self):
+        # Spec §11: unknown mesh-wide is a PROCESSED denial — HTTP 200 with
+        # outcome denied + capability_not_found (was a misleading 400 before
+        # v0.2.4, because UnknownCapabilityError is a KeyError subclass).
+        data = _post(f"{self.base}/invoke", {"capability_id": "no.such.cap", "payload": {}})
+        assert data["outcome"] == "denied"
+        assert data["denial"]["code"] == "capability_not_found"
 
 
 class TestGatewayHealthHostId:

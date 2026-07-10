@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.3 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.4 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 
@@ -515,3 +515,62 @@ Revocation lists, `max_invocations` enforcement, and sub-delegation are
 deliberately out of scope for v0.2.3 — expiry (`valid_until`) is the v1
 revocation story, mirroring the §3.2 posture that authority recovery is a
 deliberate operator act.
+
+**Forwarding.** An intermediary that forwards an invocation (a gateway routing
+to member hosts) MUST forward a presented `mandate` **unchanged** on the
+forwarded envelope ([proposal 0004](proposals/0004-mandate-forwarding.md)).
+The intermediary does not verify it; the **executing host's** gate 5 does, and
+rebinds the evidence subject to the delegate-under-principal binding. Per-hop
+transport subject rebinding is expected and unchanged — the mandate is the
+identity/authority carrier that survives hops, so the front-door caller's
+authority lands verified in the executing host's signed chain regardless of
+how many intermediaries sit between. Delegate binding composes with transport
+auth where that auth verified the original caller (the front door); the
+executing host enforces signature, attestation, window, and scope in full.
+Mandate re-issuance/attenuation at intermediaries (sub-delegation) is
+deliberately out of scope.
+
+## 11. Routing & Reachability
+
+Evidence, identity, supply chain, and authority are governed; this section
+brings the last silent layer — **the routing fabric between hosts** — onto the
+same plane ([proposal 0003](proposals/0003-reachability.md)). The binding's
+load-bearing rule (processed = evidence, denial = HTTP 200) applies to a
+routing intermediary at its own layer.
+
+**Unreachability is a governed decision.** When an intermediary can reach no
+owner of the requested capability, the invocation was PROCESSED — the
+intermediary decided it could not be placed. It MUST return a denial with the
+reserved code `host_unreachable` (`retryable: true` — the first reserved
+transport code; reachability is transient state that may clear). `details`
+SHOULD carry `attempted_hosts`, `last_error`, and `retry_after_s` (honest
+advice derived from the intermediary's health-recheck window). A capability
+unknown mesh-wide is `capability_not_found`. A **single host never emits
+`host_unreachable`** — the code means "the mesh could not reach the work",
+never "the work failed". The denial rides the standard `execution_denied`
+event; no new denial event type exists.
+
+**Health transitions are evidence.** `ROUTING_EVIDENCE_TYPES` reserves
+`host_marked_unhealthy` and `host_marked_healthy` — events an intermediary
+emits about its own routing state, on its **own chain** (the §3.1 self-events
+precedent), with `host_id` = the intermediary. Emission MUST be
+transition-gated: only an actual state change emits (a success against an
+already-healthy host is silence). A transition that occurs while routing an
+invocation MUST ride that invocation's correlation — the failover is then
+replayable in-context: `host_marked_unhealthy` followed by the next
+candidate's `execution_started` IS the failover record, which is why no
+separate failover event type is reserved (derivable is not reserved).
+
+**Intermediary evidence posture.** An intermediary MUST return processed
+denials per the binding; it MUST record them (and its health transitions) as
+evidence when it maintains an evidence store, and SHOULD maintain one. A
+storeless embedded router remains conformant at the returned-denial floor. An
+intermediary with a store merges its own events into stitched replay
+timelines, so the mesh's reliability story is part of the replayable record —
+not an operational side channel.
+
+**Retry stays with the caller.** The intermediary's owner-failover is the
+retry that helps; `retryable: true` plus `retry_after_s` tells the caller when
+a retry becomes worthwhile. This spec deliberately defines no automatic client
+retry, no active prober, and no unhealthy-state persistence — named deferrals
+in proposal 0003, waiting on demand.

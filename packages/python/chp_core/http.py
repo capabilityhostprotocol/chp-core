@@ -216,7 +216,12 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/verify/"):
             correlation_id = unquote(path.removeprefix("/verify/"))
-            if not hasattr(self.server.chp_host, "store"):
+            # Gateway-ness is detected by the FEDERATED capability, never by the
+            # absence of a store: a router MAY hold its own store (§11 routing
+            # evidence) and /verify must still be federated — the evidence for a
+            # routed correlation lives on the members, not the gateway.
+            if hasattr(self.server.chp_host, "export_task_bundle") or not hasattr(
+                    self.server.chp_host, "store"):
                 # Gateway: FEDERATED verification (chp-v0.2.md §8) — assemble the
                 # task bundle from member exports and verify it as a unit. Falls
                 # back to the honest note when members can't export.
@@ -308,6 +313,11 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             + b"\n"
             + format_integrity_prometheus().encode("utf-8")
         )
+        # Routing reliability (spec §11) — only a router has an _unhealthy map.
+        unhealthy = getattr(host, "_unhealthy", None)
+        if unhealthy is not None:
+            from .metrics import format_routing_prometheus
+            body += b"\n" + format_routing_prometheus(len(unhealthy)).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.send_header("Content-Length", str(len(body)))

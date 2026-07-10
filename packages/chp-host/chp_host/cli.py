@@ -535,9 +535,19 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         return 1
 
     selection = (gw.selection if gw else None) or "first"
-    router = MultiHostRouter(transports, selection=selection, host_id=host_id, host_roles=host_roles)
+    # Gateway evidence store (spec §11): routing denials + health transitions
+    # land on the gateway's own chain and merge into stitched replays. Uses the
+    # manifest's gateway.store path when present, else the init-written default.
+    from pathlib import Path
+
+    from chp_core.store import SQLiteEvidenceStore
+    store_path = (getattr(gw, "store", None) if gw else None) or str(
+        Path.home() / ".chp" / "gateway-mesh.sqlite")
+    store = SQLiteEvidenceStore(store_path)
+    router = MultiHostRouter(transports, selection=selection, host_id=host_id,
+                             host_roles=host_roles, store=store)
     print(f"CHP gateway {host_id!r} — connecting to {len(transports)} transport(s) "
-          f"(selection={selection})...")
+          f"(selection={selection}, evidence={store_path})...")
     asyncio.run(router.connect())
 
     cap_count = len(router.capability_ids)

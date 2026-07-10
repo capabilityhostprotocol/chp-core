@@ -20,7 +20,8 @@
         "budget_exceeded",
         "approval_required",
         "safety_blocked",
-        "mandate_invalid"
+        "mandate_invalid",
+        "host_unreachable"
       ]
     },
     "message": {

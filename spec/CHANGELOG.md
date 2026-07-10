@@ -5,6 +5,37 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.2.4] — additive over 0.2.3 — **released 2026-07-10**
+
+### Added
+- **Reachability is governed evidence** (chp-v0.2.md §11,
+  [proposals/0003](proposals/0003-reachability.md) → shipped): the binding's
+  load-bearing rule extended to routing intermediaries. New reserved denial
+  code **`host_unreachable`** (the 11th; `retryable: true`, the first
+  transport code — governance §2's retryable rule widened to "governance OR
+  reachability"), emitted only by an intermediary when no owner is reachable:
+  PROCESSED denial, HTTP 200, `details` carries
+  `attempted_hosts`/`last_error`/`retry_after_s`. New reserved family
+  **`ROUTING_EVIDENCE_TYPES`** `{host_marked_unhealthy, host_marked_healthy}` —
+  transition-gated intermediary self-events that ride the routed invocation's
+  correlation, so a failover is replayable in-context. Intermediaries SHOULD
+  maintain an evidence store (MUST record when they do); reference gateway
+  wires one and merges its chain into stitched replays; `chp_router_*`
+  Prometheus metrics. Reference router returns denials instead of raising
+  (`UnknownCapabilityError`/`NoHealthyHostError` stay exported, no longer
+  raised from `ainvoke`). *Guards: `spec_defines_routing` + the four
+  denial-code registries; no wire-suite change (gateway fixture = named
+  deferral); proven live: kill-member failover → denial → recovery →
+  stitched replay.*
+- **Mandate passthrough** (chp-v0.2.md §10 "Forwarding",
+  [proposals/0004](proposals/0004-mandate-forwarding.md) → shipped): an
+  intermediary forwarding an invocation MUST forward a presented `mandate`
+  unchanged — the executing host's gate 5 verifies and rebinds the subject, so
+  authority survives per-hop subject rebinding end to end. Reference router
+  threads `envelope.mandate` (was silently dropped). *Proven live: steward
+  fleet now mints per-run mandates; every evidence event on the mesh's chains
+  carries the delegate-under-principal subject.*
+
 ## [0.2.3] — additive over 0.2.2 — **released 2026-07-09**
 
 ### Added

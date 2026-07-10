@@ -1,6 +1,6 @@
 # Capability Host Protocol — HTTP Binding (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.3 additions 2026-07-09). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.4 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
 ([v0.1](chp-v0.1.md)) onto HTTP, so a host in any language is wire-compatible
 with the reference `RemoteCapabilityHost` client and the black-box conformance
 runner (`conformance/runner.py --url`). CHP is transport-agnostic; this is the
@@ -67,7 +67,9 @@ caller, the mandate MUST name that caller as `delegate_id`, and on success the
 evidence subject becomes the delegate-under-principal binding. Mandate scope
 uses this section's grammar; verification failures are processed
 `mandate_invalid` denials and out-of-scope invocations are `policy_blocked` —
-HTTP 200 with evidence, per §1.
+HTTP 200 with evidence, per §1. A routing intermediary MUST forward a
+presented mandate unchanged (chp-v0.2.md §10 Forwarding) — the mandate is the
+authority carrier that survives per-hop subject rebinding.
 
 If no keys are configured the host MAY accept all callers (local-first default).
 Network-layer confidentiality (e.g. a private mesh) MAY substitute for TLS.
@@ -92,6 +94,17 @@ balancers; every other route requires auth (§2).
 
 `/invoke` accepts a convenience form: a top-level `correlation_id` is lifted into
 `correlation.correlation_id`. Responses are JSON with sorted keys.
+
+**Routing intermediaries.** A gateway that routes `/invoke` to member hosts is
+bound by §1 at its own layer: an invocation it PROCESSES — including deciding
+that **no owner of the capability is reachable** — returns `200` with a denial,
+never a bare 5xx. No reachable owner → the reserved `host_unreachable` code
+(`retryable: true`; `details` SHOULD carry `attempted_hosts`, `last_error`,
+`retry_after_s`); capability unknown mesh-wide → `capability_not_found`. The
+intermediary MUST record such denials as evidence when it maintains an
+evidence store, and SHOULD maintain one (chp-v0.2.md §11). A presented
+`mandate` MUST be forwarded unchanged on the routed envelope (§2, chp-v0.2.md
+§10 Forwarding).
 
 `/health` MUST NOT disclose the live capability count (it stays on the authed
 `/host` descriptor) — mesh-count privacy. `version` here is the protocol version;

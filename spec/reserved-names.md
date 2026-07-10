@@ -22,6 +22,7 @@ extensions MUST be reverse-DNS namespaced (`com.acme.…`) — see
 | `INGESTION_EVIDENCE_TYPES` | `ingestion_completed`, `ingestion_failed`, `ingestion_started` |
 | `METRICS_EVIDENCE_TYPES` | `execution_completed`, `execution_denied`, `execution_failed`, `execution_started` |
 | `RETRIEVAL_EVIDENCE_TYPES` | `retrieval_completed`, `retrieval_failed`, `retrieval_started` |
+| `ROUTING_EVIDENCE_TYPES` | `host_marked_healthy`, `host_marked_unhealthy` |
 | `SAFETY_EVIDENCE_TYPES` | `safety_action_approved`, `safety_action_blocked`, `safety_assessment_completed`, `safety_assessment_started`, `safety_guardrail_triggered` |
 | `SESSION_EVIDENCE_TYPES` | `agent_session_completed`, `agent_session_resumed`, `agent_session_started` |
 | `STATE_MACHINE_EVIDENCE_TYPES` | `state_machine_blocked`, `state_machine_cancelled`, `state_machine_completed`, `state_machine_created`, `state_machine_failed`, `state_machine_transition_completed`, `state_machine_transition_started` |
@@ -39,6 +40,7 @@ ordering are normative in [chp-invocation-pipeline.md](chp-invocation-pipeline.m
 - `budget_exceeded`
 - `capability_disabled`
 - `capability_not_found`
+- `host_unreachable`
 - `input_schema_validation_failed`
 - `invariant_failed`
 - `mandate_invalid`

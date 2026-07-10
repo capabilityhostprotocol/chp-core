@@ -72,6 +72,17 @@ FEDERATION_EVIDENCE_TYPES = {
     "task_participants_declared",
 }
 
+# Routing & reachability (chp-v0.2.md §11, proposal 0003): a routing
+# intermediary's health transitions as evidence on its OWN chain. Emission is
+# strictly transition-gated; when a transition happens while routing an
+# invocation it rides THAT invocation's correlation, so a failover is
+# replayable in-context (host_marked_unhealthy → next candidate's
+# execution_started IS the failover — no separate event type).
+ROUTING_EVIDENCE_TYPES = {
+    "host_marked_unhealthy",
+    "host_marked_healthy",
+}
+
 # Supply chain (chp-v0.2.md §9): the adapter-install lifecycle as evidence —
 # what code arrived (with its publisher-signed provenance statement when
 # verified) and what was REFUSED (a rejection is evidence, like a denial).
@@ -634,6 +645,7 @@ class DenialReason:
         "approval_required",              # human approval gate not satisfied
         "safety_blocked",                 # a safety guardrail blocked the invocation
         "mandate_invalid",                # presented mandate failed verification (§10)
+        "host_unreachable",               # routing intermediary reached no owner (§11; retryable)
     })
 
     def to_dict(self) -> JSON:

@@ -67,6 +67,9 @@ class GatewayConfig:
     # (priority order, first-healthy-wins) or "round_robin" (spread load). The
     # extension seam for future capacity/locality/pinning strategies.
     selection: str = "first"
+    # Gateway evidence store (spec §11): routing denials + health transitions
+    # on the gateway's own chain. None → the CLI default (~/.chp/gateway-mesh.sqlite).
+    store: str | None = None
 
 
 @dataclass
@@ -125,6 +128,8 @@ class EnvironmentConfig:
                 bind=str(gateway_raw.get("bind", "0.0.0.0")),
                 host_id=str(gateway_raw.get("host_id", "chp-gateway")),
                 selection=str(gateway_raw.get("selection", "first")),
+                store=(str(Path(str(gateway_raw["store"])).expanduser())
+                       if gateway_raw.get("store") else None),
             )
             if isinstance(gateway_raw, dict)
             else None

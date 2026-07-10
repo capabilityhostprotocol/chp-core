@@ -28,11 +28,15 @@ from typing import Iterable, Literal
 from chp_core.transport import Transport
 from chp_core.types import (
     CorrelationContext,
+    DenialReason,
+    ExecutionEvidence,
     InvocationEnvelope,
     InvocationResult,
     JSON,
     ReplayQuery,
     ReplayResult,
+    new_id,
+    utc_now,
 )
 
 Selection = Literal["first", "round_robin", "least_loaded"]
@@ -48,11 +52,19 @@ _CATALOG_TTL = float(os.environ.get("CHP_ROUTER_CATALOG_TTL", "60") or 60)
 
 
 class UnknownCapabilityError(KeyError):
-    """No connected host exposes the requested capability."""
+    """No connected host exposes the requested capability.
+
+    Since spec §11 (proposal 0003) :meth:`MultiHostRouter.ainvoke` no longer
+    raises this — it returns a processed ``capability_not_found`` denial.
+    Kept exported for API compatibility."""
 
 
 class NoHealthyHostError(ConnectionError):
-    """Every host that owns the capability is currently unreachable."""
+    """Every host that owns the capability is currently unreachable.
+
+    Since spec §11 (proposal 0003) :meth:`MultiHostRouter.ainvoke` no longer
+    raises this — it returns a processed ``host_unreachable`` denial.
+    Kept exported for API compatibility."""
 
 
 def _normalize_correlation(correlation: CorrelationContext | JSON | None) -> CorrelationContext:
@@ -74,11 +86,17 @@ class MultiHostRouter:
         recheck_interval: float = 30.0,
         host_id: str = "chp-gateway",
         host_roles: dict[str, str] | None = None,
+        store=None,
     ) -> None:
         self._transports: list[Transport] = list(transports)
         self._selection: Selection = selection
         self._recheck_interval = recheck_interval
         self._host_id: str = host_id
+        # Optional evidence store (spec §11 posture): with one, routing denials
+        # and health transitions land on the gateway's OWN chain and merge into
+        # stitched replays. Public `.store` on purpose — /metrics duck-types it.
+        # Storeless embedded routers stay conformant (returned-denial floor).
+        self.store = store
         # transport.name -> role (worker/inference/nas/...), for affinity routing
         self._host_roles: dict[str, str] = dict(host_roles or {})
         # capability_id -> transports that serve it, in priority order
@@ -209,6 +227,7 @@ class MultiHostRouter:
         mode: str = "sync",
         metadata: JSON | None = None,
         prefer: str | None = None,
+        mandate: JSON | None = None,
     ) -> InvocationResult:
         """Route an invocation to a host that owns *capability_id*.
 
@@ -224,9 +243,20 @@ class MultiHostRouter:
         # schemas route without a manual gateway reload (TTL-gated; best-effort).
         await self._maybe_refresh_catalog()
 
+        corr = _normalize_correlation(correlation)
         owners = self._routes.get(capability_id)
         if not owners:
-            raise UnknownCapabilityError(capability_id)
+            # Unknown mesh-wide is a PROCESSED decision (spec §11), not a raise:
+            # HTTP 200, outcome denied, evidence on the gateway's chain.
+            return self._deny(
+                capability_id, version, corr,
+                DenialReason(
+                    code="capability_not_found",
+                    message=f"no connected host exposes capability {capability_id!r}",
+                    retryable=False,
+                    details={"hosts": list(self._descriptors.keys())},
+                ),
+            )
 
         # Affinity may also ride in metadata (how composition steps and HTTP
         # callers express it). Explicit `prefer` wins; otherwise read metadata.
@@ -241,10 +271,10 @@ class MultiHostRouter:
             except Exception:
                 pass
 
-        corr = _normalize_correlation(correlation)
         candidates = self._ordered_candidates(capability_id, owners, prefer=prefer)
 
         last_error: Exception | None = None
+        attempted: list[str] = []
         for tr in candidates:
             envelope = InvocationEnvelope(
                 capability_id=capability_id,
@@ -254,19 +284,43 @@ class MultiHostRouter:
                 correlation=corr,
                 subject=subject or {"id": "router", "type": "system"},
                 metadata={**(metadata or {}), "routed_via": tr.name},
+                # Forwarding rule (§10, proposal 0004): a presented mandate
+                # transits UNCHANGED — the executing host's gate 5 verifies it
+                # and rebinds the subject; authority survives the hop even
+                # though the transport subject (router) does not.
+                mandate=mandate,
             )
             try:
                 result = await tr.ainvoke_envelope(envelope)
             except ConnectionError as exc:
                 last_error = exc
-                self._mark_unhealthy(tr)
+                attempted.append(tr.name)
+                # A mid-invoke transition rides THIS correlation (§11) so the
+                # failover is replayable in-context.
+                self._mark_unhealthy(tr, correlation=corr)
+                from chp_core.metrics import record_routing_failover
+                record_routing_failover()
                 continue
-            self._mark_healthy(tr)
+            self._mark_healthy(tr, correlation=corr)
             return result
 
-        raise NoHealthyHostError(
-            f"no healthy host for capability {capability_id!r}"
-        ) from last_error
+        # No owner reachable: the mesh could not place the work — a PROCESSED
+        # denial with the reserved transport code (spec §11), never a bare 5xx.
+        from chp_core.metrics import record_unreachable_denial
+        record_unreachable_denial()
+        return self._deny(
+            capability_id, version, corr,
+            DenialReason(
+                code="host_unreachable",
+                message=f"no reachable host for capability {capability_id!r}",
+                retryable=True,
+                details={
+                    "attempted_hosts": attempted,
+                    "last_error": str(last_error) if last_error else None,
+                    "retry_after_s": int(self._recheck_interval),
+                },
+            ),
+        )
 
     # ── discovery / introspection ───────────────────────────────────────────────
 
@@ -338,6 +392,14 @@ class MultiHostRouter:
                 continue
             for event in result.get("events", []):
                 events.append({**event, "_host": tr.name})
+        # The gateway's own chain (routing denials, health transitions — §11)
+        # is part of the stitched story, not an operational side channel.
+        if self.store is not None:
+            try:
+                for event in self.store.by_correlation(correlation_id):
+                    events.append({**event, "_host": self._host_id})
+            except Exception:  # noqa: BLE001 — members' evidence still merges
+                pass
         return order_events(events), missing
 
     async def export_task_bundle(self, correlation_id: str) -> JSON:
@@ -402,6 +464,7 @@ class MultiHostRouter:
             subject=envelope.subject,
             mode=envelope.mode,
             metadata=envelope.metadata,
+            mandate=envelope.mandate,
         )
 
     def replay_result(self, query: str | ReplayQuery | JSON) -> ReplayResult:
@@ -526,14 +589,99 @@ class MultiHostRouter:
         until = self._unhealthy.get(tr.name)
         if until is None:
             return True
-        if time.monotonic() >= until:
-            # Recheck window elapsed — optimistically allow another attempt.
-            del self._unhealthy[tr.name]
-            return True
-        return False
+        # Recheck window elapsed — optimistically allow attempts, but the entry
+        # stays until an actual SUCCESS clears it: the unhealthy→healthy
+        # transition must be observable (§11 emission is transition-gated, which
+        # needs the prior state to still be here when the host proves back).
+        return time.monotonic() >= until
 
-    def _mark_unhealthy(self, tr: Transport) -> None:
+    def _mark_unhealthy(self, tr: Transport, *,
+                        correlation: CorrelationContext | None = None) -> None:
+        is_transition = tr.name not in self._unhealthy
         self._unhealthy[tr.name] = time.monotonic() + self._recheck_interval
+        if is_transition:
+            self._emit_routing_event(
+                "host_marked_unhealthy",
+                {"host": tr.name, "recheck_after_s": int(self._recheck_interval)},
+                correlation=correlation,
+            )
 
-    def _mark_healthy(self, tr: Transport) -> None:
-        self._unhealthy.pop(tr.name, None)
+    def _mark_healthy(self, tr: Transport, *,
+                      correlation: CorrelationContext | None = None) -> None:
+        if self._unhealthy.pop(tr.name, None) is not None:
+            self._emit_routing_event(
+                "host_marked_healthy", {"host": tr.name}, correlation=correlation)
+
+    # ── gateway evidence (spec §11) ─────────────────────────────────────────────
+
+    def _emit_routing_event(
+        self,
+        event_type: str,
+        payload: JSON,
+        *,
+        correlation: CorrelationContext | None = None,
+        invocation_id: str | None = None,
+        capability_id: str = "chp.routing",
+        version: str | None = None,
+        outcome: str | None = None,
+        denial: DenialReason | None = None,
+    ) -> ExecutionEvidence | None:
+        """Append one event to the gateway's own chain. No store = no-op (the
+        returned-denial floor). Health transitions without an invocation ride a
+        stable per-gateway correlation so `chp replay routing-<host_id>` tells
+        the fabric's whole story."""
+        if self.store is None:
+            return None
+        event = ExecutionEvidence(
+            event_id=new_id("evt"),
+            event_type=event_type,
+            invocation_id=invocation_id or new_id("inv"),
+            capability_id=capability_id,
+            capability_version=version,
+            host_id=self._host_id,
+            correlation=correlation
+            or CorrelationContext(correlation_id=f"routing-{self._host_id}"),
+            timestamp=utc_now(),
+            outcome=outcome,  # type: ignore[arg-type]
+            payload=payload,
+            redacted=False,
+            denial=denial,
+        )
+        try:
+            return self.store.append(event)
+        except Exception as exc:  # noqa: BLE001 — a broken store must not break routing
+            print(f"  WARNING: gateway evidence append failed: {exc}", file=sys.stderr)
+            return None
+
+    def _deny(
+        self,
+        capability_id: str,
+        version: str | None,
+        correlation: CorrelationContext,
+        denial: DenialReason,
+    ) -> InvocationResult:
+        """A PROCESSED routing denial — mirrors host.py:_deny's event shape so
+        gateway denials look exactly like host denials in evidence and metrics
+        (`execution_denied` is already a metrics event)."""
+        invocation_id = new_id("inv")
+        denied = self._emit_routing_event(
+            "execution_denied",
+            {"reason": denial.code},
+            correlation=correlation,
+            invocation_id=invocation_id,
+            capability_id=capability_id,
+            version=version,
+            outcome="denied",
+            denial=denial,
+        )
+        return InvocationResult(
+            invocation_id=invocation_id,
+            capability_id=capability_id,
+            capability_version=version,
+            correlation=correlation,
+            outcome="denied",
+            success=False,
+            denial=denial,
+            evidence_ids=[denied.event_id] if denied else [],
+            started_at=denied.timestamp if denied else None,
+        )

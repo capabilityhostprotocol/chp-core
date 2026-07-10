@@ -8,7 +8,7 @@ import pytest
 
 from chp_core import HttpTransport, LocalTransport
 
-from chp_host import MultiHostRouter, NoHealthyHostError, UnknownCapabilityError
+from chp_host import MultiHostRouter
 
 from ._util import make_echo_host, make_math_host, served
 
@@ -168,21 +168,30 @@ class TestSelection:
 
 class TestFailover:
     @pytest.mark.asyncio
-    async def test_unknown_capability_raises(self):
+    async def test_unknown_capability_is_processed_denial(self):
+        # Spec §11: unknown mesh-wide is a PROCESSED capability_not_found
+        # denial, not a raise (was UnknownCapabilityError before v0.2.4).
         router = await _router(LocalTransport(make_math_host(), name="m"))
-        with pytest.raises(UnknownCapabilityError):
-            await router.ainvoke("nope.missing", {})
+        result = await router.ainvoke("nope.missing", {})
+        assert result.outcome == "denied"
+        assert result.denial.code == "capability_not_found"
+        assert result.denial.retryable is False
 
     @pytest.mark.asyncio
-    async def test_no_healthy_host_raises(self):
+    async def test_all_owners_down_is_host_unreachable_denial(self):
         # Build the table while the host is alive, then take it down.
         host = make_echo_host("X", "x")
         with served(host) as url:
             tr = HttpTransport(url, name="X")
             router = await _router(tr)
         # Server is now shut down (context exited) → owner exists but unreachable.
-        with pytest.raises(NoHealthyHostError):
-            await router.ainvoke("echo.who", {})
+        # Spec §11: a PROCESSED host_unreachable denial (was NoHealthyHostError).
+        result = await router.ainvoke("echo.who", {})
+        assert result.outcome == "denied"
+        assert result.denial.code == "host_unreachable"
+        assert result.denial.retryable is True
+        assert result.denial.details["attempted_hosts"] == ["X"]
+        assert result.denial.details["retry_after_s"] > 0
 
     @pytest.mark.asyncio
     async def test_failover_across_two_http_hosts(self):
@@ -430,3 +439,159 @@ class TestDataPathPinCheck:
             assert "cap.pin" in router.capability_ids
             pinned = _json.loads(mesh_file.read_text())["agent_remotes"][0]
             assert pinned["key_id"] == key.key_id  # TOFU pin recorded on the data path
+
+
+# ---------------------------------------------------------------------------
+# Routing evidence (spec §11, proposal 0003)
+# ---------------------------------------------------------------------------
+
+class TestRoutingEvidence:
+    """With a store, routing denials + health transitions land on the gateway's
+    own chain — transition-gated, correlation-linked, replay-merged."""
+
+    def _store(self):
+        from chp_core.store import SQLiteEvidenceStore
+        return SQLiteEvidenceStore(":memory:")
+
+    @pytest.mark.asyncio
+    async def test_unreachable_denial_is_evidence_on_gateway_chain(self):
+        host = make_echo_host("X", "x")
+        store = self._store()
+        with served(host) as url:
+            router = MultiHostRouter([HttpTransport(url, name="X")], store=store)
+            await router.connect()
+        result = await router.ainvoke(
+            "echo.who", {}, correlation={"correlation_id": "corr-down"})
+        assert result.denial.code == "host_unreachable"
+        events = store.by_correlation("corr-down")
+        types = [e["event_type"] for e in events]
+        # the failover mark AND the denial ride the invocation's correlation
+        assert "host_marked_unhealthy" in types
+        assert "execution_denied" in types
+        denied = next(e for e in events if e["event_type"] == "execution_denied")
+        assert denied["denial"]["code"] == "host_unreachable"
+        assert denied["host_id"] == "chp-gateway"
+
+    @pytest.mark.asyncio
+    async def test_health_events_are_transition_gated(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        store = self._store()
+        router = MultiHostRouter([a], store=store)
+        await router.connect()
+        # repeated successes on a healthy host emit NOTHING
+        for _ in range(3):
+            await router.ainvoke("echo.who", {})
+        assert store.by_correlation(f"routing-{router._host_id}") == []
+        # repeated failure marks emit exactly ONE unhealthy event
+        router._mark_unhealthy(a)
+        router._mark_unhealthy(a)
+        events = store.by_correlation(f"routing-{router._host_id}")
+        assert [e["event_type"] for e in events] == ["host_marked_unhealthy"]
+        # recovery emits exactly ONE healthy event
+        router._mark_healthy(a)
+        router._mark_healthy(a)
+        events = store.by_correlation(f"routing-{router._host_id}")
+        assert [e["event_type"] for e in events] == [
+            "host_marked_unhealthy", "host_marked_healthy"]
+
+    @pytest.mark.asyncio
+    async def test_recovery_after_recheck_window_is_observable(self):
+        # The unhealthy entry must survive the recheck window so the eventual
+        # SUCCESS emits host_marked_healthy (the transition needs prior state).
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        store = self._store()
+        router = MultiHostRouter([a], store=store, recheck_interval=0.0)
+        await router.connect()
+        router._mark_unhealthy(a)
+        assert router._is_healthy(a)  # window elapsed → attempts allowed
+        assert "A" in router._unhealthy  # ...but not yet proven back
+        result = await router.ainvoke("echo.who", {})
+        assert result.outcome == "success"
+        types = [e["event_type"] for e in store.by_correlation(f"routing-{router._host_id}")]
+        assert types == ["host_marked_unhealthy"]
+        # the healthy transition rode the invocation's correlation
+        all_healthy = [e for c in [result.correlation.correlation_id]
+                       for e in store.by_correlation(c)
+                       if e["event_type"] == "host_marked_healthy"]
+        assert len(all_healthy) == 1
+
+    @pytest.mark.asyncio
+    async def test_replay_merges_gateway_chain(self):
+        host = make_echo_host("X", "x")
+        store = self._store()
+        with served(host) as url:
+            router = MultiHostRouter([HttpTransport(url, name="X")], store=store)
+            await router.connect()
+        await router.ainvoke("echo.who", {}, correlation={"correlation_id": "corr-merge"})
+        events = await router.replay("corr-merge")
+        gw_events = [e for e in events if e.get("_host") == "chp-gateway"]
+        assert {e["event_type"] for e in gw_events} >= {
+            "host_marked_unhealthy", "execution_denied"}
+
+    @pytest.mark.asyncio
+    async def test_storeless_router_still_denies(self):
+        # The returned-denial floor: no store, same outcome, just no evidence.
+        router = await _router(LocalTransport(make_math_host(), name="m"))
+        result = await router.ainvoke("nope.missing", {})
+        assert result.denial.code == "capability_not_found"
+        assert result.evidence_ids == []
+
+
+# ---------------------------------------------------------------------------
+# Mandate passthrough (spec §10 Forwarding, proposal 0004)
+# ---------------------------------------------------------------------------
+
+class TestMandateForwarding:
+    def _mandate(self, tmp_path, scope):
+        from datetime import datetime, timedelta, timezone
+        from chp_core import signing
+        key = signing.generate_keypair(tmp_path / "pub")
+        now = datetime.now(timezone.utc)
+        iso = lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        return signing.build_mandate(
+            "principal-gw-test", key, delegate_id="steward-x", scope=scope,
+            valid_from=iso(now - timedelta(minutes=1)),
+            valid_until=iso(now + timedelta(hours=1)), created_at=iso(now))
+
+    @pytest.mark.asyncio
+    async def test_mandate_transits_router_to_member_evidence(self, tmp_path):
+        # Presented at the ROUTER, verified at the MEMBER: the executing host's
+        # gate 5 rebinds the subject even though the transport subject (router)
+        # was substituted at the hop — authority survives, asserted identity dies.
+        member = make_echo_host("A", "a")
+        router = await _router(LocalTransport(member, name="A"))
+        mandate = self._mandate(tmp_path, ["echo.who"])
+        result = await router.ainvoke(
+            "echo.who", {}, mandate=mandate,
+            correlation={"correlation_id": "corr-fwd"})
+        assert result.outcome == "success"
+        subj = member.replay("corr-fwd")[0].get("subject") or {}
+        assert subj["type"] == "mandate"
+        assert subj["id"] == "steward-x"
+        assert subj["principal"] == "principal-gw-test"
+        assert subj["verified"] is True
+
+    @pytest.mark.asyncio
+    async def test_mandate_transits_envelope_path(self, tmp_path):
+        # The HTTP gateway path: /invoke → from_mapping → ainvoke_envelope.
+        from chp_core import InvocationEnvelope
+        member = make_echo_host("A", "a")
+        router = await _router(LocalTransport(member, name="A"))
+        env = InvocationEnvelope.from_mapping({
+            "capability_id": "echo.who", "payload": {},
+            "correlation": {"correlation_id": "corr-fwd-env"},
+            "mandate": self._mandate(tmp_path, ["echo.who"]),
+        })
+        assert (await router.ainvoke_envelope(env)).outcome == "success"
+        subj = member.replay("corr-fwd-env")[0].get("subject") or {}
+        assert subj["type"] == "mandate" and subj["id"] == "steward-x"
+
+    @pytest.mark.asyncio
+    async def test_out_of_scope_mandate_denied_at_member(self, tmp_path):
+        # The router forwards without judging; the MEMBER's gate decides.
+        member = make_echo_host("A", "a")
+        router = await _router(LocalTransport(member, name="A"))
+        result = await router.ainvoke(
+            "echo.who", {}, mandate=self._mandate(tmp_path, ["other.cap"]))
+        assert result.outcome == "denied"
+        assert result.denial.code == "policy_blocked"
