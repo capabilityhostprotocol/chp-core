@@ -74,6 +74,15 @@ jobs:
       - name: Build package
         run: python -m build packages/python
 
+      # The exact bytes built here go to BOTH PyPI and the GitHub release —
+      # one build per package, so one provenance statement covers both
+      # channels (the 0.10.0 lesson: sign what actually ships).
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-chp-core
+          path: packages/python/dist/
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -102,6 +111,12 @@ jobs:
 
       - name: Build package
         run: python -m build packages/chp-host
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-chp-host
+          path: packages/chp-host/dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -168,7 +183,19 @@ jobs:
       - name: Build package
         run: python -m build packages/${{ matrix.adapter }}
 
+      # Upload BEFORE publish: an adapter whose PyPI project doesn't exist yet
+      # still ships on the GitHub release (its only channel until a trusted
+      # publisher is registered — see the header note).
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.adapter }}
+          path: packages/${{ matrix.adapter }}/dist/
+
       - name: Publish to PyPI
+        # fail-soft: 16 adapter projects have no PyPI trusted publisher yet;
+        # their 403s are expected and must not fail the run or skip the release
+        continue-on-error: true
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/${{ matrix.adapter }}/dist/
@@ -207,6 +234,10 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    # The release is the canonical artifact record — it must exist even when
+    # some publish legs fail (their artifacts still attach; PyPI can catch up
+    # on a rerun). Only a cancelled run skips it.
+    if: ${{ !cancelled() }}
     needs: [publish-python, publish-npm, publish-host, publish-adapters]
     permissions:
       contents: write
@@ -216,8 +247,22 @@ jobs:
         with:
           fetch-depth: 0  # needed for release notes generation
 
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: release-dist/
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           make_latest: true
+          files: release-dist/*
+
+      - name: Next step reminder
+        run: |
+          echo 'Release created with all built artifacts.'
+          echo 'Finish operator-side (provenance signing, chp-release key custody):'
+          echo '  bash scripts/release-finish.sh <version>   # in chp-dev'

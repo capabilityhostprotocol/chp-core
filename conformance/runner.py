@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import uuid
 import os
 import sys
 from dataclasses import dataclass
@@ -35,6 +36,12 @@ class CheckResult:
     name: str
     ok: bool
     detail: str = ""
+
+
+# Per-run correlation namespace: the wire suite may run repeatedly against the
+# SAME long-lived host, and stateful fixtures (the autonomy budget counts
+# execution_started per correlation) would double-count under reused ids.
+RUN = uuid.uuid4().hex[:6]
 
 
 def result_value(result: Any, name: str) -> Any:
@@ -177,7 +184,7 @@ async def check_invocation_envelope(host: Any) -> None:
         host,
         "conformance.echo",
         {"value": "ok"},
-        correlation={"correlation_id": "conf-invoke"},
+        correlation={"correlation_id": f"{RUN}-conf-invoke"},
     )
     assert result_value(result, "success") is True
     assert result_value(result, "outcome") == "success"
@@ -189,17 +196,17 @@ async def check_correlation_propagation(host: Any) -> None:
         host,
         "conformance.echo",
         {"value": "corr"},
-        correlation={"correlation_id": "conf-correlation"},
+        correlation={"correlation_id": f"{RUN}-conf-correlation"},
     )
     correlation = result_value(result, "correlation")
     if isinstance(correlation, dict):
         correlation_id = correlation["correlation_id"]
     else:
         correlation_id = correlation.correlation_id
-    assert correlation_id == "conf-correlation"
-    replay = host.replay("conf-correlation")
+    assert correlation_id == f"{RUN}-conf-correlation"
+    replay = host.replay(f"{RUN}-conf-correlation")
     assert replay
-    assert {event["correlation"]["correlation_id"] for event in replay} == {"conf-correlation"}
+    assert {event["correlation"]["correlation_id"] for event in replay} == {f"{RUN}-conf-correlation"}
 
 
 async def check_success_evidence(host: Any) -> None:
@@ -207,10 +214,10 @@ async def check_success_evidence(host: Any) -> None:
         host,
         "conformance.echo",
         {"value": "evidence"},
-        correlation={"correlation_id": "conf-success"},
+        correlation={"correlation_id": f"{RUN}-conf-success"},
     )
     assert len(evidence_ids(result)) >= 2
-    event_types = [event["event_type"] for event in host.replay("conf-success")]
+    event_types = [event["event_type"] for event in host.replay(f"{RUN}-conf-success")]
     assert "execution_started" in event_types
     assert "execution_completed" in event_types
 
@@ -220,11 +227,11 @@ async def check_failure_evidence(host: Any) -> None:
         host,
         "conformance.fail",
         {},
-        correlation={"correlation_id": "conf-failure"},
+        correlation={"correlation_id": f"{RUN}-conf-failure"},
     )
     assert result_value(result, "success") is False
     assert result_value(result, "outcome") == "failure"
-    event_types = [event["event_type"] for event in host.replay("conf-failure")]
+    event_types = [event["event_type"] for event in host.replay(f"{RUN}-conf-failure")]
     assert "execution_started" in event_types
     assert "execution_failed" in event_types
 
@@ -234,11 +241,11 @@ async def check_denial_evidence(host: Any) -> None:
         host,
         "conformance.guarded",
         {},
-        correlation={"correlation_id": "conf-denial"},
+        correlation={"correlation_id": f"{RUN}-conf-denial"},
     )
     assert result_value(result, "success") is False
     assert result_value(result, "outcome") == "denied"
-    event_types = [event["event_type"] for event in host.replay("conf-denial")]
+    event_types = [event["event_type"] for event in host.replay(f"{RUN}-conf-denial")]
     assert event_types == ["execution_denied"]
 
 
@@ -247,9 +254,9 @@ async def check_replay_by_correlation(host: Any) -> None:
         host,
         "conformance.echo",
         {"value": "replay"},
-        correlation={"correlation_id": "conf-replay"},
+        correlation={"correlation_id": f"{RUN}-conf-replay"},
     )
-    replay = host.replay("conf-replay")
+    replay = host.replay(f"{RUN}-conf-replay")
     assert len(replay) >= 2
     sequences = [event["sequence"] for event in replay]
     assert sequences == sorted(sequences)
@@ -269,7 +276,7 @@ async def check_pretool_governance(_host: Any) -> None:
     try:
         payload = {
             "hook_event_name": "PreToolUse",
-            "session_id": "conf-pretool-001",
+            "session_id": f"{RUN}-conf-pretool-001",
             "tool_name": "Bash",
             "tool_input": {"command": "echo hello"},
             "cwd": "/tmp",
@@ -282,7 +289,7 @@ async def check_pretool_governance(_host: Any) -> None:
         assert result2.should_block, "expected block with policy"
 
         store = SQLiteEvidenceStore(store_path)
-        events = store.by_correlation("conf-pretool-001")
+        events = store.by_correlation(f"{RUN}-conf-pretool-001")
         store.close()
         assert len(events) == 2, f"expected 2 events, got {len(events)}"
         types = [e["event_type"] for e in events]
@@ -311,18 +318,18 @@ async def check_retrieval_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-retrieval", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-retrieval", store=store)
         cap = InMemoryKeywordRetrievalCapability(docs)
         register_retrieval_capability(host, cap)
 
         result = await host.ainvoke(
             "retrieval.query",
             {"query": "quick fox", "top_k": 2},
-            correlation={"correlation_id": "conf-retrieval-001"},
+            correlation={"correlation_id": f"{RUN}-conf-retrieval-001"},
         )
         assert result.success, f"invoke failed: {result}"
 
-        events = host.replay("conf-retrieval-001")
+        events = host.replay(f"{RUN}-conf-retrieval-001")
         types = [e["event_type"] for e in events]
         assert "retrieval_started" in types, f"missing retrieval_started: {types}"
         assert "retrieval_completed" in types, f"missing retrieval_completed: {types}"
@@ -350,18 +357,18 @@ async def check_ingestion_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-ingestion", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-ingestion", store=store)
         cap = InMemoryTextIngestionCapability()
         register_ingestion_capability(host, cap)
 
         result = await host.ainvoke(
             "ingestion.ingest",
             {"content": "the quick brown fox", "title": "Test Doc"},
-            correlation={"correlation_id": "conf-ingestion-001"},
+            correlation={"correlation_id": f"{RUN}-conf-ingestion-001"},
         )
         assert result.success, f"invoke failed: {result}"
 
-        events = host.replay("conf-ingestion-001")
+        events = host.replay(f"{RUN}-conf-ingestion-001")
         types = [e["event_type"] for e in events]
         assert "ingestion_started" in types, f"missing ingestion_started: {types}"
         assert "ingestion_completed" in types, f"missing ingestion_completed: {types}"
@@ -391,18 +398,18 @@ async def check_transformation_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-transformation", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-transformation", store=store)
         cap = InMemoryTextTransformationCapability()
         register_transformation_capability(host, cap)
 
         result = await host.ainvoke(
             "transformation.transform",
             {"content": "  Hello WORLD  ", "transform_type": "normalize"},
-            correlation={"correlation_id": "conf-transformation-001"},
+            correlation={"correlation_id": f"{RUN}-conf-transformation-001"},
         )
         assert result.success, f"invoke failed: {result}"
 
-        events = host.replay("conf-transformation-001")
+        events = host.replay(f"{RUN}-conf-transformation-001")
         types = [e["event_type"] for e in events]
         assert "transformation_started" in types, f"missing transformation_started: {types}"
         assert "transformation_completed" in types, f"missing transformation_completed: {types}"
@@ -432,46 +439,46 @@ async def check_knowledge_graph_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-graph", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-graph", store=store)
         kg = InMemoryKnowledgeGraph()
         register_knowledge_graph_capability(host, kg)
 
         r1 = await host.ainvoke(
             "graph.add_entity",
             {"entity_id": "p1", "entity_type": "person", "label": "Alice"},
-            correlation={"correlation_id": "conf-graph-001"},
+            correlation={"correlation_id": f"{RUN}-conf-graph-001"},
         )
         assert r1.success, f"add_entity failed: {r1}"
 
         r2 = await host.ainvoke(
             "graph.add_entity",
             {"entity_id": "p2", "entity_type": "person", "label": "Bob"},
-            correlation={"correlation_id": "conf-graph-001"},
+            correlation={"correlation_id": f"{RUN}-conf-graph-001"},
         )
         assert r2.success, f"add_entity 2 failed: {r2}"
 
         r3 = await host.ainvoke(
             "graph.add_relation",
             {"from_entity_id": "p1", "to_entity_id": "p2", "relation_type": "knows"},
-            correlation={"correlation_id": "conf-graph-001"},
+            correlation={"correlation_id": f"{RUN}-conf-graph-001"},
         )
         assert r3.success, f"add_relation failed: {r3}"
 
         r4 = await host.ainvoke(
             "graph.query_entities",
             {"entity_type": "person"},
-            correlation={"correlation_id": "conf-graph-001"},
+            correlation={"correlation_id": f"{RUN}-conf-graph-001"},
         )
         assert r4.success, f"query_entities failed: {r4}"
 
         r5 = await host.ainvoke(
             "graph.traverse",
             {"start_id": "p1", "depth": 1},
-            correlation={"correlation_id": "conf-graph-001"},
+            correlation={"correlation_id": f"{RUN}-conf-graph-001"},
         )
         assert r5.success, f"traverse failed: {r5}"
 
-        events = host.replay("conf-graph-001")
+        events = host.replay(f"{RUN}-conf-graph-001")
         types = {e["event_type"] for e in events}
         assert "graph_entity_added" in types, f"missing graph_entity_added: {types}"
         assert "graph_relation_added" in types, f"missing graph_relation_added: {types}"
@@ -511,7 +518,7 @@ async def check_workflow_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-workflow", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-workflow", store=store)
         kg = InMemoryKnowledgeGraph()
         register_knowledge_graph_capability(host, kg)
         wf = InMemoryWorkflow()
@@ -520,18 +527,18 @@ async def check_workflow_capability(_host: Any) -> None:
         result = await host.ainvoke(
             "workflow.run",
             {
-                "workflow_id": "conf-wf-001",
+                "workflow_id": f"{RUN}-conf-wf-001",
                 "name": "conformance-workflow",
                 "steps": [
                     {"capability_id": "graph.add_entity", "payload": {"entity_id": "e1", "entity_type": "node"}},
                     {"capability_id": "graph.add_entity", "payload": {"entity_id": "e2", "entity_type": "node"}},
                 ],
             },
-            correlation={"correlation_id": "conf-workflow-001"},
+            correlation={"correlation_id": f"{RUN}-conf-workflow-001"},
         )
         assert result.success, f"workflow.run failed: {result}"
 
-        events = host.replay("conf-workflow-001")
+        events = host.replay(f"{RUN}-conf-workflow-001")
         types = [e["event_type"] for e in events]
         assert "workflow_started" in types, f"missing workflow_started: {types}"
         assert "workflow_completed" in types, f"missing workflow_completed: {types}"
@@ -564,39 +571,39 @@ async def check_event_bus_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-events", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-events", store=store)
         bus = InMemoryEventBus()
         register_event_bus_capability(host, bus)
 
         r1 = await host.ainvoke(
             "events.emit",
             {"event_type": "order.placed", "source": "orders", "data": {"order_id": "o1"}},
-            correlation={"correlation_id": "conf-events-001"},
+            correlation={"correlation_id": f"{RUN}-conf-events-001"},
         )
         assert r1.success, f"events.emit 1 failed: {r1}"
 
         r2 = await host.ainvoke(
             "events.emit",
             {"event_type": "order.placed", "source": "orders", "data": {"order_id": "o2"}},
-            correlation={"correlation_id": "conf-events-001"},
+            correlation={"correlation_id": f"{RUN}-conf-events-001"},
         )
         assert r2.success, f"events.emit 2 failed: {r2}"
 
         r3 = await host.ainvoke(
             "events.emit",
             {"event_type": "order.shipped", "source": "fulfillment", "data": {}},
-            correlation={"correlation_id": "conf-events-001"},
+            correlation={"correlation_id": f"{RUN}-conf-events-001"},
         )
         assert r3.success, f"events.emit 3 failed: {r3}"
 
         r4 = await host.ainvoke(
             "events.query",
             {"event_type": "order.placed"},
-            correlation={"correlation_id": "conf-events-001"},
+            correlation={"correlation_id": f"{RUN}-conf-events-001"},
         )
         assert r4.success, f"events.query failed: {r4}"
 
-        events = host.replay("conf-events-001")
+        events = host.replay(f"{RUN}-conf-events-001")
         types = [e["event_type"] for e in events]
         assert types.count("domain_event_emitted") == 3, f"expected 3 domain_event_emitted: {types}"
         assert "domain_events_queried" in types, f"missing domain_events_queried: {types}"
@@ -629,11 +636,11 @@ async def check_metrics_report(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-metrics", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-metrics", store=store)
         cap = InMemoryKeywordRetrievalCapability([])
         register_retrieval_capability(host, cap)
 
-        corr = "conf-metrics-001"
+        corr = f"{RUN}-conf-metrics-001"
         for _ in range(3):
             await host.ainvoke("retrieval.query", {"query": "test"}, correlation={"correlation_id": corr})
 
@@ -704,18 +711,18 @@ async def check_version_control_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-vc", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-vc", store=store)
         register_git_capabilities(host)
 
         repo_root = str(REPO_ROOT)
         result = await host.ainvoke(
             "chp.version_control.inspect_repo",
             {"repo_root": repo_root},
-            correlation={"correlation_id": "conf-vc-001"},
+            correlation={"correlation_id": f"{RUN}-conf-vc-001"},
         )
         assert result.success, f"inspect_repo failed: {result}"
 
-        events = host.replay("conf-vc-001")
+        events = host.replay(f"{RUN}-conf-vc-001")
         types = {e["event_type"] for e in events}
         assert "version_control_repo_inspected" in types, f"missing version_control_repo_inspected: {types}"
 
@@ -743,7 +750,7 @@ async def check_identity_propagation(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-identity", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-identity", store=store)
 
         async def _echo(ctx, payload):
             return {"ok": True}
@@ -753,14 +760,14 @@ async def check_identity_propagation(_host: Any) -> None:
             _echo,
         )
 
-        subject = {"id": "conf-agent", "type": "agent"}
+        subject = {"id": f"{RUN}-conf-agent", "type": "agent"}
         await host.ainvoke(
             "identity.echo", {},
-            correlation={"correlation_id": "conf-identity-001"},
+            correlation={"correlation_id": f"{RUN}-conf-identity-001"},
             subject=subject,
         )
 
-        events = host.replay("conf-identity-001")
+        events = host.replay(f"{RUN}-conf-identity-001")
         exec_events = [e for e in events if "execution" in e["event_type"]]
         assert exec_events, "no execution events emitted"
         for ev in exec_events:
@@ -787,7 +794,7 @@ async def check_composability_declaration(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-compose", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-compose", store=store)
 
         async def _noop(ctx, payload):
             return {}
@@ -827,10 +834,10 @@ async def check_state_machine_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-sm", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-sm", store=store)
         register_state_machine_capability(host, InMemoryStateMachine())
 
-        corr = "conf-sm-001"
+        corr = f"{RUN}-conf-sm-001"
         r_create = await host.ainvoke(
             "state_machine.create",
             {
@@ -924,10 +931,10 @@ async def check_incident_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-incident", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-incident", store=store)
         register_incident_capability(host, InMemoryIncidentManager())
 
-        corr = "conf-incident-001"
+        corr = f"{RUN}-conf-incident-001"
         r_open = await host.ainvoke(
             "incident.open",
             {"title": "DB latency spike", "severity": "P2", "correlation_ids": ["corr-001"]},
@@ -995,10 +1002,10 @@ async def check_safety_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-safety", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-safety", store=store)
         register_safety_capability(host, RuleBasedSafetyEvaluator())
 
-        corr = "conf-safety-001"
+        corr = f"{RUN}-conf-safety-001"
         r_low = await host.ainvoke(
             "safety.assess",
             {"capability_id": "retrieval.query", "payload": {"query": "hello"}},
@@ -1043,7 +1050,7 @@ async def check_compliance_capability(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-compliance", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-compliance", store=store)
 
         async def _noop(ctx, payload):
             return {"ok": True}
@@ -1058,7 +1065,7 @@ async def check_compliance_capability(_host: Any) -> None:
         manager = SQLiteComplianceManager(store)
         register_compliance_capability(host, manager)
 
-        corr = "conf-compliance-001"
+        corr = f"{RUN}-conf-compliance-001"
         r_report = await host.ainvoke(
             "compliance.report",
             {},
@@ -1150,7 +1157,7 @@ async def check_persistence(_host: Any) -> None:
 
 async def check_standard_denial_codes(host: Any) -> None:
     """Invoking a missing capability produces the standard denial code 'capability_not_found'."""
-    corr_id = "conf-denial-codes-001"
+    corr_id = f"{RUN}-conf-denial-codes-001"
     result = await invoke_host(host, "nonexistent.capability.xyz", {}, correlation={"correlation_id": corr_id})
     assert not result_value(result, "success"), "expected failure for missing capability"
     assert result_value(result, "outcome") == "denied", (
@@ -1175,7 +1182,7 @@ async def check_input_schema_validation(_host: Any) -> None:
         store_path = f.name
     try:
         store = SQLiteEvidenceStore(store_path)
-        host = LocalCapabilityHost("conf-schema", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-schema", store=store)
 
         async def handler(_ctx, _payload):
             return {"ok": True}
@@ -1198,7 +1205,7 @@ async def check_input_schema_validation(_host: Any) -> None:
         bad = await host.ainvoke(
             "conf.typed",
             {"n": "not-an-integer"},
-            correlation={"correlation_id": "conf-schema-bad"},
+            correlation={"correlation_id": f"{RUN}-conf-schema-bad"},
         )
         assert not bad.success, "expected denial for invalid payload"
         assert bad.outcome == "denied", f"expected denied, got {bad.outcome!r}"
@@ -1209,7 +1216,7 @@ async def check_input_schema_validation(_host: Any) -> None:
         good = await host.ainvoke(
             "conf.typed",
             {"n": 42},
-            correlation={"correlation_id": "conf-schema-good"},
+            correlation={"correlation_id": f"{RUN}-conf-schema-good"},
         )
         assert good.success, f"valid payload should succeed, got: {good}"
         store.close()
@@ -1234,7 +1241,7 @@ def _assert_hash_chain(events: list[Any]) -> None:
 
 async def check_evidence_hash_chain(host: Any) -> None:
     """Evidence events carry SHA256 content_hash + prev_hash to form a tamper-detectable chain."""
-    corr_id = "conf-chain-001"
+    corr_id = f"{RUN}-conf-chain-001"
 
     if hasattr(host, "by_correlation_with_hashes"):
         # Host exposes hash-aware replay — test it directly (catches BrokenNoHashChainHost)
@@ -1250,7 +1257,7 @@ async def check_evidence_hash_chain(host: Any) -> None:
             store_path = f.name
         try:
             store = SQLiteEvidenceStore(store_path)
-            ref_host = LocalCapabilityHost("conf-chain", store=store)
+            ref_host = LocalCapabilityHost(f"{RUN}-conf-chain", store=store)
 
             async def echo(_ctx, payload):
                 return {"echo": payload.get("value")}
@@ -1278,7 +1285,7 @@ async def check_signed_evidence_bundle(_host: Any) -> None:
 
     with tempfile.TemporaryDirectory() as d:
         store = SQLiteEvidenceStore(os.path.join(d, "ev.sqlite"))
-        host = LocalCapabilityHost("conf-sign", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-sign", store=store)
 
         async def echo(_ctx, payload):
             return {"echo": payload.get("value")}
@@ -1288,7 +1295,7 @@ async def check_signed_evidence_bundle(_host: Any) -> None:
 
         key = signing.generate_keypair(os.path.join(d, "keys"))
         events = store.export_correlation("cs")
-        bundle = signing.sign_bundle(signing.build_bundle("conf-sign", events, created_at="2026-01-01T00:00:00Z"), key)
+        bundle = signing.sign_bundle(signing.build_bundle(f"{RUN}-conf-sign", events, created_at="2026-01-01T00:00:00Z"), key)
         store.close()
 
         assert signing.verify_bundle(bundle, expected_key_id=key.key_id).valid, "signed bundle must verify"
@@ -1327,7 +1334,7 @@ async def check_retention_preserves_chain(_host: Any) -> None:
 
     with tempfile.TemporaryDirectory() as d:
         store = SQLiteEvidenceStore(os.path.join(d, "ev.sqlite"))
-        host = LocalCapabilityHost("conf-ret", store=store)
+        host = LocalCapabilityHost(f"{RUN}-conf-ret", store=store)
 
         async def noop(_ctx, _p):
             return {"ok": True}
@@ -1357,7 +1364,7 @@ async def check_approval_required_governance(host: Any) -> None:
     can't silently drop the approval evidence and still claim conformance.
     Uses the fixture profile's conformance.approval, so it holds black-box too."""
     result = await invoke_host(
-        host, "conformance.approval", {}, correlation={"correlation_id": "conf-approval-001"}
+        host, "conformance.approval", {}, correlation={"correlation_id": f"{RUN}-conf-approval-001"}
     )
     assert not result_value(result, "success"), f"approval-gated must be denied: {result}"
     assert result_value(result, "outcome") == "denied", (
@@ -1366,7 +1373,7 @@ async def check_approval_required_governance(host: Any) -> None:
     denial = result_value(result, "denial")
     code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
     assert code == "approval_required", f"expected 'approval_required', got {code!r}"
-    types = [e["event_type"] for e in host.replay("conf-approval-001")]
+    types = [e["event_type"] for e in host.replay(f"{RUN}-conf-approval-001")]
     assert "approval_requested" in types, f"approval_requested not emitted: {types}"
     assert "execution_started" not in types, "gated capability must not begin execution"
 
@@ -1377,7 +1384,7 @@ async def check_budget_exceeded_governance(host: Any) -> None:
     'budget_exceeded' and a 'budget_exceeded' event — the autonomy-budget
     differentiator. The invocation before the limit still succeeds. Uses the
     fixture profile's conformance.budgeted (action_limit=1)."""
-    corr = {"correlation_id": "conf-budget-001"}
+    corr = {"correlation_id": f"{RUN}-conf-budget-001"}
     first = await invoke_host(host, "conformance.budgeted", {}, correlation=corr)
     assert result_value(first, "success"), f"first invocation (within budget) must succeed: {first}"
     second = await invoke_host(host, "conformance.budgeted", {}, correlation=corr)
@@ -1388,7 +1395,7 @@ async def check_budget_exceeded_governance(host: Any) -> None:
     denial = result_value(second, "denial")
     code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
     assert code == "budget_exceeded", f"expected 'budget_exceeded', got {code!r}"
-    types = [e["event_type"] for e in host.replay("conf-budget-001")]
+    types = [e["event_type"] for e in host.replay(f"{RUN}-conf-budget-001")]
     assert "budget_exceeded" in types, f"budget_exceeded event not emitted: {types}"
 
 
@@ -1398,7 +1405,7 @@ async def check_risk_tier_governance(host: Any) -> None:
     'policy_blocked'. The risk-tier differentiator — guarded. Uses the fixture
     profile's conformance.risky ('high') against a host capped at 'medium'."""
     result = await invoke_host(
-        host, "conformance.risky", {}, correlation={"correlation_id": "conf-risk-001"}
+        host, "conformance.risky", {}, correlation={"correlation_id": f"{RUN}-conf-risk-001"}
     )
     assert not result_value(result, "success"), f"over-tier capability must be denied: {result}"
     assert result_value(result, "outcome") == "denied", (
@@ -1407,7 +1414,7 @@ async def check_risk_tier_governance(host: Any) -> None:
     denial = result_value(result, "denial")
     code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
     assert code == "policy_blocked", f"expected 'policy_blocked', got {code!r}"
-    types = [e["event_type"] for e in host.replay("conf-risk-001")]
+    types = [e["event_type"] for e in host.replay(f"{RUN}-conf-risk-001")]
     assert "execution_started" not in types, "over-tier capability must not begin execution"
 
 
@@ -1419,7 +1426,7 @@ async def check_safety_governance(host: Any) -> None:
     — a signed safety verdict on the governed plane, guarded. Uses the fixture
     profile's conformance.unsafe."""
     result = await invoke_host(
-        host, "conformance.unsafe", {}, correlation={"correlation_id": "conf-safety-001"}
+        host, "conformance.unsafe", {}, correlation={"correlation_id": f"{RUN}-conf-safety-001"}
     )
     assert not result_value(result, "success"), f"guardrail-blocked must be denied: {result}"
     assert result_value(result, "outcome") == "denied", (
@@ -1428,7 +1435,7 @@ async def check_safety_governance(host: Any) -> None:
     denial = result_value(result, "denial")
     code = denial.get("code") if isinstance(denial, dict) else getattr(denial, "code", None)
     assert code == "safety_blocked", f"expected 'safety_blocked', got {code!r}"
-    types = [e["event_type"] for e in host.replay("conf-safety-001")]
+    types = [e["event_type"] for e in host.replay(f"{RUN}-conf-safety-001")]
     for required in ("safety_assessment_started", "safety_assessment_completed",
                      "safety_action_blocked"):
         assert required in types, f"missing {required}: {types}"
@@ -1440,7 +1447,7 @@ async def check_export_bundle(host: Any) -> None:
     bundle for the correlation, offline-verifiable — signed when the host holds
     a key, hash-chain tier otherwise. The export IS the federation primitive:
     task bundles aggregate exactly these."""
-    corr = "conf-export-001"
+    corr = f"{RUN}-conf-export-001"
     await invoke_host(host, "conformance.echo", {"value": "x"},
                       correlation={"correlation_id": corr})
     bundle = host.export_bundle(corr)
@@ -1474,7 +1481,7 @@ async def check_identity_document(host: Any) -> None:
 async def check_wire_verify(host: Any) -> None:
     """v0.2 over the wire: after an invocation, GET /verify/{corr} confirms the
     host's own chain is intact (or, in gateway mode, says so honestly)."""
-    corr = "conf-wire-verify"
+    corr = f"{RUN}-conf-wire-verify"
     await invoke_host(host, "conformance.echo", {"value": "v"}, correlation={"correlation_id": corr})
     result = host.verify(corr)
     if "valid" in result:
@@ -1594,9 +1601,9 @@ async def check_mandate_gate(host: Any) -> None:
     # connection binds a verified caller the mandate MUST name as delegate;
     # an unauthenticated one accepts any delegate name.
     probe = await invoke_host(host, "conformance.echo", {"value": "probe"},
-                              correlation={"correlation_id": "conf-mandate-probe"})
+                              correlation={"correlation_id": f"{RUN}-conf-mandate-probe"})
     assert result_value(probe, "outcome") == "success", f"probe invoke failed: {probe}"
-    probe_subj = (host.replay("conf-mandate-probe")[0].get("subject") or {})
+    probe_subj = (host.replay(f"{RUN}-conf-mandate-probe")[0].get("subject") or {})
     delegate = probe_subj.get("id") if probe_subj.get("verified") else "conformance-runner"
 
     priv = ed25519.Ed25519PrivateKey.generate()
@@ -1618,10 +1625,10 @@ async def check_mandate_gate(host: Any) -> None:
 
     # 1. Valid + in-scope → success; the signed chain carries the mandate subject.
     ok = await invoke_host(host, "conformance.echo", {"value": "mandated"},
-                           correlation={"correlation_id": "conf-mandate-ok"},
+                           correlation={"correlation_id": f"{RUN}-conf-mandate-ok"},
                            mandate=_mandate(["conformance.echo"]))
     assert result_value(ok, "outcome") == "success", f"mandated invoke failed: {ok}"
-    subj = (host.replay("conf-mandate-ok")[0].get("subject") or {})
+    subj = (host.replay(f"{RUN}-conf-mandate-ok")[0].get("subject") or {})
     assert subj.get("type") == "mandate" and subj.get("verified") is True, (
         f"evidence subject must be the mandate binding, got: {subj}")
     assert subj.get("id") == delegate and subj.get("principal") == "conformance-principal", (

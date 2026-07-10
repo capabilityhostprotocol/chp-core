@@ -3,8 +3,13 @@
 ## 1. Install
 
 ```bash
-pip install chp-core chp-host
+pip install 'chp-core[signing]' chp-host
 ```
+
+The `[signing]` extra pulls the ed25519 backend — you want it for anything
+beyond local experiments: serving a **signed** host, verifying bundles and
+provenance statements, issuing mandates. Plain `pip install chp-core` works
+too and stays at the hash-chain tier.
 
 Adapters install the same way as you need them
 (`pip install chp-adapter-http chp-adapter-filesystem chp-adapter-audit`, …).
