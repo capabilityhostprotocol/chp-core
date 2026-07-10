@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-mcp"
-version = "0.10.0"
+version = "0.11.0"
 description = "CHP capability adapter — wraps Model Context Protocol (MCP) server tools as governed CHP capabilities"
 readme = "README.md"
 requires-python = ">=3.10"
