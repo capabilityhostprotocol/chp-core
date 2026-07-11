@@ -923,10 +923,12 @@ class RemoteCapabilityHost:
         # Opt-in retry (reference feature — the binding's stance stays
         # caller-retries; this is the battery-included caller). Retries
         # `host_unreachable` retryable denials (provably not executed; honors
-        # the denial's retry_after_s advice) and ConnectionError (CAVEAT: a
-        # mid-flight drop may have executed — at-most-once is not guaranteed
-        # on that path; set retries=0 for non-idempotent work). Sleeps
-        # min(retry_after_s or 2^attempt, retry_cap_s). Default OFF.
+        # the denial's retry_after_s advice) and ConnectionError. Every
+        # attempt reuses ONE invocation_id, so against a replay-conformant
+        # host (spec §13) a mid-flight drop that DID execute replays the
+        # recorded result instead of double-executing. Against pre-§13 hosts
+        # the old caveat stands: set retries=0 for non-idempotent work.
+        # Sleeps min(retry_after_s or 2^attempt, retry_cap_s). Default OFF.
         self._retries = max(0, int(retries))
         self._retry_cap_s = retry_cap_s
 
@@ -951,31 +953,101 @@ class RemoteCapabilityHost:
         )
         return self._send(req)
 
-    def _send(self, req: Request) -> JSON:
+    # Thread-local keep-alive connections, shared across instances and keyed
+    # by (scheme, netloc, timeout). Thread-local because handler threads and
+    # asyncio.to_thread pools must NEVER share an http.client connection.
+    _tls = threading.local()
+
+    def _connection(self):
+        import http.client
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(self._base)
+        key = (parts.scheme, parts.netloc, self._timeout)
+        cache = getattr(RemoteCapabilityHost._tls, "conns", None)
+        if cache is None:
+            cache = {}
+            RemoteCapabilityHost._tls.conns = cache
+        conn = cache.get(key)
+        if conn is None:
+            cls = (http.client.HTTPSConnection if parts.scheme == "https"
+                   else http.client.HTTPConnection)
+            conn = cls(parts.netloc, timeout=self._timeout)
+            cache[key] = conn
+        return key, cache, conn
+
+    def _transport_roundtrip(self, req: Request) -> tuple[int, str]:
+        """(status, body) for *req*. Keep-alive by default (a fresh TCP+HTTP
+        handshake per hop was the old cost); `CHP_HTTP_KEEPALIVE=0` restores
+        one-shot urlopen (proxies etc.). Reconnect-once applies ONLY to a
+        REUSED connection failing (the server closed an idle keep-alive conn)
+        — a fresh connection failing, or any timeout, raises immediately with
+        the exact error semantics callers already handle."""
         from urllib.error import HTTPError, URLError
 
-        try:
-            with urlopen(req, timeout=self._timeout) as resp:
-                body = resp.read().decode("utf-8")
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
+        if os.environ.get("CHP_HTTP_KEEPALIVE", "1") == "0":
+            try:
+                with urlopen(req, timeout=self._timeout) as resp:
+                    return resp.status, resp.read().decode("utf-8")
+            except HTTPError as exc:
+                return exc.code, exc.read().decode("utf-8", errors="replace")
+            except URLError as exc:
+                raise ConnectionError(
+                    f"CHP remote host unavailable ({self._base}): {exc.reason}"
+                ) from exc
+            except OSError as exc:
+                raise ConnectionError(
+                    f"CHP remote host connection failed ({self._base}): {exc}"
+                ) from exc
+
+        import http.client
+        import socket
+
+        path = req.full_url[len(self._base):] or "/"
+        headers = dict(req.header_items())
+        for attempt in (0, 1):
+            key, cache, conn = self._connection()
+            reused = getattr(conn, "_chp_used", False)
+            try:
+                conn.request(req.get_method(), path, body=req.data, headers=headers)
+                resp = conn.getresponse()
+                text = resp.read().decode("utf-8", errors="replace")
+                conn._chp_used = True  # type: ignore[attr-defined]
+                if resp.will_close:
+                    conn.close()
+                    cache.pop(key, None)
+                return resp.status, text
+            except socket.timeout as exc:
+                try:
+                    conn.close()
+                finally:
+                    cache.pop(key, None)
+                raise ConnectionError(
+                    f"CHP remote host connection failed ({self._base}): timed out"
+                ) from exc
+            except (http.client.HTTPException, OSError) as exc:
+                try:
+                    conn.close()
+                finally:
+                    cache.pop(key, None)
+                if reused and attempt == 0:
+                    continue  # idle keep-alive conn was closed server-side
+                raise ConnectionError(
+                    f"CHP remote host connection failed ({self._base}): {exc}"
+                ) from exc
+        raise ConnectionError(f"CHP remote host connection failed ({self._base})")
+
+    def _send(self, req: Request) -> JSON:
+        status, body = self._transport_roundtrip(req)
+        if status == 401:
+            raise ConnectionError(
+                f"auth rejected by {req.full_url} (check api_key_env config)")
+        if status >= 400:
             try:
                 detail = json.loads(body)
             except Exception:
                 detail = {"raw": body[:500]}
-            if exc.code == 401:
-                raise ConnectionError(
-                    f"auth rejected by {req.full_url} (check api_key_env config)"
-                ) from exc
-            raise RuntimeError(f"CHP remote error {exc.code}: {detail}") from exc
-        except URLError as exc:
-            raise ConnectionError(
-                f"CHP remote host unavailable ({self._base}): {exc.reason}"
-            ) from exc
-        except OSError as exc:
-            raise ConnectionError(
-                f"CHP remote host connection failed ({self._base}): {exc}"
-            ) from exc
+            raise RuntimeError(f"CHP remote error {status}: {detail}")
 
         try:
             data = json.loads(body)
@@ -1037,6 +1109,7 @@ class RemoteCapabilityHost:
             corr_dict: JSON = correlation.to_dict()
         else:
             corr_dict = dict(correlation) if correlation else {}
+        from .types import new_id
         body: JSON = {
             "capability_id": capability_id,
             "payload": payload or {},
@@ -1044,6 +1117,10 @@ class RemoteCapabilityHost:
             "correlation": corr_dict,
             "subject": subject or {"id": "remote", "type": "user"},
             "metadata": metadata or {},
+            # ONE id for every retry attempt (spec §13): a replay-conformant
+            # host that already executed returns the recorded result instead
+            # of double-executing — the ConnectionError retry becomes safe.
+            "invocation_id": new_id("inv"),
         }
         if version is not None:
             body["version"] = version

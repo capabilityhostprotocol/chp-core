@@ -787,12 +787,17 @@ class InvocationResult:
     evidence_ids: list[str] = field(default_factory=list)
     started_at: str | None = None
     completed_at: str = field(default_factory=utc_now)
+    # Idempotent replay marker (spec §13, proposal 0008): True when this
+    # result was served from the recorded-result cache instead of executing.
+    replayed: bool = False
 
     def to_dict(self) -> JSON:
         data = asdict(self)
         data["correlation"] = self.correlation.to_dict()
         if self.denial is not None:
             data["denial"] = self.denial.to_dict()
+        if not self.replayed:  # omit-when-false — existing results byte-stable
+            data.pop("replayed", None)
         return data
 
 

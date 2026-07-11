@@ -55,21 +55,32 @@ class SQLiteComplianceManager:
                         # chain. (ponytail: whole-correlation granularity; add a
                         # checkpoint table only if partial pruning is ever needed.)
                         if pattern == "*":
-                            sql = (
-                                "DELETE FROM evidence_events WHERE correlation_id IN ("
-                                "  SELECT correlation_id FROM evidence_events "
-                                "  GROUP BY correlation_id HAVING MAX(timestamp) < ?)"
+                            corr_subquery = (
+                                "SELECT correlation_id FROM evidence_events "
+                                "GROUP BY correlation_id HAVING MAX(timestamp) < ?"
                             )
                             params: list = [cutoff_str]
                         else:
-                            sql = (
-                                "DELETE FROM evidence_events WHERE correlation_id IN ("
-                                "  SELECT correlation_id FROM evidence_events "
-                                "  GROUP BY correlation_id "
-                                "  HAVING MAX(timestamp) < ? AND SUM(capability_id GLOB ?) > 0)"
+                            corr_subquery = (
+                                "SELECT correlation_id FROM evidence_events "
+                                "GROUP BY correlation_id "
+                                "HAVING MAX(timestamp) < ? AND SUM(capability_id GLOB ?) > 0"
                             )
                             params = [cutoff_str, pattern]
-                        cursor = self._store._conn.execute(sql, params)
+                        # Purge cascade (spec §13): a lawfully purged invocation
+                        # must not remain replayable — drop cached results for
+                        # the events about to be deleted, BEFORE deleting them
+                        # (the subquery needs the rows).
+                        self._store._conn.execute(
+                            "DELETE FROM invocation_results WHERE invocation_id IN ("
+                            "  SELECT invocation_id FROM evidence_events "
+                            f"  WHERE correlation_id IN ({corr_subquery}))",
+                            params,
+                        )
+                        cursor = self._store._conn.execute(
+                            f"DELETE FROM evidence_events WHERE correlation_id IN ({corr_subquery})",
+                            params,
+                        )
                         total_purged += cursor.rowcount
 
                     if policy.redact_payload_after_days is not None:
@@ -138,15 +149,21 @@ class SQLiteComplianceManager:
     def purge(self, capability_id_pattern: str, before_ts: str) -> int:
         with self._store._lock:
             if capability_id_pattern == "*":
-                cursor = self._store._conn.execute(
-                    "DELETE FROM evidence_events WHERE timestamp < ?",
-                    (before_ts,),
-                )
+                where = "timestamp < ?"
+                params: tuple = (before_ts,)
             else:
-                cursor = self._store._conn.execute(
-                    "DELETE FROM evidence_events WHERE timestamp < ? AND capability_id GLOB ?",
-                    (before_ts, capability_id_pattern),
-                )
+                where = "timestamp < ? AND capability_id GLOB ?"
+                params = (before_ts, capability_id_pattern)
+            # Purge cascade (spec §13): purged invocations must not remain
+            # replayable — cascade BEFORE the events delete.
+            self._store._conn.execute(
+                "DELETE FROM invocation_results WHERE invocation_id IN ("
+                f"  SELECT invocation_id FROM evidence_events WHERE {where})",
+                params,
+            )
+            cursor = self._store._conn.execute(
+                f"DELETE FROM evidence_events WHERE {where}", params,
+            )
             # Retention mutated events — resync the maintained correlation
             # heads (spec §12 serving cache) to the new lawful state.
             self._store._rebuild_heads_locked()

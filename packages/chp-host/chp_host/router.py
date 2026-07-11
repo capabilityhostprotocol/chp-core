@@ -84,6 +84,7 @@ class MultiHostRouter:
         *,
         selection: Selection = "first",
         recheck_interval: float = 30.0,
+        breaker_threshold: int = 1,
         host_id: str = "chp-gateway",
         host_roles: dict[str, str] | None = None,
         store=None,
@@ -91,6 +92,15 @@ class MultiHostRouter:
         self._transports: list[Transport] = list(transports)
         self._selection: Selection = selection
         self._recheck_interval = recheck_interval
+        # Circuit breaker: consecutive failures before tripping unhealthy.
+        # Default 1 = trip on the first failure — the §11 reference behavior
+        # the conformance suites assert; production configs opt into higher
+        # thresholds (gateway.breaker_threshold). A tripped host's recheck
+        # window escalates x2 per repeat trip, capped at 8x.
+        self._breaker_threshold = max(1, int(breaker_threshold))
+        self._failure_counts: dict[str, int] = {}
+        self._trip_counts: dict[str, int] = {}
+        self._half_open_probe: dict[str, bool] = {}
         self._host_id: str = host_id
         # Optional evidence store (spec §11 posture): with one, routing denials
         # and health transitions land on the gateway's OWN chain and merge into
@@ -152,6 +162,14 @@ class MultiHostRouter:
         self._routes = routes
         self._descriptors = descriptors
         self._last_discover = time.monotonic()
+        # Warm the capacity stats at startup (least_loaded only) so the FIRST
+        # invoke never pays a member's stats round-trip (best-effort, bounded
+        # by the per-call stats timeout).
+        if self._selection == "least_loaded":
+            try:
+                await self._refresh_stats(self._transports)
+            except Exception:  # noqa: BLE001
+                pass
         return self
 
     async def _discover_all(self) -> list[tuple[Transport, JSON | None | BaseException]]:
@@ -346,21 +364,26 @@ class MultiHostRouter:
 
         last_error: Exception | None = None
         attempted: list[str] = []
+        # ONE envelope — and therefore ONE invocation_id — across every owner
+        # attempt (spec §13): an owner that already executed before the
+        # connection dropped replays its recorded result instead of the
+        # failover double-executing on the next owner.
+        envelope = InvocationEnvelope(
+            capability_id=capability_id,
+            payload=payload or {},
+            version=version,
+            mode=mode,
+            correlation=corr,
+            subject=subject or {"id": "router", "type": "system"},
+            metadata=dict(metadata or {}),
+            # Forwarding rule (§10, proposal 0004): a presented mandate
+            # transits UNCHANGED — the executing host's gate 5 verifies it
+            # and rebinds the subject; authority survives the hop even
+            # though the transport subject (router) does not.
+            mandate=mandate,
+        )
         for tr in candidates:
-            envelope = InvocationEnvelope(
-                capability_id=capability_id,
-                payload=payload or {},
-                version=version,
-                mode=mode,
-                correlation=corr,
-                subject=subject or {"id": "router", "type": "system"},
-                metadata={**(metadata or {}), "routed_via": tr.name},
-                # Forwarding rule (§10, proposal 0004): a presented mandate
-                # transits UNCHANGED — the executing host's gate 5 verifies it
-                # and rebinds the subject; authority survives the hop even
-                # though the transport subject (router) does not.
-                mandate=mandate,
-            )
+            envelope.metadata = {**(metadata or {}), "routed_via": tr.name}
             try:
                 result = await tr.ainvoke_envelope(envelope)
             except ConnectionError as exc:
@@ -629,8 +652,14 @@ class MultiHostRouter:
                 subject={"id": "router", "type": "system"},
                 metadata={"routed_via": tr.name},
             )
+            # Short stats budget (default 2s): this refresh runs ON the
+            # invoke path in least_loaded mode — a cold/slow member must not
+            # hold the caller for the full transport timeout (the ~30s
+            # cold-start stall of the 0.15.0 live proof).
+            stats_timeout = float(os.environ.get("CHP_ROUTER_STATS_TIMEOUT", "2"))
             try:
-                result = await tr.ainvoke_envelope(envelope)
+                result = await asyncio.wait_for(
+                    tr.ainvoke_envelope(envelope), timeout=stats_timeout)
             except Exception:
                 continue
             data = getattr(result, "data", None)
@@ -684,25 +713,49 @@ class MultiHostRouter:
         until = self._unhealthy.get(tr.name)
         if until is None:
             return True
-        # Recheck window elapsed — optimistically allow attempts, but the entry
-        # stays until an actual SUCCESS clears it: the unhealthy→healthy
-        # transition must be observable (§11 emission is transition-gated, which
-        # needs the prior state to still be here when the host proves back).
-        return time.monotonic() >= until
+        if time.monotonic() < until:
+            return False
+        # Recheck window elapsed — HALF-OPEN: admit exactly ONE trial at a
+        # time (the probe flag clears on success via _mark_healthy or on
+        # failure via _mark_unhealthy). The entry itself stays until an actual
+        # SUCCESS clears it: the unhealthy→healthy transition must be
+        # observable (§11 emission is transition-gated, which needs the prior
+        # state to still be here when the host proves back).
+        if self._half_open_probe.get(tr.name):
+            return False
+        self._half_open_probe[tr.name] = True
+        return True
 
     def _mark_unhealthy(self, tr: Transport, *,
                         correlation: CorrelationContext | None = None) -> None:
-        is_transition = tr.name not in self._unhealthy
-        self._unhealthy[tr.name] = time.monotonic() + self._recheck_interval
+        self._half_open_probe.pop(tr.name, None)
+        # Failure-counting breaker: only the Nth CONSECUTIVE failure trips the
+        # unhealthy state (threshold 1 = trip immediately, the pre-0.16
+        # behavior). In-invoke failover is unaffected — the caller already
+        # skipped to the next owner; this gates only the routing-order state.
+        self._failure_counts[tr.name] = self._failure_counts.get(tr.name, 0) + 1
+        already_unhealthy = tr.name in self._unhealthy
+        if not already_unhealthy and self._failure_counts[tr.name] < self._breaker_threshold:
+            return
+        # Window escalation: repeated trips back off exponentially, capped.
+        trips = self._trip_counts.get(tr.name, 0) + (0 if already_unhealthy else 1)
+        self._trip_counts[tr.name] = trips
+        window = min(self._recheck_interval * (2 ** max(0, trips - 1)),
+                     self._recheck_interval * 8)
+        is_transition = not already_unhealthy
+        self._unhealthy[tr.name] = time.monotonic() + window
         if is_transition:
             self._emit_routing_event(
                 "host_marked_unhealthy",
-                {"host": tr.name, "recheck_after_s": int(self._recheck_interval)},
+                {"host": tr.name, "recheck_after_s": int(window)},
                 correlation=correlation,
             )
 
     def _mark_healthy(self, tr: Transport, *,
                       correlation: CorrelationContext | None = None) -> None:
+        self._half_open_probe.pop(tr.name, None)
+        self._failure_counts.pop(tr.name, None)
+        self._trip_counts.pop(tr.name, None)
         if self._unhealthy.pop(tr.name, None) is not None:
             self._emit_routing_event(
                 "host_marked_healthy", {"host": tr.name}, correlation=correlation)

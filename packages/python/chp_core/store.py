@@ -177,6 +177,18 @@ class SQLiteEvidenceStore:
                 "SELECT 1 FROM evidence_events LIMIT 1").fetchone() is not None
             if heads_empty and has_events:
                 self._rebuild_heads_locked()  # one-time backfill on upgrade
+            # Idempotent replay (spec §13): recorded results keyed by
+            # invocation_id. SERVING state, never evidence — the chain stays
+            # the audit record; this cache is window-bounded and purge-cascaded.
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS invocation_results (
+                  invocation_id TEXT PRIMARY KEY,
+                  result_json TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                )
+                """
+            )
             self._conn.commit()
 
     def _rebuild_heads_locked(self) -> None:
@@ -555,6 +567,42 @@ class SQLiteEvidenceStore:
             valid=first_broken is None,
             first_broken_sequence=first_broken,
         )
+
+    def record_result(self, invocation_id: str, result: JSON) -> None:
+        """Record a processed result for idempotent replay (spec §13).
+        Best-effort by contract — callers must not fail the invocation on a
+        recording error. INSERT OR IGNORE: the FIRST recorded result wins
+        (a duplicate id racing here replays, never overwrites)."""
+        from .types import utc_now
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO invocation_results "
+                "(invocation_id, result_json, created_at) VALUES (?, ?, ?)",
+                (invocation_id, json.dumps(result), utc_now()))
+            self._conn.commit()
+
+    def lookup_result(self, invocation_id: str) -> JSON | None:
+        """The recorded result for *invocation_id*, or None. Piggybacks the
+        TTL sweep (bounded DELETE) so the cache stays window-sized without a
+        scheduler; `CHP_RESULT_CACHE_TTL_S` default 24h, 0 disables replay."""
+        ttl_s = int(os.environ.get("CHP_RESULT_CACHE_TTL_S", str(24 * 3600)))
+        if ttl_s <= 0:
+            return None
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(tz=timezone.utc) - timedelta(seconds=ttl_s)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM invocation_results WHERE created_at < ? "
+                "AND invocation_id IN (SELECT invocation_id FROM invocation_results "
+                "WHERE created_at < ? LIMIT 200)",
+                (cutoff, cutoff))
+            row = self._conn.execute(
+                "SELECT result_json FROM invocation_results "
+                "WHERE invocation_id = ? AND created_at >= ?",
+                (invocation_id, cutoff)).fetchone()
+            self._conn.commit()
+        return json.loads(row["result_json"]) if row else None
 
     def size_info(self) -> dict[str, int]:
         """Operator-facing size stats for /metrics: on-disk bytes
