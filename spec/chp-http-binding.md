@@ -1,6 +1,6 @@
 # Capability Host Protocol — HTTP Binding (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.6 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.7 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
 ([v0.1](chp-v0.1.md)) onto HTTP, so a host in any language is wire-compatible
 with the reference `RemoteCapabilityHost` client and the black-box conformance
 runner (`conformance/runner.py --url`). CHP is transport-agnostic; this is the
@@ -127,6 +127,15 @@ a sync-only capability is the ordinary gate-4 `unsupported_mode` denial.
 SSE frames are transport, not canonical objects — nothing here is hashed or
 signed. Keep-alive ping frames and resumable streams are deliberately
 unspecified.
+
+**Idempotent replay** ([proposal 0008](proposals/0008-idempotent-replay.md),
+chp-v0.2.md §13). The envelope's `invocation_id` is the idempotency key — no
+header. A `POST /invoke` presenting an `invocation_id` the host has already
+recorded returns the RECORDED result with `"replayed": true` (omitted on
+fresh executions), same 200-with-outcome rule as everything else. A caller
+that wants retry-safety reuses the id across attempts; a fresh id always
+executes fresh. Window-bounded (host-configured retention); streaming mode
+excluded.
 
 `/health` MUST NOT disclose the live capability count (it stays on the authed
 `/host` descriptor) — mesh-count privacy. `version` here is the protocol version;

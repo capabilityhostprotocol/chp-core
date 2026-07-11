@@ -83,3 +83,24 @@ describe('governed invocation pipeline (spec/chp-invocation-pipeline.md)', () =>
     expect(h.store.verifyChainFor('c').valid).toBe(true);
   });
 });
+
+it('idempotent replay (§13): same id replays, one execution, denial replays', async () => {
+  const host = buildFixtureHost();
+  const env = { capability_id: 'conformance.echo', payload: { value: 'nonce-13' },
+                invocation_id: 'inv_replay_ts', correlation: { correlation_id: 'replay-ts' } };
+  const first = await host.ainvokeEnvelope({ ...env });
+  const second = await host.ainvokeEnvelope({ ...env });
+  expect(first.replayed).toBeUndefined();
+  expect(second.replayed).toBe(true);
+  expect(second.data).toEqual(first.data);
+  expect(host.replay('replay-ts').filter((e) => e.event_type === 'execution_started')).toHaveLength(1);
+
+  const denyEnv = { capability_id: 'conformance.risky', payload: {},
+                    invocation_id: 'inv_replay_ts_denied', correlation: { correlation_id: 'replay-ts-d' } };
+  const d1 = await host.ainvokeEnvelope({ ...denyEnv });
+  const d2 = await host.ainvokeEnvelope({ ...denyEnv });
+  expect(d1.outcome).toBe('denied');
+  expect(d2.replayed).toBe(true);
+  expect(d2.denial?.code).toBe(d1.denial?.code);
+  expect(host.replay('replay-ts-d').filter((e) => e.event_type === 'execution_denied')).toHaveLength(1);
+});

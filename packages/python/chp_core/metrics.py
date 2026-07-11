@@ -257,12 +257,24 @@ def format_internal_error_prometheus() -> str:
     ]) + "\n"
 
 
+# Process-lifetime replay counter (spec §13): served-from-cache invocations.
+_REPLAYS = {"count": 0}
+
+
+def record_idempotent_replay() -> None:
+    _REPLAYS["count"] += 1
+
+
 def format_ops_prometheus() -> str:
     """Operator gauges for the sidecar state: witness-loop liveness (newest
     issued countersignature) and the held revocation set. Cheap file reads."""
     from . import revocations, witnessing
 
-    lines: list[str] = []
+    lines: list[str] = [
+        "# HELP chp_idempotent_replays_total Invocations served from the recorded-result cache (spec §13; process lifetime).",
+        "# TYPE chp_idempotent_replays_total counter",
+        f"chp_idempotent_replays_total {_REPLAYS['count']}",
+    ]
     newest = witnessing.latest_issued_at()
     if newest is not None:
         try:

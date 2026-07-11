@@ -1918,6 +1918,71 @@ async def check_streaming_invocation(host: Any) -> None:
     assert data.get("joined") == "s1s2s3", f"sync mode returns the terminal data: {data}"
 
 
+async def check_idempotent_replay(host: Any) -> None:
+    """v0.2 §13 (proposal 0008): a host that already recorded an
+    invocation_id replays the RECORDED result — identical data, marked
+    `replayed: true`, exactly ONE execution in evidence. A replayed denial
+    is the same denial. A fresh id always executes fresh."""
+    import json as _json
+    import urllib.request
+
+    base = getattr(host, "_base", None)
+    assert base, "idempotent-replay check requires a wire host"
+    api_key = getattr(host, "_api_key", None)
+
+    def _post_invoke(body: dict) -> dict:
+        req = urllib.request.Request(
+            f"{base}/invoke", data=_json.dumps(body).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"X-CHP-Key": api_key} if api_key else {})},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return _json.loads(resp.read().decode())
+
+    # 1. Same id twice → identical recorded data, replayed marker, ONE execution.
+    corr = f"{RUN}-conf-replay-1"
+    body = {"capability_id": "conformance.echo",
+            "payload": {"value": f"nonce-{RUN}"},
+            "invocation_id": f"inv-{RUN}-replay-1",
+            "correlation": {"correlation_id": corr}}
+    first = _post_invoke(dict(body))
+    second = _post_invoke(dict(body))
+    assert first.get("outcome") == "success", f"first invoke failed: {first}"
+    assert second.get("outcome") == "success", f"replay failed: {second}"
+    assert first.get("data") == second.get("data"), (
+        "replay must return the RECORDED data verbatim")
+    assert "replayed" not in first, "a fresh execution must omit the replayed marker"
+    assert second.get("replayed") is True, (
+        f"a replayed result must carry replayed: true — got {second}")
+    events = host.replay(corr)
+    starts = sum(1 for e in events if e.get("event_type") == "execution_started")
+    assert starts == 1, f"replay must not re-execute (execution_started × {starts})"
+
+    # 2. A denial replays as the SAME denial, with no second denial event.
+    corr_d = f"{RUN}-conf-replay-denied"
+    body_d = {"capability_id": "conformance.risky", "payload": {},
+              "invocation_id": f"inv-{RUN}-replay-denied",
+              "correlation": {"correlation_id": corr_d}}
+    d1 = _post_invoke(dict(body_d))
+    d2 = _post_invoke(dict(body_d))
+    assert d1.get("outcome") == "denied" and d2.get("outcome") == "denied"
+    assert (d2.get("denial") or {}).get("code") == (d1.get("denial") or {}).get("code")
+    assert d2.get("replayed") is True
+    denies = sum(1 for e in host.replay(corr_d)
+                 if e.get("event_type") == "execution_denied")
+    assert denies == 1, f"a replayed denial must not re-run gates (× {denies})"
+
+    # 3. A fresh id executes fresh (no accidental cross-id dedupe).
+    f1 = _post_invoke({"capability_id": "conformance.echo",
+                       "payload": {"value": "fresh"},
+                       "invocation_id": f"inv-{RUN}-fresh-a"})
+    f2 = _post_invoke({"capability_id": "conformance.echo",
+                       "payload": {"value": "fresh"},
+                       "invocation_id": f"inv-{RUN}-fresh-b"})
+    assert "replayed" not in f1 and "replayed" not in f2, (
+        "distinct invocation_ids must both execute fresh")
+
+
 WIRE_CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -1940,6 +2005,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("witness round-trip (v0.2 §12)", check_witness_roundtrip),
     ("mandate revocation (v0.2 §10, proposal 0007)", check_mandate_revocation),
     ("streaming invocation (binding, proposal 0006)", check_streaming_invocation),
+    ("idempotent replay (v0.2 §13, proposal 0008)", check_idempotent_replay),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {
