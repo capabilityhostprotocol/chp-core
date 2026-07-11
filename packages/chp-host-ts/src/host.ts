@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import { StreamResult } from './types.js';
@@ -291,6 +291,8 @@ export class LocalCapabilityHost {
         verified: true,
         mandate_id: env.mandate.mandate_id ?? null,
         principal: principal.host_id ?? null,
+        // Sub-delegation (§10, proposal 0009): the chain's ultimate authority.
+        root_principal: mandateRootPrincipal(env.mandate as Record<string, JsonValue>),
       };
     }
     // Gate 6: policy

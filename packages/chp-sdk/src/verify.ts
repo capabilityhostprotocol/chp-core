@@ -9,7 +9,7 @@ import { verify as edVerify } from 'node:crypto';
 import { canon, type JsonValue } from './canon.js';
 import { rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
-import { bundleHeader, computeTaskRootHash, publicKeyFromB64, taskBundleHeader } from './signing.js';
+import { attenuates, bundleHeader, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader } from './signing.js';
 import { didKeyToRaw, verifySshsig } from './sshsig.js';
 import { orderEvents } from './ordering.js';
 
@@ -450,8 +450,9 @@ export function verifyMandate(
     return { valid: false, assurance: 'signed', checks, reason: `signed by unexpected key ${String(sig.key_id)}` };
   }
 
-  const header: Record<string, JsonValue> = {};
-  for (const f of MANDATE_HEADER_FIELDS) header[f] = mandate[f] ?? null;
+  // mandateHeader adds depth+parent_id for a sub-mandate (proposal 0009);
+  // a single-hop mandate's header is unchanged (byte-identical).
+  const header = mandateHeader(mandate) as Record<string, JsonValue>;
   checks.signature = sig.algorithm === 'ed25519' && !!pubKey
     && verifyCanon(pubKey, header, String(sig.signature ?? ''));
 
@@ -494,6 +495,23 @@ export function verifyMandate(
       const rSig = (r.signature as Record<string, JsonValue> | undefined) ?? {};
       return verifyCanon(pubKey, rHeader, String(rSig.signature ?? ''));
     });
+  }
+
+  // Sub-delegation (§10, proposal 0009): an embedded parent must be attenuated
+  // by this link and must itself verify — recursively to the root. Carries
+  // host time + revocations (every ancestor's temporal + not_revoked run
+  // against ITS key), not the leaf's delegate/capability bindings.
+  const parent = mandate.parent as Record<string, JsonValue> | undefined;
+  if (parent) {
+    const att2 = attenuates(mandate, parent);
+    for (const [k, v] of Object.entries(att2)) checks[k] = v;
+    if (att2.depth && typeof parent === 'object') {
+      checks.parent_valid = verifyMandate(parent, {
+        atTime: opts.atTime, revocations: opts.revocations,
+      }).valid;
+    } else {
+      checks.parent_valid = false;
+    }
   }
 
   const valid = Object.values(checks).every(Boolean);

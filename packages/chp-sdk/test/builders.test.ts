@@ -7,6 +7,8 @@ import {
   buildContinuityStatement,
   buildMandate,
   buildMandateRevocation,
+  buildSubMandate,
+  mandateRootPrincipal,
   buildProvenanceStatement,
   computeStoreHead,
   keypairFromSeed,
@@ -16,6 +18,8 @@ import {
   verifyMandateRevocation,
   verifyProvenanceStatement,
 } from '../src/index.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const key = keypairFromSeed(Buffer.from(Array.from({ length: 32 }, (_, i) => i + 11)));
 const TS = '2026-01-01T00:00:00Z';
@@ -31,6 +35,54 @@ describe('statement builders — TS build parity (round-trip under own verifiers
     expect((m.principal as Record<string, unknown>).key_history).toBeUndefined();
     const v = verifyMandate(m, { atTime: TS, capabilityId: 'a.first', delegateId: 'agent-z' });
     expect(v.valid).toBe(true);
+  });
+
+  it('buildSubMandate attenuates + verifies as a chain; root_principal resolves', () => {
+    const rootKey = key;
+    const subKey = keypairFromSeed(Buffer.from(Array.from({ length: 32 }, (_, i) => i + 40)));
+    const root = buildMandate('root-p', rootKey, {
+      delegateId: 'worker', scope: ['a.*', 'b.exact'],
+      validFrom: TS, validUntil: '2027-01-01T00:00:00Z', createdAt: TS, mandateId: 'mnd_root',
+    });
+    const sub = buildSubMandate(root, subKey, {
+      delegateId: 'tool', scope: ['a.narrow'],  // ⊆ a.*
+      validFrom: TS, validUntil: '2026-06-01T00:00:00Z', createdAt: TS, mandateId: 'mnd_sub',
+    });
+    expect(sub.depth).toBe(1);
+    expect(sub.parent_id).toBe('mnd_root');
+    const v = verifyMandate(sub, { atTime: TS, capabilityId: 'a.narrow', delegateId: 'tool' });
+    expect(v.valid).toBe(true);
+    expect(v.checks.parent_valid).toBe(true);
+    expect(mandateRootPrincipal(sub)).toBe('root-p');
+    // a single-hop root is byte-stable: no depth/parent keys
+    expect(root.depth).toBeUndefined();
+    expect(root.parent).toBeUndefined();
+  });
+
+  it('buildSubMandate refuses to widen scope or lengthen the window', () => {
+    const subKey = keypairFromSeed(Buffer.from(Array.from({ length: 32 }, (_, i) => i + 41)));
+    const root = buildMandate('root-p', key, {
+      delegateId: 'worker', scope: ['a.narrow'],
+      validFrom: TS, validUntil: '2026-06-01T00:00:00Z', createdAt: TS, mandateId: 'mnd_r2',
+    });
+    expect(() => buildSubMandate(root, subKey, {
+      delegateId: 'tool', scope: ['a.*'],  // wider
+      validFrom: TS, validUntil: '2026-05-01T00:00:00Z', createdAt: TS,
+    })).toThrow(/attenuation_scope/);
+    expect(() => buildSubMandate(root, subKey, {
+      delegateId: 'tool', scope: ['a.narrow'],
+      validFrom: TS, validUntil: '2027-01-01T00:00:00Z', createdAt: TS,  // longer
+    })).toThrow(/attenuation_window/);
+  });
+
+  it('cross-verifies the Python-signed mandate-chain vector', () => {
+    const dir = fileURLToPath(new URL('../../../spec/test-vectors/', import.meta.url));
+    const sub = JSON.parse(readFileSync(dir + 'mandate-chain.json', 'utf8'));
+    const v = verifyMandate(sub, { atTime: sub.valid_from, capabilityId: 'demo.echo',
+      delegateId: sub.delegate_id });
+    expect(v.valid).toBe(true);
+    expect(v.checks.parent_valid).toBe(true);
+    expect(mandateRootPrincipal(sub)).toBe('vector-principal');
   });
 
   it('buildMandateRevocation → verifyMandateRevocation; revokes under verifyMandate', () => {

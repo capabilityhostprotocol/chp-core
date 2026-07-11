@@ -1671,6 +1671,103 @@ async def check_mandate_gate(host: Any) -> None:
         f"tampered mandate must be mandate_invalid, got {_denial_code(tampered)!r}")
 
 
+async def check_sub_delegation(host: Any) -> None:
+    """v0.2 §10 Sub-delegation (proposal 0009): attenuation-only mandate chains.
+    The runner plays ROOT principal, an intermediate re-delegates a NARROWED
+    slice to the caller, and the host walks the chain: a valid chain succeeds
+    with the root principal in the evidence subject; a widened-scope or
+    lengthened-window chain is mandate_invalid; revoking the ROOT kills the
+    sub."""
+    import base64
+    import json as _json
+    import urllib.error
+    import urllib.request
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from chp_core import signing
+    from chp_core.types import utc_now
+
+    probe = await invoke_host(host, "conformance.echo", {"value": "probe"},
+                              correlation={"correlation_id": f"{RUN}-conf-subdel-probe"})
+    assert result_value(probe, "outcome") == "success", f"probe failed: {probe}"
+    probe_subj = (host.replay(f"{RUN}-conf-subdel-probe")[0].get("subject") or {})
+    caller = probe_subj.get("id") if probe_subj.get("verified") else "conformance-runner"
+
+    def _key():
+        priv = ed25519.Ed25519PrivateKey.generate()
+        pub = base64.b64encode(priv.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+        return signing.HostKey(key_id=signing.key_id_for(base64.b64decode(pub)),
+                               public_key_b64=pub, _private=priv)
+
+    root_key, mid_key = _key(), _key()
+    now = datetime.now(timezone.utc)
+
+    def _iso(dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    root = signing.build_mandate(
+        "subdel-root", root_key, delegate_id="subdel-middle",
+        scope=["conformance.echo", "conformance.other"],
+        valid_from=_iso(now - timedelta(minutes=1)),
+        valid_until=_iso(now + timedelta(hours=2)), created_at=_iso(now))
+
+    def _sub(scope, hours=1):
+        return signing.build_sub_mandate(
+            root, mid_key, delegate_id=caller, scope=scope,
+            valid_from=_iso(now - timedelta(minutes=1)),
+            valid_until=_iso(now + timedelta(hours=hours)), created_at=_iso(now))
+
+    # 1. Valid narrowed chain → success; the subject records the ROOT principal.
+    sub = _sub(["conformance.echo"])
+    ok = await invoke_host(host, "conformance.echo", {"value": "chained"},
+                           correlation={"correlation_id": f"{RUN}-conf-subdel-ok"},
+                           mandate=sub)
+    assert result_value(ok, "outcome") == "success", f"valid chain failed: {ok}"
+    subj = (host.replay(f"{RUN}-conf-subdel-ok")[0].get("subject") or {})
+    assert subj.get("id") == caller and subj.get("principal") == "subdel-middle", (
+        f"subject must bind the leaf delegate under its immediate principal: {subj}")
+    assert subj.get("root_principal") == "subdel-root", (
+        f"subject must record the chain's root principal: {subj}")
+
+    # 2. Widened scope (tampered after signing) → mandate_invalid.
+    widened = _sub(["conformance.echo"])
+    widened["scope"] = ["conformance.echo", "conformance.other"]  # broader than the sub granted
+    dw = await invoke_host(host, "conformance.echo", {"value": "x"}, mandate=widened)
+    assert _denial_code(dw) == "mandate_invalid", (
+        f"a widened chain must be mandate_invalid, got {_denial_code(dw)!r}")
+
+    # 3. Lengthened window (re-signed so the leaf signature passes) →
+    # mandate_invalid on attenuation_window.
+    longer = _sub(["conformance.echo"])
+    longer["valid_until"] = _iso(now + timedelta(hours=10))  # beyond the root's 2h
+    longer["signature"]["signature"] = signing._sign(
+        mid_key._private, signing._canon(signing.mandate_header(longer)))
+    dl = await invoke_host(host, "conformance.echo", {"value": "x"}, mandate=longer)
+    assert _denial_code(dl) == "mandate_invalid", (
+        f"a lengthened-window chain must be mandate_invalid, got {_denial_code(dl)!r}")
+
+    # 4. Revoke the ROOT → the sub is now mandate_invalid (suffix-kill). Only a
+    # wire host exposes /revocations; skip the revocation leg otherwise.
+    base = getattr(host, "_base", None)
+    if base:
+        api_key = getattr(host, "_api_key", None)
+        rev = signing.build_mandate_revocation(root, root_key, revoked_at=utc_now())
+        req = urllib.request.Request(
+            f"{base}/revocations", data=_json.dumps(rev).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"X-CHP-Key": api_key} if api_key else {})}, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            assert _json.loads(resp.read())["accepted"] is True
+        revoked = await invoke_host(host, "conformance.echo", {"value": "x"},
+                                    mandate=_sub(["conformance.echo"]))
+        assert _denial_code(revoked) == "mandate_invalid", (
+            f"revoking the root must kill the sub, got {_denial_code(revoked)!r}")
+
+
 async def check_witness_roundtrip(host: Any) -> None:
     """v0.2 §12: the witness exchange. The runner plays WITNESS with a fresh
     key the host has never met: GET /head → sign a chain-witness statement →
@@ -2006,6 +2103,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("mandate revocation (v0.2 §10, proposal 0007)", check_mandate_revocation),
     ("streaming invocation (binding, proposal 0006)", check_streaming_invocation),
     ("idempotent replay (v0.2 §13, proposal 0008)", check_idempotent_replay),
+    ("sub-delegation (v0.2 §10, proposal 0009)", check_sub_delegation),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

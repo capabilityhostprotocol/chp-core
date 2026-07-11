@@ -769,6 +769,56 @@ def cmd_mandate_issue(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mandate_delegate(args: argparse.Namespace) -> int:
+    """Sub-delegation (§10, proposal 0009): attenuate a PARENT mandate into a
+    narrower sub-mandate. The signer is the parent's delegate acting as a
+    sub-principal — the key must attest the parent's delegate_id. Attenuation
+    (scope ⊆ parent, window ⊆ parent) is enforced at build (fail fast)."""
+    import sys
+    from datetime import datetime, timedelta, timezone
+
+    from .. import signing
+    from ..types import utc_now
+
+    with open(args.parent) as fh:
+        parent = json.load(fh)
+    sub_principal = str(parent.get("delegate_id") or "")
+    key_dir = args.key_dir or signing.resolve_key_dir(sub_principal)
+    key = signing.load_host_key(key_dir)
+    if key is None or not key.can_sign:
+        print(f"no signing key for the parent's delegate {sub_principal!r} in {key_dir} "
+              f"— the sub-principal must hold the delegate key", file=sys.stderr)
+        return 1
+    anchors = signing.load_configured_anchors(key_dir) or None
+
+    now = utc_now()
+    valid_until = args.valid_until
+    if valid_until is None:
+        base = datetime.fromisoformat(now.replace("Z", "+00:00"))
+        valid_until = (base + timedelta(hours=float(args.ttl_hours))).astimezone(
+            timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        sub = signing.build_sub_mandate(
+            parent, key, delegate_id=args.delegate,
+            scope=[s for s in (e.strip() for e in args.scope.split(",")) if s],
+            valid_from=now, valid_until=valid_until, created_at=now, anchors=anchors)
+    except ValueError as exc:
+        print(f"attenuation error: {exc}", file=sys.stderr)
+        return 1
+    text = json.dumps(sub, indent=2, sort_keys=True) + "\n"
+    if args.out:
+        from pathlib import Path
+        Path(args.out).write_text(text)
+        print(json.dumps({"mandate_id": sub["mandate_id"], "depth": sub["depth"],
+                          "parent_id": sub["parent_id"], "delegate_id": args.delegate,
+                          "scope": sub["scope"], "valid_until": valid_until,
+                          "root_principal": signing.mandate_root_principal(sub),
+                          "written": args.out}, indent=2))
+    else:
+        print(text, end="")
+    return 0
+
+
 def cmd_mandate_verify(args: argparse.Namespace) -> int:
     from .. import signing
 
