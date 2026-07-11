@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import { StreamResult } from './types.js';
@@ -138,6 +138,10 @@ export class LocalCapabilityHost {
     outcome: string | null = null,
     extra: { denial?: DenialReason; error?: JsonValue } = {},
   ): EvidenceEvent {
+    // Selective disclosure (§14): new events are born under chp-event-hash-v2 —
+    // the content_hash commits to sha256(payload), so this payload can later be
+    // withheld from a bundle without breaking verification.
+    const finalPayload = stringifyFloats(payload);
     const ev: EvidenceEvent = {
       event_id: newId('evt'),
       event_type: eventType,
@@ -147,7 +151,9 @@ export class LocalCapabilityHost {
       correlation: env.correlation as EvidenceEvent['correlation'],
       timestamp: nowIso(),
       outcome,
-      payload: stringifyFloats(payload),
+      payload: finalPayload,
+      hash_scheme: EVENT_HASH_V2,
+      payload_commitment: payloadCommitment(finalPayload),
       ...(extra.denial ? { denial: extra.denial as unknown as JsonValue } : {}),
       ...(extra.error ? { error: extra.error } : {}),
       subject: env.subject ?? { id: 'local', type: 'user' },

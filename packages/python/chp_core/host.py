@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable
 
 MAX_REPLAY_LIMIT = 10_000
 
-from .store import SQLiteEvidenceStore
+from .store import EVENT_HASH_V2, SQLiteEvidenceStore, _payload_commitment
 from .decorators import adapt_callable, get_capability_descriptor
 from .policy import PolicyConfig, evaluate_policy, load_policy
 from .redaction import redact_payload
@@ -891,6 +891,15 @@ class LocalCapabilityHost:
         error: JSON | None = None,
         denial: DenialReason | None = None,
     ) -> ExecutionEvidence:
+        # chp-stable-v1 forbids floats in canonicalized (hashed) content — float
+        # serialization diverges across languages (Python 0.0 vs JS 0), which
+        # would silently break cross-language verification. Normalize any float to
+        # its string form at the single emission boundary so no emitter can produce
+        # unverifiable evidence. Non-hashed surfaces (InvocationResult.data, OTel
+        # attrs) keep the float.
+        final_payload = _stringify_floats(
+            redact_payload(payload or {}) if redacted else (payload or {})
+        )
         event = ExecutionEvidence(
             event_id=new_id("evt"),
             event_type=event_type,
@@ -901,20 +910,18 @@ class LocalCapabilityHost:
             correlation=envelope.correlation,
             timestamp=utc_now(),
             outcome=outcome,  # type: ignore[arg-type]
-            # chp-stable-v1 forbids floats in canonicalized (hashed) content —
-            # float serialization diverges across languages (Python 0.0 vs JS 0),
-            # which would silently break cross-language verification. Normalize any
-            # float to its string form at the single emission boundary so no
-            # emitter can produce unverifiable evidence. Non-hashed surfaces
-            # (InvocationResult.data, OTel attrs) keep the float.
-            payload=_stringify_floats(
-                redact_payload(payload or {}) if redacted else (payload or {})
-            ),
+            payload=final_payload,
             redacted=redacted,
             error=error,
             denial=denial,
             subject=envelope.subject,
             assurance=AssuranceMetadata(),
+            # Selective disclosure (chp-v0.2.md §14): new events are born under
+            # chp-event-hash-v2 — the content_hash commits to sha256(payload) so
+            # this payload can later be withheld from a bundle without breaking
+            # verification. Existing v1 events are untouched.
+            hash_scheme=EVENT_HASH_V2,
+            payload_commitment=_payload_commitment(final_payload),
         )
         return self.store.append(event)  # type: ignore[return-value]
 

@@ -1,0 +1,24 @@
+{
+  "content_hash": "d43fd1c2609e04c9c4b15179c0ee37b17a95b63e0d34d0b4316a42a9c23c96e1",
+  "event": {
+    "capability_id": "demo.cap",
+    "correlation": {
+      "causation_id": null,
+      "correlation_id": "corr_test"
+    },
+    "event_id": "evt_test0002",
+    "event_type": "execution_started",
+    "hash_scheme": "chp-event-hash-v2",
+    "host_id": "vector-host",
+    "invocation_id": "inv_test0002",
+    "outcome": null,
+    "payload": {
+      "note": "caf\u00e9"
+    },
+    "payload_commitment": "4fccc2f736d4f0658f6620209643fa71be57f8b0caed76a1e8fbf1d531092943",
+    "timestamp": "2026-01-01T00:00:00Z"
+  },
+  "note": "chp-event-hash-v2 (chp-v0.2.md 14): the content_hash commits to payload_commitment = sha256(chp-stable-v1(payload)) in place of the inline payload, so the payload can be withheld from a bundle.",
+  "payload_commitment": "4fccc2f736d4f0658f6620209643fa71be57f8b0caed76a1e8fbf1d531092943",
+  "prev_hash": null
+}

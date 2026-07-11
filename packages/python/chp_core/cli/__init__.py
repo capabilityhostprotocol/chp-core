@@ -23,6 +23,8 @@ from ._core import (
     cmd_rotate_key,
     cmd_replay,
     cmd_retention_apply,
+    cmd_bundle_minimize,
+    cmd_bundle_verify,
     cmd_revocation_verify,
     cmd_store_backup,
     cmd_serve_demo,
@@ -773,6 +775,29 @@ def build_parser() -> argparse.ArgumentParser:
     rev_verify.add_argument("--key-dir", default=None, dest="key_dir",
                             help="Also include this host's key revocations from key-dir.")
     rev_verify.set_defaults(func=cmd_revocation_verify)
+
+    # chp bundle — selective disclosure (spec §14, proposal 0011)
+    bundle_p = subcommands.add_parser(
+        "bundle",
+        help="Selective disclosure: withhold payloads from a signed bundle / verify one (spec §14, proposal 0011).")
+    bundle_sub = bundle_p.add_subparsers(dest="bundle_command", required=True)
+    b_min = bundle_sub.add_parser(
+        "minimize",
+        help="Withhold chp-event-hash-v2 payloads from a signed bundle (root + signature unchanged).")
+    b_min.add_argument("bundle", help="Path to a signed bundle JSON.")
+    b_min.add_argument("--out", default=None, help="Write the minimized bundle here (default stdout).")
+    b_min.add_argument("--capability", action="append", default=None,
+                       help="Only withhold events for this capability_id (repeatable). Default: all v2 events.")
+    b_min.add_argument("--event", action="append", default=None,
+                       help="Only withhold this event_id (repeatable).")
+    b_min.set_defaults(func=cmd_bundle_minimize)
+    b_ver = bundle_sub.add_parser(
+        "verify",
+        help="Verify a bundle: per-scheme hash recompute, root, signature, and disclosed-payload commitment bind.")
+    b_ver.add_argument("bundle", help="Path to a bundle JSON.")
+    b_ver.add_argument("--key-id", default=None, dest="key_id",
+                       help="Pin the expected signer key_id.")
+    b_ver.set_defaults(func=cmd_bundle_verify)
 
     keygen_p = subcommands.add_parser("keygen", help="Generate a host ed25519 signing keypair.")
     keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
