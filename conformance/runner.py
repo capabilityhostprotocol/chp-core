@@ -158,6 +158,22 @@ async def build_passing_host() -> LocalCapabilityHost:
         ),
         echo,
     )
+
+    async def stream(_ctx, _payload):
+        from chp_core.types import StreamResult
+        yield "s1"
+        yield "s2"
+        yield "s3"
+        yield StreamResult({"chunks": 3, "joined": "s1s2s3"})
+
+    host.register(
+        CapabilityDescriptor(
+            id="conformance.stream", version="1.0.0",
+            description="Stream three deterministic chunks.",
+            modes=["sync", "stream"],
+        ),
+        stream,
+    )
     return host
 
 
@@ -1723,6 +1739,185 @@ async def check_witness_roundtrip(host: Any) -> None:
         assert exc.code in (400, 409), f"expected 400/409 refusal, got {exc.code}"
 
 
+async def check_mandate_revocation(host: Any) -> None:
+    """v0.2 §10 Revocation (proposal 0007): withdrawing authority before
+    expiry. The runner plays PRINCIPAL: a mandated invoke succeeds; the
+    principal's revocation POSTs and is served back; the SAME mandate is now
+    a PROCESSED mandate_invalid denial. A forged revocation — another key
+    impersonating the principal block — must be inert: refused at POST or,
+    if the impostor self-signs consistently, accepted-but-never-revoking
+    (the issuer-only key match at gate 5 is the real defense)."""
+    import base64
+    import json as _json
+    import urllib.error
+    import urllib.request
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from chp_core import signing
+    from chp_core.types import utc_now
+
+    base = getattr(host, "_base", None)
+    assert base, "revocation check requires a wire host"
+    api_key = getattr(host, "_api_key", None)
+
+    def _req(path: str, body=None):
+        req = urllib.request.Request(
+            f"{base}{path}",
+            data=_json.dumps(body).encode() if body is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"X-CHP-Key": api_key} if api_key else {})},
+            method="POST" if body is not None else "GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return _json.loads(resp.read().decode())
+
+    def _fresh_key():
+        priv = ed25519.Ed25519PrivateKey.generate()
+        pub = base64.b64encode(priv.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+        return signing.HostKey(key_id=signing.key_id_for(base64.b64decode(pub)),
+                               public_key_b64=pub, _private=priv)
+
+    probe = await invoke_host(host, "conformance.echo", {"value": "probe"},
+                              correlation={"correlation_id": f"{RUN}-conf-rev-probe"})
+    assert result_value(probe, "outcome") == "success", f"probe invoke failed: {probe}"
+    probe_subj = (host.replay(f"{RUN}-conf-rev-probe")[0].get("subject") or {})
+    delegate = probe_subj.get("id") if probe_subj.get("verified") else "conformance-runner"
+
+    key = _fresh_key()
+    now = datetime.now(timezone.utc)
+
+    def _iso(dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _mandate(k) -> dict:
+        return signing.build_mandate(
+            "conformance-principal", k, delegate_id=delegate,
+            scope=["conformance.echo"],
+            valid_from=_iso(now - timedelta(minutes=1)),
+            valid_until=_iso(now + timedelta(hours=1)),
+            created_at=_iso(now))
+
+    mandate = _mandate(key)
+
+    # 1. The mandate works before revocation.
+    ok = await invoke_host(host, "conformance.echo", {"value": "pre-revocation"},
+                           mandate=mandate)
+    assert result_value(ok, "outcome") == "success", f"mandated invoke failed: {ok}"
+
+    # 2. The principal revokes; the host verifies, persists, serves it back.
+    stmt = signing.build_mandate_revocation(
+        mandate, key, revoked_at=utc_now(), reason="conformance")
+    accepted = _req("/revocations", stmt)
+    assert accepted.get("accepted") is True, f"revocation must be accepted: {accepted}"
+    served = _req("/revocations")
+    assert mandate["mandate_id"] in [m.get("mandate_id")
+                                     for m in served.get("mandates", [])], (
+        "the accepted revocation must be served back")
+
+    # 3. The SAME mandate is now mandate_invalid (PROCESSED, HTTP 200).
+    denied = await invoke_host(host, "conformance.echo", {"value": "post-revocation"},
+                               mandate=mandate)
+    assert result_value(denied, "outcome") == "denied", (
+        f"revoked mandate must deny: {denied}")
+    assert _denial_code(denied) == "mandate_invalid", (
+        f"revoked mandate must be mandate_invalid, got {_denial_code(denied)!r}")
+
+    # 4a. A TAMPERED statement (broken signature) is refused, never stored.
+    fresh = _mandate(key)
+    bad = signing.build_mandate_revocation(fresh, key, revoked_at=utc_now())
+    bad["mandate_id"] = "mnd_retargeted"
+    try:
+        _req("/revocations", bad)
+        raise AssertionError("an unverifiable revocation must be refused")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 400, f"expected 400 refusal, got {exc.code}"
+
+    # 4b. A FORGED statement (impostor key, self-consistent) must be inert:
+    # whatever the host does at POST, the fresh mandate keeps working.
+    impostor = _fresh_key()
+    impostor_mandate = signing.build_mandate(
+        "conformance-principal", impostor, delegate_id=delegate,
+        scope=["conformance.echo"],
+        valid_from=fresh["valid_from"], valid_until=fresh["valid_until"],
+        created_at=fresh["created_at"], mandate_id=fresh["mandate_id"])
+    forged = signing.build_mandate_revocation(
+        impostor_mandate, impostor, revoked_at=utc_now(), reason="forgery attempt")
+    try:
+        _req("/revocations", forged)
+    except urllib.error.HTTPError:
+        pass  # refusing a forgery outright is also conformant
+    still_ok = await invoke_host(host, "conformance.echo", {"value": "not-revoked"},
+                                 mandate=fresh)
+    assert result_value(still_ok, "outcome") == "success", (
+        "a revocation signed by a non-issuer key must revoke NOTHING "
+        f"(issuer-only rule): {still_ok}")
+
+
+async def check_streaming_invocation(host: Any) -> None:
+    """Proposal 0006 on the wire (binding "Streaming invocations"):
+    mode:"stream" answers text/event-stream with `chunk` frames and exactly
+    one terminal `result` frame carrying a standard InvocationResult — and a
+    DENIED streaming invoke answers plain JSON (a denial never commits to
+    SSE; the client switches on Content-Type). Sync-mode invocation of the
+    streaming fixture degrades gracefully."""
+    import json as _json
+    import urllib.request
+
+    base = getattr(host, "_base", None)
+    assert base, "streaming check requires a wire host"
+    api_key = getattr(host, "_api_key", None)
+
+    def _post_raw(body: dict):
+        req = urllib.request.Request(
+            f"{base}/invoke", data=_json.dumps(body).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"X-CHP-Key": api_key} if api_key else {})},
+            method="POST")
+        resp = urllib.request.urlopen(req, timeout=30)
+        return resp.headers.get("Content-Type", ""), resp.read().decode()
+
+    # 1. Streaming success: SSE with chunk frames + one terminal result frame.
+    ctype, raw = _post_raw({"capability_id": "conformance.stream",
+                            "mode": "stream", "payload": {}})
+    assert "text/event-stream" in ctype, (
+        f"mode=stream must answer text/event-stream, got {ctype!r}")
+    chunks: list = []
+    result = None
+    event = None
+    for line in raw.splitlines():
+        if line.startswith("event: "):
+            event = line[len("event: "):].strip()
+        elif line.startswith("data: "):
+            data = _json.loads(line[len("data: "):])
+            if event == "chunk":
+                chunks.append(data.get("delta"))
+            elif event == "result":
+                assert result is None, "exactly ONE terminal result frame"
+                result = data
+    assert chunks == ["s1", "s2", "s3"], f"expected the fixture chunks, got {chunks}"
+    assert result is not None, "the stream must end with a result frame"
+    assert result.get("outcome") == "success", f"terminal result must succeed: {result}"
+    assert (result.get("data") or {}).get("joined") == "s1s2s3", (
+        f"terminal result carries the assembled data: {result.get('data')}")
+
+    # 2. A DENIED streaming invoke stays plain JSON (never commits to SSE).
+    ctype, raw = _post_raw({"capability_id": "conformance.unsafe",
+                            "mode": "stream", "payload": {}})
+    assert "application/json" in ctype, (
+        f"a denial must never commit to SSE, got {ctype!r}")
+    denied = _json.loads(raw)
+    assert denied.get("outcome") == "denied", f"expected processed denial: {denied}"
+
+    # 3. Sync-mode invocation of the streaming fixture degrades gracefully.
+    sync = await invoke_host(host, "conformance.stream", {})
+    assert result_value(sync, "outcome") == "success", f"sync degrade failed: {sync}"
+    data = result_value(sync, "data") or {}
+    assert data.get("joined") == "s1s2s3", f"sync mode returns the terminal data: {data}"
+
+
 WIRE_CHECKS: list[tuple[str, Check]] = [
     ("capability declaration", check_declaration),
     ("capability discovery", check_discovery),
@@ -1743,6 +1938,8 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("capability-scoped caller key (binding §2)", check_scoped_caller_key),
     ("mandate gate (v0.2 §10)", check_mandate_gate),
     ("witness round-trip (v0.2 §12)", check_witness_roundtrip),
+    ("mandate revocation (v0.2 §10, proposal 0007)", check_mandate_revocation),
+    ("streaming invocation (binding, proposal 0006)", check_streaming_invocation),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

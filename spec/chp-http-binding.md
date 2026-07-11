@@ -1,6 +1,6 @@
 # Capability Host Protocol — HTTP Binding (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.5 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.6 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). Normative binding of the CHP object model
 ([v0.1](chp-v0.1.md)) onto HTTP, so a host in any language is wire-compatible
 with the reference `RemoteCapabilityHost` client and the black-box conformance
 runner (`conformance/runner.py --url`). CHP is transport-agnostic; this is the
@@ -94,6 +94,8 @@ balancers; every other route requires auth (§2).
 | GET | `/head` | required | — | the witnessable store head `{host_id, scheme, sequence, store_head, at}` (chp-v0.2.md §12; authed — the sequence discloses activity volume) |
 | POST | `/witness` | required | `chain-witness` statement | `{accepted, sequence, witness}`; the host MUST verify the signature AND recompute its own head at that sequence before persisting (400 `invalid_witness` / 409 `head_mismatch`) |
 | GET | `/witnesses` | required | — | `{witnesses: [chain-witness…]}` — received countersignatures over this host's history (statements only; leaf snapshots stay local) |
+| GET | `/revocations` | required | — | `{keys: [key-revocation…], mandates: [mandate-revocation…]}` — the revocation set this host holds (chp-v0.2.md §10; keys per §3.2) |
+| POST | `/revocations` | required | `mandate-revocation` statement | `{accepted, mandate_id, principal}`; the host MUST verify the statement (signature + attestation) before persisting (400 `invalid_revocation`) — never store an unverifiable revocation |
 
 `/invoke` accepts a convenience form: a top-level `correlation_id` is lifted into
 `correlation.correlation_id`. Responses are JSON with sorted keys.

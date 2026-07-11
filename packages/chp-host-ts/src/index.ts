@@ -11,4 +11,5 @@ export { InMemoryEvidenceStore } from './store.js';
 export { RuleBasedSafetyEvaluator, type Guardrail } from './safety.js';
 export { createHostServer } from './server.js';
 export { buildFixtureHost } from './fixtures.js';
+export { StreamResult } from './types.js';
 export type * from './types.js';

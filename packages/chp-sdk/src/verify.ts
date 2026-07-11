@@ -378,11 +378,63 @@ export function scopeAllows(scope: JsonValue[], capabilityId: string): boolean {
 /** Offline-verify a mandate: structure, header signature, principal attestation
  * (binding + temporal), DID anchor when present, the validity window at
  * `atTime`, delegate binding, and — when `capabilityId` is supplied — scope. */
+const MANDATE_REVOCATION_VERIFY_FIELDS = [
+  'kind', 'mandate_id', 'revoked_at', 'reason', 'canonicalization',
+] as const;
+
+/** Offline-verify a mandate-revocation statement (§10, proposal 0007):
+ * structure, header signature, principal attestation. SELF-consistency only —
+ * whether it revokes a GIVEN mandate is `verifyMandate({revocations})`, which
+ * checks the signature against the MANDATE's principal key (issuer-only). */
+export function verifyMandateRevocation(
+  statement: Record<string, JsonValue>,
+  opts: { expectedPrincipalKey?: string } = {},
+): BundleVerification {
+  const checks: Record<string, boolean> = {};
+  let anchoredDid: string | null = null;
+  checks.structure = statement.kind === 'mandate-revocation'
+    && !!statement.mandate_id && !!statement.revoked_at;
+
+  const principal = (statement.principal as Record<string, JsonValue> | undefined) ?? {};
+  const pubKey = String(principal.public_key ?? '');
+  const sig = (statement.signature as Record<string, JsonValue> | undefined) ?? {};
+  if (opts.expectedPrincipalKey !== undefined && sig.key_id !== opts.expectedPrincipalKey) {
+    return { valid: false, assurance: 'signed', checks, reason: `signed by unexpected key ${String(sig.key_id)}` };
+  }
+
+  const header: Record<string, JsonValue> = {};
+  for (const f of MANDATE_REVOCATION_VERIFY_FIELDS) header[f] = statement[f] ?? null;
+  checks.signature = sig.algorithm === 'ed25519' && !!pubKey
+    && verifyCanon(pubKey, header, String(sig.signature ?? ''));
+
+  const att = principal.host_identity as Record<string, JsonValue> | undefined;
+  if (att) {
+    checks.principal_identity = attestationOk(
+      att, pubKey, String(principal.host_id ?? ''),
+      (statement.revoked_at as string | null) ?? null);
+    const dAnchor = didAnchor(att);
+    if (dAnchor) {
+      checks.did_anchor = verifyDidAnchor(dAnchor, pubKey, String(principal.host_id ?? ''));
+      if (checks.did_anchor) anchoredDid = dAnchor.did as string;
+    }
+  } else {
+    checks.principal_identity = false; // a revocation must say WHOSE authority
+  }
+
+  const valid = Object.values(checks).every(Boolean);
+  return {
+    valid, assurance: 'signed', checks, anchoredDid,
+    reason: valid ? undefined : 'mandate-revocation checks failed: '
+      + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
+  };
+}
+
 export function verifyMandate(
   mandate: Record<string, JsonValue>,
   opts: {
     atTime?: string; capabilityId?: string;
     delegateId?: string; expectedPrincipalKey?: string;
+    revocations?: Record<string, JsonValue>[];
   } = {},
 ): BundleVerification {
   const checks: Record<string, boolean> = {};
@@ -428,6 +480,20 @@ export function verifyMandate(
   }
   if (opts.capabilityId !== undefined) {
     checks.scope = scopeAllows((mandate.scope as JsonValue[]) ?? [], opts.capabilityId);
+  }
+  if (opts.revocations !== undefined) {
+    // Issuer-only rule (§10 Revocation): the revocation signature is verified
+    // against the MANDATE's principal key, never the statement's self-declared
+    // key — otherwise anyone could revoke anyone by naming the mandate_id.
+    checks.not_revoked = !opts.revocations.some((r) => {
+      if (r.kind !== 'mandate-revocation' || r.mandate_id !== mandate.mandate_id) return false;
+      const rp = (r.principal as Record<string, JsonValue> | undefined) ?? {};
+      if (String(rp.public_key ?? '') !== pubKey) return false;
+      const rHeader: Record<string, JsonValue> = {};
+      for (const f of MANDATE_REVOCATION_VERIFY_FIELDS) rHeader[f] = r[f] ?? null;
+      const rSig = (r.signature as Record<string, JsonValue> | undefined) ?? {};
+      return verifyCanon(pubKey, rHeader, String(rSig.signature ?? ''));
+    });
   }
 
   const valid = Object.values(checks).every(Boolean);

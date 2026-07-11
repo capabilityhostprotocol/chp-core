@@ -8,12 +8,17 @@ import { randomBytes } from 'node:crypto';
 import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
+import { StreamResult } from './types.js';
 import type {
   CapabilityDescriptor, Correlation, Ctx, DenialReason, Handler,
   InvocationEnvelope, InvocationResult, JsonValue, PolicyConfig, RiskTier,
 } from './types.js';
 
 const RISK_ORDER: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+
+function isAsyncGenerator(v: unknown): v is AsyncGenerator<JsonValue | StreamResult, void, unknown> {
+  return !!v && typeof (v as AsyncGenerator<unknown>)[Symbol.asyncIterator] === 'function';
+}
 const newId = (p: string): string => `${p}_${randomBytes(8).toString('hex')}`;
 const nowIso = (): string => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
 
@@ -35,6 +40,9 @@ export class LocalCapabilityHost {
   readonly store = new InMemoryEvidenceStore();
   private readonly caps = new Map<string, Registered>();
   private readonly attestation: JsonValue | null;
+  /** Received mandate revocations (§10 Revocation) — in-memory for this
+   * conformance host; gate 5 consults them under the issuer-only rule. */
+  readonly mandateRevocations: Record<string, JsonValue>[] = [];
 
   constructor(
     readonly hostId = 'ts-chp-host',
@@ -181,7 +189,12 @@ export class LocalCapabilityHost {
     return this.result(env, { outcome: 'skipped', success: false, evidence_ids: [e.event_id] });
   }
 
-  async ainvokeEnvelope(input: InvocationEnvelope): Promise<InvocationResult> {
+  /** Gates 1–10 shared by the sync and stream paths (Python `_prepare`
+   * parity — ONE gate pipeline, no drift). Returns the normalized envelope,
+   * the resolved capability, and the early result when a gate decided. */
+  private prepare(input: InvocationEnvelope): {
+    env: InvocationEnvelope; entry: Registered | null; early: InvocationResult | null;
+  } {
     const env: InvocationEnvelope = {
       mode: 'sync',
       payload: {},
@@ -190,10 +203,11 @@ export class LocalCapabilityHost {
       invocation_id: input.invocation_id ?? newId('inv'),
       correlation: (input.correlation as Correlation) ?? { correlation_id: newId('corr') },
     };
+    const decided = (early: InvocationResult) => ({ env, entry: null, early });
 
     // Gate 1: non-empty id
     if (!env.capability_id || !env.capability_id.trim()) {
-      return this.deny(env, { code: 'capability_not_found', message: 'capability_id must be non-empty', retryable: false });
+      return decided(this.deny(env, { code: 'capability_not_found', message: 'capability_id must be non-empty', retryable: false }));
     }
     // Gate 2: resolution
     const entry = this.caps.get(env.capability_id);
@@ -214,23 +228,23 @@ export class LocalCapabilityHost {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
         .map(([id]) => id);
-      return this.deny(env, {
+      return decided(this.deny(env, {
         code: 'capability_not_found',
         message: `Capability not found: ${env.capability_id}`,
         retryable: false,
         details: { suggestions, hint: 'GET /capabilities lists every registered capability' },
-      });
+      }));
     }
     const d = entry.descriptor;
     env.version = d.version;
     // Gate 3: enabled → SKIP (not deny)
     if (!entry.enabled) {
-      return this.skip(env, 'capability_disabled', `Capability disabled: ${d.id}:${d.version}`);
+      return decided(this.skip(env, 'capability_disabled', `Capability disabled: ${d.id}:${d.version}`));
     }
     // Gate 4: mode
     const modes = d.modes ?? ['sync'];
     if (!modes.includes(env.mode!)) {
-      return this.deny(env, { code: 'unsupported_mode', message: `mode ${env.mode} unsupported`, retryable: false });
+      return decided(this.deny(env, { code: 'unsupported_mode', message: `mode ${env.mode} unsupported`, retryable: false }));
     }
     // Gate 5: mandate (§10) — verify at HOST time, bind delegate to any
     // transport-verified caller, narrow to scope, rebind the subject.
@@ -239,22 +253,23 @@ export class LocalCapabilityHost {
       const verifiedCaller = subj.verified ? String(subj.id ?? '') : undefined;
       const mv = verifyMandate(env.mandate, {
         atTime: nowIso(),
+        revocations: this.mandateRevocations,
         ...(verifiedCaller !== undefined ? { delegateId: verifiedCaller } : {}),
       });
       if (!mv.valid) {
-        return this.deny(env, {
+        return decided(this.deny(env, {
           code: 'mandate_invalid',
           message: mv.reason ?? 'mandate failed verification',
           retryable: false,
           details: { checks: mv.checks, mandate_id: env.mandate.mandate_id ?? null },
-        });
+        }));
       }
       if (!scopeAllows((env.mandate.scope as JsonValue[]) ?? [], d.id)) {
-        return this.deny(env, {
+        return decided(this.deny(env, {
           code: 'policy_blocked',
           message: `capability '${d.id}' is outside mandate '${String(env.mandate.mandate_id)}'s scope`,
           retryable: false,
-        });
+        }));
       }
       const principal = (env.mandate.principal ?? {}) as Record<string, JsonValue>;
       env.subject = {
@@ -267,31 +282,52 @@ export class LocalCapabilityHost {
     }
     // Gate 6: policy
     const pd = this.checkPolicy(d);
-    if (pd) return this.deny(env, pd);
+    if (pd) return decided(this.deny(env, pd));
     // Gate 7: invariants
     const inv = this.checkInvariants(d, env);
-    if (inv) return this.deny(env, inv);
+    if (inv) return decided(this.deny(env, inv));
     // Gate 8: autonomy budget / approval
     const auto = this.checkAutonomy(d, env);
-    if (auto) return this.deny(env, auto);
+    if (auto) return decided(this.deny(env, auto));
     // Gate 9: input schema (minimal required-fields check; full JSON Schema out of scope)
     const sch = this.checkInputSchema(d, env);
-    if (sch) return this.deny(env, sch);
+    if (sch) return decided(this.deny(env, sch));
     // Gate 10: safety
     const saf = this.checkSafety(d, env);
-    if (saf) return this.deny(env, saf);
+    if (saf) return decided(this.deny(env, saf));
 
-    // Gate 11: execute
-    const started = this.emit('execution_started', env, { capability_uri: `${d.id}:${d.version}` }, null);
-    const ctx: Ctx = {
+    return { env, entry, early: null };
+  }
+
+  private executionContext(env: InvocationEnvelope): Ctx {
+    return {
       envelope: env,
       emit: (t, p, o = null) => this.emit(t, env, p, o),
       // Causal edge for work caused by this invocation — pass to remote calls
       // to extend the causal tree across hosts (chp-causal-order-v1).
       childCorrelation: () => ({ ...env.correlation!, causation_id: env.invocation_id! }),
     };
+  }
+
+  async ainvokeEnvelope(input: InvocationEnvelope): Promise<InvocationResult> {
+    const { env, entry, early } = this.prepare(input);
+    if (early) return early;
+    const d = entry!.descriptor;
+
+    // Gate 11: execute
+    const started = this.emit('execution_started', env, { capability_uri: `${d.id}:${d.version}` }, null);
+    const ctx = this.executionContext(env);
     try {
-      const data = await entry.handler(ctx, env.payload ?? {});
+      let data = await entry!.handler(ctx, env.payload ?? {});
+      if (isAsyncGenerator(data)) {
+        // A STREAMING handler invoked in sync mode: collect and return the
+        // terminal StreamResult's data (graceful degrade — proposal 0006).
+        let terminal: JsonValue = null;
+        for await (const item of data) {
+          if (item instanceof StreamResult) terminal = item.data;
+        }
+        data = terminal;
+      }
       const done = this.emit('execution_completed', env, { capability_uri: `${d.id}:${d.version}` }, 'success');
       return this.result(env, {
         outcome: 'success', success: true, capability_version: d.version,
@@ -305,6 +341,51 @@ export class LocalCapabilityHost {
         error: { type: (err as Error).name, message: (err as Error).message },
         evidence_ids: [started.event_id, failed.event_id], started_at: started.timestamp,
       });
+    }
+  }
+
+  /** Streaming invocation (proposal 0006, Python `ainvoke_stream` parity):
+   * yields `{chunk}` items then finally `{result}`. The SAME gate pipeline
+   * runs first (via `prepare`); a denial/skip yields the result IMMEDIATELY
+   * with no prior chunks — the binding uses that to answer plain JSON
+   * without committing to SSE. Evidence brackets the stream. A non-generator
+   * handler degrades to a single terminal result. */
+  async *ainvokeStream(input: InvocationEnvelope): AsyncGenerator<
+    { chunk: JsonValue } | { result: InvocationResult }, void, unknown
+  > {
+    const { env, entry, early } = this.prepare(input);
+    if (early) {
+      yield { result: early };
+      return;
+    }
+    const d = entry!.descriptor;
+
+    const started = this.emit('execution_started', env, { capability_uri: `${d.id}:${d.version}` }, null);
+    const ctx = this.executionContext(env);
+    try {
+      const raw = await entry!.handler(ctx, env.payload ?? {});
+      let data: JsonValue = null;
+      if (isAsyncGenerator(raw)) {
+        for await (const item of raw) {
+          if (item instanceof StreamResult) data = item.data;
+          else yield { chunk: item };
+        }
+      } else {
+        data = raw as JsonValue;
+      }
+      const done = this.emit('execution_completed', env, { capability_uri: `${d.id}:${d.version}` }, 'success');
+      yield { result: this.result(env, {
+        outcome: 'success', success: true, capability_version: d.version,
+        data, evidence_ids: [started.event_id, done.event_id], started_at: started.timestamp,
+      }) };
+    } catch (err) {
+      const failed = this.emit('execution_failed', env, { capability_uri: `${d.id}:${d.version}` }, 'failure',
+        { error: { type: (err as Error).name, message: (err as Error).message } });
+      yield { result: this.result(env, {
+        outcome: 'failure', success: false, capability_version: d.version,
+        error: { type: (err as Error).name, message: (err as Error).message },
+        evidence_ids: [started.event_id, failed.event_id], started_at: started.timestamp,
+      }) };
     }
   }
 
