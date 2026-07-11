@@ -59,22 +59,30 @@ retention, keep-alive client, circuit breaker, and operator metrics — see
   protocol: witnessing, revocation, streaming, and replay deserve worked,
   reproducible demonstrations.
 
-## Next (demand-gated)
+## Next — the planned protocol track
 
-Protocol changes go through [spec/proposals/](../spec/proposals/) and are
-deliberately demand-gated — these are named deferrals waiting for a concrete
-asker, not commitments:
+Every change still goes through [spec/proposals/](../spec/proposals/) with
+its conformance check, both reference implementations, and byte-identical
+published vectors. The planned sequence completes the protocol's remaining
+half-finished dimensions:
 
-- Sub-delegation / mandate attenuation; revocation gossip and freshness proofs
-- Witness quorum policies, witness-of-witness, transparency-log anchoring
-- Streaming replay, resumable streams; gateway-level (cross-owner) dedupe
-- Selective disclosure of evidence
-- `chp-jcs-v1` canonicalization (RFC 8785) as a non-breaking alternative
+- **Sub-delegation** — attenuation-only mandate chains (authority that can
+  only narrow), verified offline link-by-link
+- **Revocation freshness** — bind the revocation-set digest into witnessed
+  store heads, making "denial of revocation" detectable
+- **Selective disclosure** — redact payloads from a bundle while it still
+  verifies against the same signed root
+- **Streaming completion** — resumable streams and streaming replay
+- **Witness quorum + external anchoring** — k-of-n countersignatures,
+  transparency-log anchoring
+- **Gateway exactly-once** — cross-owner invocation dedupe
+- **1.0 readiness** — `chp-jcs-v1` (RFC 8785), wire-version negotiation,
+  compatibility statement, spec freeze
 
 ## Guiding Rules
 
 1. **Local visibility is free; production trust is the product.**
 2. **Everything additive** — a v0.1-only host stays conformant; published
    test vectors never change bytes.
-3. **Structure follows demand** — a proposal ships when someone needs it,
-   with its conformance check, or it stays a named deferral.
+3. **Every wire-visible change grows the conformance suite** — a feature
+   exists when both implementations prove it black-box.
