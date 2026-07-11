@@ -28,15 +28,16 @@ signing/signature-verification raise a clear error.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from .store import _compute_event_hash
+from .store import EVENT_HASH_V2, _compute_event_hash, _payload_commitment
 
 CANONICALIZATION = "chp-stable-v1"
 SIGNATURE_ALGORITHM = "ed25519"
@@ -649,6 +650,22 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None,
         expected_prev = stored_hash
     checks["event_hashes"] = chain_ok
 
+    # 1b. Selective disclosure (§14): a DISCLOSED chp-event-hash-v2 payload must
+    # match the commitment its content_hash bound. A WITHHELD payload
+    # ({"chp_withheld": true}) is skipped — the commitment alone secures the
+    # chain. v1 events carry no commitment and are not checked here.
+    commit_ok = True
+    for ev in events:
+        if ev.get("hash_scheme") != EVENT_HASH_V2:
+            continue
+        payload = ev.get("payload")
+        if isinstance(payload, dict) and payload.get("chp_withheld") is True:
+            continue  # withheld, not disclosed
+        if _payload_commitment(payload) != ev.get("payload_commitment"):
+            commit_ok = False
+            break
+    checks["payload_commitments"] = commit_ok
+
     # 2. Root hash binds the ordered set.
     checks["root_hash"] = bundle.get("root_hash") == compute_root_hash(events)
 
@@ -729,6 +746,24 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None,
     return BundleVerification(valid=valid, assurance=assurance, checks=checks,
                               reason=reason, anchored_domain=anchored_domain,
                               anchored_did=anchored_did)
+
+
+def withhold_payloads(bundle: dict, predicate: Callable[[dict], bool] | None = None) -> dict:
+    """Return a disclosure-minimized copy of a bundle (chp-v0.2.md §14): every
+    ``chp-event-hash-v2`` event for which ``predicate(event)`` is true has its
+    ``payload`` replaced by the marker ``{"chp_withheld": true}``, keeping its
+    ``payload_commitment`` and ``content_hash``. The root hash and signature are
+    UNCHANGED (both bind only ``content_hash``), so the ORIGINAL signature still
+    verifies the minimized bundle — no re-signing, no store mutation. ``predicate``
+    defaults to withholding every v2 event; v1 events carry no commitment and are
+    left intact (they cannot be withheld without breaking their hash)."""
+    if predicate is None:
+        predicate = lambda ev: True  # noqa: E731
+    out = copy.deepcopy(bundle)
+    for ev in out.get("events") or []:
+        if ev.get("hash_scheme") == EVENT_HASH_V2 and ev.get("payload_commitment") and predicate(ev):
+            ev["payload"] = {"chp_withheld": True}
+    return out
 
 
 # --------------------------------------------------------------------------

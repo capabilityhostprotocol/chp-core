@@ -721,6 +721,11 @@ class ExecutionEvidence:
     denial: DenialReason | None = None
     subject: JSON | None = None
     assurance: AssuranceMetadata = field(default_factory=AssuranceMetadata)
+    # Selective disclosure (chp-v0.2.md §14, proposal 0011). Absent = the default
+    # chp-event-hash-v1 (inline payload); both omit-when-None so v1 events serialize
+    # byte-identically.
+    hash_scheme: str | None = None
+    payload_commitment: str | None = None
 
     def to_dict(self) -> JSON:
         data = asdict(self)
@@ -730,6 +735,10 @@ class ExecutionEvidence:
             data["denial"] = self.denial.to_dict()
         if self.subject is None:
             data.pop("subject", None)
+        if self.hash_scheme is None:
+            data.pop("hash_scheme", None)
+        if self.payload_commitment is None:
+            data.pop("payload_commitment", None)
         return data
 
 

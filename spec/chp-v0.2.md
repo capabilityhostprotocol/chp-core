@@ -1,8 +1,10 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure 2026-07-11**). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
-evident evidence layer without changing the v0.1 local-first experience.
+evident evidence layer without changing the v0.1 local-first experience. v0.3.0
+adds the first *canon evolution* — a second, opt-in content-hash scheme
+(`chp-event-hash-v2`, §2 + §14) that leaves every v1 event byte-identical.
 
 Key words MUST, SHOULD, MAY per RFC 2119.
 
@@ -72,6 +74,19 @@ and signature (with a fixed key seed), plus `verify.mjs` — a stdlib-only Node
 verifier that validates a Python-signed bundle from these rules alone, proving
 cross-language interoperability. A future `chp-jcs-v1` (RFC 8785 JCS: compact,
 raw-UTF-8) MAY be added non-breakingly via the `canonicalization` field.
+
+**Content-hash schemes (`hash_scheme`).** The rule above is
+**`chp-event-hash-v1`** — the default, selected when an event carries **no**
+`hash_scheme` field (as every v0.1/v0.2 event does). v0.3.0 defines a second,
+opt-in scheme **`chp-event-hash-v2`** (§14, [proposals/0011](proposals/0011-selective-disclosure.md)):
+the stable object is identical except the `payload` member is replaced by
+`"payload_commitment": sha256(chp-stable-v1(payload))`, so the payload is
+committed by hash and can later be *withheld* from a bundle without changing the
+`content_hash`. An event names its scheme with the `hash_scheme` field; a
+verifier MUST recompute each event's hash under the scheme that event declares
+(so a chain MAY mix v1 and v2 events). The `canonicalization` field still names
+the **bundle-header** canon (`chp-stable-v1`); `hash_scheme` is the **per-event**
+content-hash rule — the two are orthogonal.
 
 Strict verification MUST fail on any event lacking a `content_hash`. Lenient
 verification MAY tolerate legacy unhashed events, but MUST NOT be the default
@@ -771,3 +786,56 @@ gateway's owner-failover reuse ONE `invocation_id` across attempts, making
 both provably safe against replay-conformant hosts. Distributed result
 caches, streaming replay, and an `invocation_replayed` evidence type are
 deliberately out of scope (named in proposal 0008).
+
+## 14. Selective Disclosure — Withholdable Payloads
+
+*(v0.3.0, [proposals/0011](proposals/0011-selective-disclosure.md).) The first
+canon evolution: a second content-hash scheme so a signed bundle can prove a
+correlation's control flow while **withholding** the payloads.*
+
+A `content_hash` under `chp-event-hash-v1` (§2) folds the raw `payload` inline,
+so verifying a bundle requires every payload — the bundle proves everything or
+nothing. **`chp-event-hash-v2`** commits to the payload by hash instead:
+
+- **The scheme.** An event under `chp-event-hash-v2` carries
+  `hash_scheme: "chp-event-hash-v2"` and a `payload_commitment` =
+  `sha256(chp-stable-v1(payload))` (lowercase hex). Its `content_hash` stable
+  object is the §2 object with the `payload` member **replaced by**
+  `payload_commitment`; everything else (field set, order, `chp-stable-v1`
+  serialization, `prev_hash` link, the root hash, the signature) is unchanged.
+  The commitment is over the payload canonicalized by the **same**
+  `chp-stable-v1` rules; the empty payload commits as the explicit object `{}`.
+- **Withholding.** A *disclosure-minimized* bundle replaces a v2 event's
+  `payload` with the marker `{"chp_withheld": true}` and keeps its
+  `payload_commitment` and `content_hash`. Because the root hash and signature
+  build only on `content_hash`, they are unchanged — **the original signature
+  still validates the minimized bundle**. Withholding requires no re-signing and
+  never mutates the store; any party holding a signed v2 bundle can produce a
+  minimized view of it.
+- **Verification.** For each v2 event a verifier recomputes `content_hash` from
+  the stable fields + `payload_commitment` (a withheld event verifies — the raw
+  payload is not needed). If the event still carries a real `payload`
+  (*disclosed*), the verifier MUST additionally check
+  `sha256(chp-stable-v1(payload)) == payload_commitment`, binding the disclosed
+  value to what was signed; a mismatch is `tampered`. v1 events verify exactly
+  as in §2.
+- **Coexistence.** `hash_scheme` is absent on every v1 event, so v1 chains,
+  store heads, witnessed receipts, and signed bundles are byte-identical and a
+  chain MAY mix v1 and v2 events (each self-describes; `prev_hash` links across
+  schemes). Hosts SHOULD stamp new events `chp-event-hash-v2` from v0.3.0;
+  existing events are not rewritten. A pre-0011 verifier correctly refuses a
+  **withheld** v2 bundle (it cannot recompute the hash without the payload) — an
+  honest failure, not a false accept.
+
+**Not retention redaction.** §4/§12 *redaction* destroys a stored payload and
+NULLs its `content_hash` (→ `unverified`); *purge* deletes whole correlations.
+Selective disclosure is the opposite: a non-destructive, verifiable *view* of an
+intact signed bundle — it never NULLs, deletes, or forges a hash. The two keep
+disjoint vocabularies: **withhold / minimize** (this section) vs **redact /
+purge** (§4/§12). No new denial code or evidence type: withholding is a bundle
+transform, and a stale/forged disclosure surfaces as the existing `tampered`
+verdict, not a gate denial.
+
+Deferred (named in proposal 0011): per-field / sub-payload Merkle commitments,
+retroactive v1→v2, withholding non-payload fields, encrypting withheld payloads,
+and disclosure receipts.

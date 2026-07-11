@@ -409,6 +409,17 @@ def check_alignment(repo_root: Path) -> JSON:
             and "revocation_head_mismatch" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Selective disclosure (§14, proposal 0011): the v2 hash scheme, the
+        # commitment, and the withhold marker.
+        add_check(
+            checks,
+            "spec_defines_selective_disclosure",
+            "Selective Disclosure" in spec_v02
+            and "chp-event-hash-v2" in spec_v02
+            and "payload_commitment" in spec_v02
+            and "chp_withheld" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.
@@ -620,6 +631,33 @@ def check_alignment(repo_root: Path) -> JSON:
             )
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "revocation_head_vector_verifies", False, {"error": str(exc)})
+
+    # Selective disclosure vectors (§14, proposal 0011): the withheld bundle
+    # verifies (withheld event tolerated, disclosed event commitment-bound) and
+    # the single v2 event recomputes to its published content_hash.
+    withheld_vec = repo_root / "spec" / "test-vectors" / "bundle-withheld.json"
+    v2_vec = repo_root / "spec" / "test-vectors" / "event-hash-v2.json"
+    if withheld_vec.exists() and v2_vec.exists():
+        try:
+            from .signing import verify_bundle as _vb
+            from .store import _compute_event_hash as _ceh
+
+            wb = read_json(withheld_vec)
+            bv = _vb(wb)
+            solo = read_json(v2_vec)
+            ev = dict(solo["event"])
+            add_check(
+                checks,
+                "event_hash_v2_vector_verifies",
+                bv.valid
+                and bv.checks.get("payload_commitments") is True
+                and wb["events"][0]["payload"] == {"chp_withheld": True}
+                and wb["events"][1]["payload"] != {"chp_withheld": True}
+                and _ceh(ev, solo.get("prev_hash")) == solo["content_hash"],
+                {"checks": bv.checks, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "event_hash_v2_vector_verifies", False, {"error": str(exc)})
 
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
