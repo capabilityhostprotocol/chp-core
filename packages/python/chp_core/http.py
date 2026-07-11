@@ -315,6 +315,22 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 "witnesses": [r.get("statement") for r in witnessing.load_received()],
             })
             return
+        if path == "/revocations":
+            # The revocation set this host holds (spec §10 Revocation): its own
+            # §3.2 key revocations + received mandate revocations. The pull
+            # side of best-effort distribution.
+            from . import revocations as _revocations
+            host_id = getattr(self.server.chp_host, "host_id",
+                              getattr(self.server.chp_host, "_host_id", ""))
+            try:
+                keys = signing.load_revocations(signing.resolve_key_dir(host_id))
+            except Exception:
+                keys = []
+            self._write_json({
+                "keys": keys,
+                "mandates": _revocations.load_mandate_revocations(),
+            })
+            return
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
 
     def _write_metrics(self) -> None:
@@ -381,6 +397,9 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             if path == "/witness":
                 self._receive_witness(body)
                 return
+            if path == "/revocations":
+                self._receive_revocation(body)
+                return
             self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
         except KeyError as exc:
             self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", f"Missing required field: {exc}")
@@ -426,6 +445,25 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         witnessing.record_received(body, head["leaves"])
         self._write_json({"accepted": True, "sequence": sequence,
                           "witness": (body.get("witness") or {}).get("host_id")})
+
+    def _receive_revocation(self, body: JSON) -> None:
+        """POST /revocations (spec §10 Revocation): accept a principal's
+        mandate-revocation statement. The host MUST verify it self-consistently
+        (signature + attestation) before persisting — an unverifiable
+        statement is refused, never stored. Whether it revokes a GIVEN mandate
+        is decided at gate 5 by the issuer-only key match."""
+        from . import revocations as _revocations
+        from .signing import verify_mandate_revocation
+
+        rv = verify_mandate_revocation(body)
+        if not rv.valid:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_revocation",
+                              rv.reason or "revocation statement failed verification")
+            return
+        _revocations.record_mandate_revocation(body)
+        self._write_json({"accepted": True,
+                          "mandate_id": body.get("mandate_id"),
+                          "principal": (body.get("principal") or {}).get("host_id")})
 
     def _invoke_envelope_of(self, body: JSON) -> tuple[InvocationEnvelope, JSON | None]:
         """Body → envelope with the binding-§2 transport work applied: verified
@@ -1028,6 +1066,14 @@ class RemoteCapabilityHost:
     def export_bundle(self, correlation_id: str) -> JSON:
         """The host's (signed when keyed) evidence bundle for a correlation."""
         return self._get(f"/export/{correlation_id}")
+
+    def revocations(self) -> JSON:
+        """The revocation set the host holds: ``{keys, mandates}`` (spec §10)."""
+        return self._get("/revocations")
+
+    def post_revocation(self, statement: JSON) -> JSON:
+        """Deliver a mandate-revocation statement (spec §10 Revocation)."""
+        return self._post("/revocations", statement)
 
     def verify(self, correlation_id: str) -> JSON:
         """Return the SHA256 chain verification result for *correlation_id*.

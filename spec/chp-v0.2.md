@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.5 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.6 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 
@@ -511,10 +511,36 @@ connection, and every later pipeline gate still applies.
 **Principal trust.** The attestation verifies offline with no prior
 relationship; anchors (§3.1) upgrade *self-declared* to *externally rooted*.
 A verifier MAY additionally require the principal's key to match a mesh pin.
-Revocation lists, `max_invocations` enforcement, and sub-delegation are
-deliberately out of scope for v0.2.3 — expiry (`valid_until`) is the v1
-revocation story, mirroring the §3.2 posture that authority recovery is a
-deliberate operator act.
+`max_invocations` enforcement and sub-delegation remain deliberately out of
+scope; expiry (`valid_until`) is the floor every host enforces, and
+revocation (below) upgrades recovery for hosts that receive the statement.
+
+**Revocation** ([proposal 0007](proposals/0007-revocation-distribution.md)).
+A principal MAY withdraw a mandate before its expiry with a
+**mandate-revocation** — the fifth statement-family member: the signature
+covers the canonical header (`kind, mandate_id, revoked_at, reason,
+canonicalization`), with the principal's attestation embedded. The
+**issuer-only rule** is load-bearing: a revocation binds to a mandate by
+`mandate_id` AND by principal-key match, and a verifier MUST check the
+revocation signature against the **mandate's** `principal.public_key` —
+never the statement's self-declared key, which would let anyone revoke
+anyone's mandate by naming its id. A statement signed by any other key
+revokes nothing. Once a valid revocation is known the mandate is invalid at
+all times (revocation is not a validity-window edit); gate 5 returns the
+existing `mandate_invalid` denial — no new code. Distribution is push +
+pull, host-local: `POST /revocations` delivers a statement (the receiving
+host MUST verify signature + attestation before persisting — an
+unverifiable statement is refused, never stored); `GET /revocations` serves
+the host's full revocation set `{keys, mandates}` — the §3.2 key
+revocations thereby gain a standalone wire surface beyond the identity
+document. Received mandate revocations live in sidecar storage, NEVER in
+the §3.2 key-revocation file the identity document serves verbatim.
+Propagation is best-effort by design (no gossip, no global list): a host
+that never receives the statement keeps honoring the mandate until expiry —
+exactly the pre-0007 posture, which remains the conformance floor. Schema:
+[mandate-revocation.schema.json](../schemas/mandate-revocation.schema.json);
+fixture: `spec/test-vectors/mandate-revocation.json` (verified by both
+reference implementations and `verify.mjs`).
 
 **Forwarding.** An intermediary that forwards an invocation (a gateway routing
 to member hosts) MUST forward a presented `mandate` **unchanged** on the

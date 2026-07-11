@@ -23,7 +23,8 @@ The host under test MUST be configured with:
 
 ## Capabilities
 
-All fixtures are version `1.0.0`, `sync` mode. "Events" lists the evidence event
+All fixtures are version `1.0.0`, `sync` mode — except `conformance.stream`,
+which declares `modes: ["sync", "stream"]`. "Events" lists the evidence event
 types emitted for the exercised call, in order.
 
 | id | Config | Exercised with | Outcome | `denial.code` | Events (in order) |
@@ -35,6 +36,7 @@ types emitted for the exercised call, in order.
 | `conformance.budgeted` | `autonomy.action_limit = 1` | invoked **twice** on one correlation | 1st `success`, 2nd `denied` | (2nd) `budget_exceeded` | 1st: `execution_started`, `execution_completed`; 2nd: `budget_exceeded`, `execution_denied` |
 | `conformance.risky` | `risk = "high"` | `{}` | `denied` | `policy_blocked` | `execution_denied` |
 | `conformance.unsafe` | (blocked by the host guardrail above) | `{}` | `denied` | `safety_blocked` | `safety_assessment_started`, `safety_assessment_completed`, `safety_guardrail_triggered`, `safety_action_blocked`, `execution_denied` |
+| `conformance.stream` | `modes: ["sync", "stream"]`; handler streams `"s1"`, `"s2"`, `"s3"` then assembles `{"chunks": 3, "joined": "s1s2s3"}` | `{}` with `mode: "stream"` (SSE: three `chunk` frames + terminal `result`) and `mode: "sync"` (`success` with the assembled data) | `success` | — | `execution_started`, `execution_completed` |
 
 ### Behaviour notes
 

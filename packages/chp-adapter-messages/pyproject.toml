@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-messages"
-version = "0.13.1"
+version = "0.14.0"
 description = "CHP capability adapter — conversation transcript storage across JSONL and remote CHP backends"
 readme = "README.md"
 requires-python = ">=3.10"

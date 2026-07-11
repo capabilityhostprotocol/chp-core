@@ -5,6 +5,38 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.2.6] — additive over 0.2.5 — **released 2026-07-10**
+
+### Added
+- **Revocation distribution — withdrawing authority before expiry**
+  (chp-v0.2.md §10 "Revocation",
+  [proposals/0007](proposals/0007-revocation-distribution.md)): new statement
+  kind **`mandate-revocation`** (fifth statement-family member) — the
+  principal's signed withdrawal of a mandate. **Issuer-only rule**: a
+  revocation binds by `mandate_id` AND principal-key match; verifiers check
+  the revocation signature against the MANDATE's principal key, never the
+  statement's self-declared key, so a statement signed by any other key
+  revokes nothing. Gate 5 consults the host's local set — a revoked mandate
+  is the existing `mandate_invalid` denial (**no new denial code**). Routes
+  `POST /revocations` (verify before persisting; 400 `invalid_revocation`)
+  and `GET /revocations` (`{keys, mandates}` — §3.2 key revocations gain a
+  standalone wire surface). Received statements live in sidecar storage,
+  never the identity-doc key-revocation file. Propagation is best-effort;
+  expiry stays the conformance floor. Reference: `chp mandate revoke
+  [--push]`, `~/.chp/revocations/`. Wire suite **19→20** ("mandate
+  revocation"); both reference hosts pass. *Vector:
+  `test-vectors/mandate-revocation.json` (only new file — all published
+  vectors byte-identical); guards `mandate_revocation_vector_verifies` +
+  `spec_defines_revocation`.*
+- **Streaming conformance** (completes
+  [proposals/0006](proposals/0006-governed-streaming.md) named deferrals —
+  no spec change): fixture capability **`conformance.stream`** (both
+  reference hosts) and wire check **#21 "streaming invocation"** — SSE chunk
+  frames + terminal result, and the denial-never-commits-to-SSE rule,
+  asserted on the wire. TS reference implementation gains full streaming
+  (host `ainvokeStream`, server SSE, SDK client `invokeStream`), closing the
+  0006 parity gap. Wire suite **20→21**; both reference hosts 21/21.
+
 ## [0.2.5] — additive over 0.2.4 — **released 2026-07-10**
 
 ### Added

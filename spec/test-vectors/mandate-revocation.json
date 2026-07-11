@@ -1,0 +1,24 @@
+{
+  "canonicalization": "chp-stable-v1",
+  "kind": "mandate-revocation",
+  "mandate_id": "mnd_fixture0001",
+  "principal": {
+    "host_id": "vector-principal",
+    "host_identity": {
+      "host_id": "vector-principal",
+      "key_id": "56475aa75463474c",
+      "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+      "signature": "9UK1v4awGFYfZCYQARD8orzkbwS3Y2i3P0eZVBBUlIv7VCwNmGDqtw3KuZkFd8Go6bsiVq5cghrLUSYrZmzjBg==",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": null
+    },
+    "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+  },
+  "reason": "fixture: authority withdrawn",
+  "revoked_at": "2026-01-01T00:00:00Z",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "56475aa75463474c",
+    "signature": "GazwAYp0D2wR3JCjtW8X+fPURVyyXPednaqTWDvS/lV+pol2RAULsMncs7JT9v3WA2FR15cTPrhrJh4asimeAw=="
+  }
+}

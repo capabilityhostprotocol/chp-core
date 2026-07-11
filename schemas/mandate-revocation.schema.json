@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/mandate-revocation.schema.json",
+  "title": "MandateRevocation",
+  "description": "The principal's signed withdrawal of a mandate before its expiry (chp-v0.2.md section 10, proposal 0007) — the fifth statement-family member. Issuer-only rule: a revocation binds to a mandate by mandate_id AND by the principal public key matching the mandate's own; verifiers check the revocation signature against the MANDATE's principal key, never the statement's self-declared key, so a statement signed by any other key revokes nothing.",
+  "type": "object",
+  "required": [
+    "kind",
+    "mandate_id",
+    "revoked_at",
+    "reason",
+    "canonicalization",
+    "principal",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "mandate-revocation"
+    },
+    "mandate_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The revoked mandate."
+    },
+    "revoked_at": {
+      "type": "string",
+      "description": "When authority was withdrawn. A verifier treats the mandate as revoked for ALL times once a valid revocation is known — revocation is not a validity-window edit."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Operator-facing reason. Part of the signed header; may be empty."
+    },
+    "canonicalization": {
+      "const": "chp-stable-v1"
+    },
+    "principal": {
+      "type": "object",
+      "required": [
+        "host_id",
+        "public_key",
+        "host_identity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "public_key": {
+          "type": "string",
+          "description": "base64 raw ed25519 public key — MUST equal the revoked mandate's principal.public_key for the revocation to bind."
+        },
+        "host_identity": {
+          "type": "object",
+          "description": "Self-signed host-identity attestation (chp-v0.2.md §3). 'anchors' is omitted entirely when empty (§3.1 byte rule).",
+          "required": [
+            "host_id",
+            "public_key",
+            "key_id",
+            "valid_from",
+            "signature"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "host_id": {
+              "type": "string"
+            },
+            "public_key": {
+              "type": "string"
+            },
+            "key_id": {
+              "type": "string"
+            },
+            "valid_from": {
+              "type": "string"
+            },
+            "valid_until": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "anchors": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "description": "External trust roots vouching for the principal key. MUST be omitted when empty."
+            },
+            "signature": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "key_id",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
