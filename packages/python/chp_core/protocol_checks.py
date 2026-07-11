@@ -365,6 +365,17 @@ def check_alignment(repo_root: Path) -> JSON:
             and "`redacted`" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Revocation (§10 Revocation, proposal 0007): statement kind, the
+        # issuer-only rule's load-bearing phrase, and both routes.
+        add_check(
+            checks,
+            "spec_defines_revocation",
+            "mandate-revocation" in spec_v02
+            and "issuer-only rule" in spec_v02
+            and "POST /revocations" in spec_v02
+            and "GET /revocations" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.
@@ -482,6 +493,30 @@ def check_alignment(repo_root: Path) -> JSON:
             )
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "mandate_vector_verifies", False, {"error": str(exc)})
+
+    # Mandate-revocation vector: the withdrawal statement verifies AND actually
+    # revokes the mandate vector (the issuer-only pair binding, §10).
+    revocation_vec = repo_root / "spec" / "test-vectors" / "mandate-revocation.json"
+    if revocation_vec.exists() and mandate_vec.exists():
+        try:
+            from .signing import verify_mandate as _vm
+            from .signing import verify_mandate_revocation
+
+            rev = read_json(revocation_vec)
+            rv = verify_mandate_revocation(rev)
+            mandate = read_json(mandate_vec)
+            revoked = _vm(mandate, at_time=mandate["valid_from"], revocations=[rev])
+            add_check(
+                checks,
+                "mandate_revocation_vector_verifies",
+                rv.valid and not revoked.valid
+                and revoked.checks.get("not_revoked") is False,
+                {"statement": rv.checks, "pair_binding": revoked.checks,
+                 "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "mandate_revocation_vector_verifies", False,
+                      {"error": str(exc)})
 
     # Chain-witness vector: the countersignature statement verifies (§12).
     witness_vec = repo_root / "spec" / "test-vectors" / "chain-witness.json"

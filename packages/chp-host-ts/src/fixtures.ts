@@ -1,11 +1,12 @@
 /**
- * The conformance fixture profile (conformance/FIXTURES.md). Registers the seven
+ * The conformance fixture profile (conformance/FIXTURES.md). Registers the eight
  * capabilities + host config a `wire`-suite host-under-test must expose.
  */
 
 import { type HostKey } from '@capabilityhostprotocol/sdk';
 import { LocalCapabilityHost } from './host.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
+import { StreamResult } from './types.js';
 import type { Ctx, JsonValue } from './types.js';
 
 export function buildFixtureHost(signingKey?: HostKey, domain?: string): LocalCapabilityHost {
@@ -41,6 +42,13 @@ export function buildFixtureHost(signingKey?: HostKey, domain?: string): LocalCa
   host.register({ id: 'conformance.budgeted', version: '1.0.0', description: 'Budget-capped.', autonomy: { action_limit: 1 } }, echo);
   host.register({ id: 'conformance.risky', version: '1.0.0', description: 'High-risk.', risk: 'high' }, echo);
   host.register({ id: 'conformance.unsafe', version: '1.0.0', description: 'Blocked by a safety guardrail.' }, echo);
+  host.register(
+    { id: 'conformance.stream', version: '1.0.0', description: 'Stream three deterministic chunks.', modes: ['sync', 'stream'] },
+    async function* (_c: Ctx, _payload: JsonValue) {
+      yield 's1'; yield 's2'; yield 's3';
+      yield new StreamResult({ chunks: 3, joined: 's1s2s3' });
+    },
+  );
 
   return host;
 }

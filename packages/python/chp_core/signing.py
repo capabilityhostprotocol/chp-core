@@ -1024,11 +1024,16 @@ def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
 def verify_mandate(mandate: dict, *, at_time: str | None = None,
                    capability_id: str | None = None,
                    delegate_id: str | None = None,
-                   expected_principal_key: str | None = None) -> BundleVerification:
+                   expected_principal_key: str | None = None,
+                   revocations: list[dict] | None = None) -> BundleVerification:
     """Offline-verify a mandate: structure, header signature, principal
     attestation (binding + temporal), DID anchor when present, the validity
     window at ``at_time``, delegate binding when ``delegate_id`` is supplied,
-    and — when ``capability_id`` is supplied — that it is in scope."""
+    and — when ``capability_id`` is supplied — that it is in scope. When
+    ``revocations`` is supplied, the mandate additionally fails ``not_revoked``
+    if any statement in the set revokes it under the issuer-only rule (§10):
+    same ``mandate_id`` AND signed by the MANDATE's own principal key — a
+    revocation signed by any other key revokes nothing."""
     checks: dict[str, bool] = {}
     checks["structure"] = (mandate.get("kind") == "mandate"
                            and bool(mandate.get("mandate_id"))
@@ -1075,9 +1080,119 @@ def verify_mandate(mandate: dict, *, at_time: str | None = None,
         checks["delegate"] = mandate.get("delegate_id") == delegate_id
     if capability_id is not None:
         checks["scope"] = scope_allows(mandate.get("scope") or [], capability_id)
+    if revocations is not None:
+        # Issuer-only rule: the revocation signature is verified against the
+        # MANDATE's principal key, never the revocation's self-declared key —
+        # otherwise anyone could revoke anyone by naming the mandate_id.
+        checks["not_revoked"] = not any(
+            r.get("kind") == "mandate-revocation"
+            and r.get("mandate_id") == mandate.get("mandate_id")
+            and str((r.get("principal") or {}).get("public_key") or "") == pub
+            and _verify_sig(pub, _canon(mandate_revocation_header(r)),
+                            str((r.get("signature") or {}).get("signature") or ""))
+            for r in revocations)
 
     valid = all(checks.values())
     reason = None if valid else "mandate checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason,
+                              anchored_domain=anchored_domain,
+                              anchored_did=anchored_did)
+
+
+_MANDATE_REVOCATION_HEADER_FIELDS = ("kind", "mandate_id", "revoked_at",
+                                     "reason", "canonicalization")
+
+
+def mandate_revocation_header(statement: dict) -> dict:
+    """The principal-signed header of a mandate revocation (§10)."""
+    return {k: statement.get(k) for k in _MANDATE_REVOCATION_HEADER_FIELDS}
+
+
+def build_mandate_revocation(mandate: dict, host_key: HostKey, *,
+                             revoked_at: str, reason: str = "",
+                             anchors: list[dict] | None = None) -> dict:
+    """The principal's signed withdrawal of a mandate before its expiry
+    (proposal 0007, chp-v0.2.md §10) — the fifth statement-family member.
+    Only the ISSUER can revoke: enforcement binds a revocation to a mandate by
+    ``mandate_id`` AND by principal-key match, so this refuses to sign with a
+    key that is not the mandate's principal key (the statement would be
+    inert anyway)."""
+    if not host_key.can_sign:
+        raise SigningUnavailable("principal key has no private component; cannot sign")
+    principal = mandate.get("principal") or {}
+    if principal.get("public_key") != host_key.public_key_b64:
+        raise ValueError("revocation key does not match the mandate's principal key; "
+                         "only the issuer can revoke")
+    statement: dict = {
+        "kind": "mandate-revocation",
+        "mandate_id": str(mandate.get("mandate_id")),
+        "revoked_at": revoked_at,
+        "reason": reason,
+        "canonicalization": CANONICALIZATION,
+    }
+    statement["principal"] = {
+        "host_id": principal.get("host_id"),
+        "public_key": host_key.public_key_b64,
+        "host_identity": build_attestation(
+            str(principal.get("host_id")), host_key, valid_from=revoked_at,
+            anchors=anchors),
+    }
+    statement["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": host_key.key_id,
+        "signature": _sign(host_key._private,
+                           _canon(mandate_revocation_header(statement))),
+    }
+    return statement
+
+
+def verify_mandate_revocation(statement: dict, *,
+                              expected_principal_key: str | None = None) -> BundleVerification:
+    """Offline-verify a mandate-revocation statement: structure, header
+    signature, principal attestation (binding + temporal), DID anchor when
+    present, and the principal key pin when supplied. This is
+    SELF-consistency only — whether the statement actually revokes a given
+    mandate is decided by ``verify_mandate(revocations=...)``, which verifies
+    the signature against the MANDATE's principal key (issuer-only rule)."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = (statement.get("kind") == "mandate-revocation"
+                           and bool(statement.get("mandate_id"))
+                           and bool(statement.get("revoked_at")))
+    principal = statement.get("principal") or {}
+    pub = str(principal.get("public_key") or "")
+    sig = statement.get("signature") or {}
+    anchored_domain: str | None = None
+    anchored_did: str | None = None
+
+    if expected_principal_key is not None and sig.get("key_id") != expected_principal_key:
+        return BundleVerification(
+            False, "signed", checks,
+            f"signed by unexpected key {sig.get('key_id')!r} "
+            f"(expected {expected_principal_key!r})")
+
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM
+                           and bool(pub)
+                           and _verify_sig(pub, _canon(mandate_revocation_header(statement)),
+                                           str(sig.get("signature") or "")))
+
+    att = principal.get("host_identity")
+    if att:
+        checks["principal_identity"] = verify_attestation(
+            att, public_key=pub, expected_host_id=principal.get("host_id"),
+            at_time=statement.get("revoked_at"))
+        anchored_domain = _domain_anchor(att)
+        did_anchor = _did_anchor(att)
+        if did_anchor is not None:
+            checks["did_anchor"] = verify_did_anchor(
+                did_anchor, pub, str(principal.get("host_id", "")))
+            if checks["did_anchor"]:
+                anchored_did = str(did_anchor.get("did"))
+    else:
+        checks["principal_identity"] = False  # a revocation must say WHOSE authority
+
+    valid = all(checks.values())
+    reason = None if valid else "mandate-revocation checks failed: " + ", ".join(
         k for k, v in checks.items() if not v)
     return BundleVerification(valid, "signed", checks, reason,
                               anchored_domain=anchored_domain,

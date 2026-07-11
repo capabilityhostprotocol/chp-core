@@ -271,6 +271,52 @@ export function buildMandate(
   return mandate;
 }
 
+const MANDATE_REVOCATION_HEADER_FIELDS = [
+  'kind', 'mandate_id', 'revoked_at', 'reason', 'canonicalization',
+] as const;
+
+/** The principal-signed header of a mandate revocation (§10, proposal 0007). */
+export function mandateRevocationHeader(statement: Record<string, JsonValue>): JsonValue {
+  const h: Record<string, JsonValue> = {};
+  for (const f of MANDATE_REVOCATION_HEADER_FIELDS) h[f] = statement[f] ?? null;
+  return h;
+}
+
+/** The principal's signed withdrawal of a mandate before its expiry (proposal
+ * 0007, chp-v0.2.md §10) — byte-compatible with Python
+ * `build_mandate_revocation`. Issuer-only: refuses a key that is not the
+ * mandate's principal key (the statement would be inert anyway). */
+export function buildMandateRevocation(
+  mandate: Record<string, JsonValue>,
+  key: HostKey,
+  opts: { revokedAt: string; reason?: string; anchors?: JsonValue[] | null },
+): Record<string, JsonValue> {
+  if (!key.privateKey) throw new Error('principal key has no private component; cannot sign');
+  const mandatePrincipal = (mandate.principal as Record<string, JsonValue> | undefined) ?? {};
+  if (mandatePrincipal.public_key !== key.publicKeyB64) {
+    throw new Error("revocation key does not match the mandate's principal key; only the issuer can revoke");
+  }
+  const statement: Record<string, JsonValue> = {
+    kind: 'mandate-revocation',
+    mandate_id: String(mandate.mandate_id),
+    revoked_at: opts.revokedAt,
+    reason: opts.reason ?? '',
+    canonicalization: CANONICALIZATION,
+  };
+  statement.principal = {
+    host_id: mandatePrincipal.host_id ?? null,
+    public_key: key.publicKeyB64,
+    host_identity: buildAttestation(
+      String(mandatePrincipal.host_id), key, opts.revokedAt, null, opts.anchors ?? null),
+  };
+  statement.signature = {
+    algorithm: SIGNATURE_ALGORITHM,
+    key_id: key.keyId,
+    signature: signCanon(key.privateKey, mandateRevocationHeader(statement)),
+  };
+  return statement;
+}
+
 const PROVENANCE_HEADER_FIELDS_SIGN = [
   'kind', 'package', 'version', 'wheel_sha256', 'created_at', 'canonicalization',
 ] as const;

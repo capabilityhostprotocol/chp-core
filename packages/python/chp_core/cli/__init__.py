@@ -13,6 +13,7 @@ from ._core import (
     cmd_anchor_did,
     cmd_keygen,
     cmd_mandate_issue,
+    cmd_mandate_revoke,
     cmd_mandate_verify,
     cmd_witness_verify,
     cmd_provenance_sign,
@@ -697,6 +698,21 @@ def build_parser() -> argparse.ArgumentParser:
     mnd_verify.add_argument("--expect-key", default=None, dest="expect_key",
                             help="Require this principal key_id.")
     mnd_verify.set_defaults(func=cmd_mandate_verify)
+    mnd_revoke = mandate_sub.add_parser(
+        "revoke",
+        help="Withdraw a mandate before expiry (issuer-only) and push the "
+             "statement to enforcing hosts (spec §10 Revocation).")
+    mnd_revoke.add_argument("mandate", help="Path to the mandate JSON file to revoke.")
+    mnd_revoke.add_argument("--reason", default="", help="Signed, operator-facing reason.")
+    mnd_revoke.add_argument("--key-dir", default=None, dest="key_dir",
+                            help="Principal key directory (default: resolved from the mandate).")
+    mnd_revoke.add_argument("--out", default=None,
+                            help="Write the statement here instead of stdout.")
+    mnd_revoke.add_argument("--push", action="append", default=None, metavar="HOST_URL",
+                            help="Best-effort POST /revocations to this host (repeatable).")
+    mnd_revoke.add_argument("--api-key", default=None, dest="api_key",
+                            help="X-CHP-Key for --push targets.")
+    mnd_revoke.set_defaults(func=cmd_mandate_revoke)
 
     witness_p = subcommands.add_parser(
         "witness",

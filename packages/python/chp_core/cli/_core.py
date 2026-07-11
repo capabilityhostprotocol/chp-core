@@ -752,6 +752,58 @@ def cmd_mandate_verify(args: argparse.Namespace) -> int:
     return 0 if v.valid else 1
 
 
+def cmd_mandate_revoke(args: argparse.Namespace) -> int:
+    """Withdraw a mandate before its expiry (spec §10 Revocation, proposal
+    0007): sign the mandate-revocation with the PRINCIPAL key (issuer-only —
+    build refuses a non-issuer key), then best-effort push to enforcing
+    hosts. A host that never receives it keeps honoring until expiry."""
+    import sys
+
+    from .. import signing
+    from ..types import utc_now
+
+    with open(args.mandate) as fh:
+        mandate = json.load(fh)
+    principal_id = str((mandate.get("principal") or {}).get("host_id") or "")
+    key_dir = args.key_dir or signing.resolve_key_dir(principal_id)
+    key = signing.load_host_key(key_dir)
+    if key is None or not key.can_sign:
+        print(f"no signing key in {key_dir} — run `chp keygen` first", file=sys.stderr)
+        return 1
+    anchors = signing.load_configured_anchors(key_dir) or None
+    try:
+        statement = signing.build_mandate_revocation(
+            mandate, key, revoked_at=utc_now(), reason=args.reason or "",
+            anchors=anchors)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    out: dict = {"kind": "mandate-revocation",
+                 "mandate_id": statement["mandate_id"],
+                 "principal": principal_id,
+                 "revoked_at": statement["revoked_at"]}
+    if args.out:
+        from pathlib import Path
+        Path(args.out).write_text(
+            json.dumps(statement, indent=2, sort_keys=True) + "\n")
+        out["written"] = args.out
+    pushed: list[dict] = []
+    for url in args.push or []:
+        from ..http import RemoteCapabilityHost
+        try:
+            resp = RemoteCapabilityHost(url, api_key=args.api_key)
+            pushed.append({"url": url, **(resp.post_revocation(statement) or {})})
+        except Exception as exc:
+            pushed.append({"url": url, "error": str(exc)})
+    if pushed:
+        out["pushed"] = pushed
+    if not args.out:
+        print(json.dumps(statement, indent=2, sort_keys=True))
+    print(json.dumps(out, indent=2), file=sys.stderr)
+    return 0 if all("error" not in p for p in pushed) else 1
+
+
 def cmd_witness_verify(args: argparse.Namespace) -> int:
     """The auditor act (§12): recompute the store head as-of every witnessed
     sequence and judge each leaf — verified / purged / redacted / TAMPERED."""

@@ -541,13 +541,15 @@ class LocalCapabilityHost:
         # principal's mandate" and narrows the invocation to its scope
         # (out-of-scope = policy_blocked, the §2 semantics).
         if envelope.mandate is not None:
+            from .revocations import load_mandate_revocations
             from .signing import scope_allows, verify_mandate
             from .types import utc_now
             subj = envelope.subject if isinstance(envelope.subject, dict) else {}
             verified_caller = subj.get("id") if subj.get("verified") else None
             mv = verify_mandate(
                 envelope.mandate, at_time=utc_now(),
-                delegate_id=verified_caller)
+                delegate_id=verified_caller,
+                revocations=load_mandate_revocations())
             if not mv.valid:
                 return envelope, None, self._deny(
                     envelope,

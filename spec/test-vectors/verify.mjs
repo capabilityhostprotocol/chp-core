@@ -192,6 +192,34 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (mandate ${input.mandate_id}: ${principal.host_id} → ${input.delegate_id}, scope [${(input.scope ?? []).join(", ")}], until ${input.valid_until})`
     : "INVALID");
+} else if (input.kind === "mandate-revocation") {
+  // Mandate revocation (chp-v0.2.md §10, proposal 0007): the principal key
+  // signs the canonical header — the issuer's withdrawal of a mandate.
+  // Whether it revokes a GIVEN mandate is the issuer-only key match a
+  // verifier performs against that mandate's principal key.
+  const principal = input.principal ?? {};
+  const pPub = createPublicKey({
+    key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                        Buffer.from(principal.public_key ?? "", "base64")]),
+    format: "der", type: "spki",
+  });
+  const vCanon = (obj, sigB64) =>
+    edVerify(null, Buffer.from(canon(obj), "utf8"), pPub, Buffer.from(sigB64, "base64"));
+  const header = { kind: input.kind, mandate_id: input.mandate_id,
+                   revoked_at: input.revoked_at, reason: input.reason,
+                   canonicalization: input.canonicalization };
+  ok = input.signature?.algorithm === "ed25519" && vCanon(header, input.signature.signature);
+  const att = principal.host_identity;
+  if (att) {
+    const claim = { host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
+                    valid_from: att.valid_from, valid_until: att.valid_until,
+                    ...("anchors" in att ? { anchors: att.anchors } : {}) };
+    if (!(att.host_id === principal.host_id && att.public_key === principal.public_key
+          && vCanon(claim, att.signature))) { console.error("principal attestation INVALID"); ok = false; }
+  } else { console.error("mandate-revocation missing principal attestation"); ok = false; }
+  console.log(ok
+    ? `VALID (mandate-revocation: ${principal.host_id} revoked ${input.mandate_id} at ${input.revoked_at})`
+    : "INVALID");
 } else if (input.kind === "task-bundle") {
   // Task bundle (chp-v0.2.md §8): every member verifies; canonical member order
   // (host_id, root_hash); task_root_hash = SHA256 over member root_hashes + "\n";

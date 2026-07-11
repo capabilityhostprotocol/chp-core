@@ -7,7 +7,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { verifyChainWitness } from '@capabilityhostprotocol/sdk';
+import { verifyChainWitness, verifyMandateRevocation } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
 import type { InvocationEnvelope, JsonValue } from './types.js';
 
@@ -167,6 +167,36 @@ export function createHostServer(
       });
     }
 
+    // Revocation distribution (spec §10 Revocation): serve the held set;
+    // accept statements only after self-consistent verification. Whether a
+    // statement revokes a GIVEN mandate is gate 5's issuer-only key match.
+    if (method === 'GET' && path === '/revocations') {
+      return sendJson(res, 200, {
+        keys: [], mandates: host.mandateRevocations as unknown as JsonValue,
+      });
+    }
+    if (method === 'POST' && path === '/revocations') {
+      let stmt: Record<string, JsonValue>;
+      try {
+        stmt = JSON.parse((await readBody(req)) || '{}') as Record<string, JsonValue>;
+      } catch (e) {
+        return err(res, 400, 'invalid_json', String((e as Error).message));
+      }
+      const rv = verifyMandateRevocation(stmt);
+      if (!rv.valid) {
+        return err(res, 400, 'invalid_revocation', rv.reason ?? 'revocation statement failed verification');
+      }
+      const dupe = host.mandateRevocations.some((r) =>
+        r.mandate_id === stmt.mandate_id
+        && ((r.principal as Record<string, JsonValue> | undefined) ?? {}).public_key
+          === ((stmt.principal as Record<string, JsonValue> | undefined) ?? {}).public_key);
+      if (!dupe) host.mandateRevocations.push(stmt);
+      return sendJson(res, 200, {
+        accepted: true, mandate_id: stmt.mandate_id ?? null,
+        principal: ((stmt.principal as Record<string, JsonValue> | undefined) ?? {}).host_id ?? null,
+      });
+    }
+
     if (method === 'POST' && (path === '/invoke' || path === '/replay')) {
       let body: Record<string, JsonValue>;
       try {
@@ -196,6 +226,29 @@ export function createHostServer(
           });
           return sendJson(res, 200, result as unknown as JsonValue);
         }
+      }
+      // Streaming (proposal 0006): gates run FIRST via the shared pipeline.
+      // JSON-vs-SSE is decided on the FIRST generator item — a denial (or any
+      // pre-chunk outcome) answers plain JSON and NEVER commits to SSE; the
+      // client switches on Content-Type.
+      if (env.mode === 'stream') {
+        let committed = false;
+        const sse = (event: string, data: JsonValue): void => {
+          res.write(`event: ${event}\ndata: ${JSON.stringify(sortKeys(data))}\n\n`);
+        };
+        for await (const item of host.ainvokeStream(env)) {
+          if ('result' in item && !committed) {
+            return sendJson(res, 200, item.result as unknown as JsonValue);
+          }
+          if (!committed) {
+            committed = true;
+            req.socket.setTimeout(600_000); // real streams outlive the default
+            res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+          }
+          if ('result' in item) sse('result', item.result as unknown as JsonValue);
+          else sse('chunk', { delta: item.chunk });
+        }
+        return void res.end();
       }
       const result = await host.ainvokeEnvelope(env);
       return sendJson(res, 200, result as unknown as JsonValue);
