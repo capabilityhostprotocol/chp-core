@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.7 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.8 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 
@@ -480,7 +480,8 @@ The third member of the statement family (signed bundles §3, adapter
 provenance §9), and it composes the existing primitives rather than adding new
 ones: the signature covers the canonical header (`kind, mandate_id,
 delegate_id, scope, valid_from, valid_until, created_at, canonicalization` —
-`scope` sorted at signing time); the principal's attestation answers *whose
+`scope` sorted at signing time; a sub-mandate's header additionally covers
+`depth, parent_id`, Sub-delegation below); the principal's attestation answers *whose
 authority* through the same trust roots as everything else (§3.1 anchors, §3.2
 rotation continuity, omit-when-empty byte rules); `scope` uses the
 [http-binding](chp-http-binding.md) §2 grammar (exact capability id or
@@ -511,9 +512,10 @@ connection, and every later pipeline gate still applies.
 **Principal trust.** The attestation verifies offline with no prior
 relationship; anchors (§3.1) upgrade *self-declared* to *externally rooted*.
 A verifier MAY additionally require the principal's key to match a mesh pin.
-`max_invocations` enforcement and sub-delegation remain deliberately out of
-scope; expiry (`valid_until`) is the floor every host enforces, and
-revocation (below) upgrades recovery for hosts that receive the statement.
+`max_invocations` enforcement remains deliberately out of scope; expiry
+(`valid_until`) is the floor every host enforces, revocation (below) upgrades
+recovery, and sub-delegation (below) extends a mandate into an
+attenuation-only chain.
 
 **Revocation** ([proposal 0007](proposals/0007-revocation-distribution.md)).
 A principal MAY withdraw a mandate before its expiry with a
@@ -542,6 +544,45 @@ exactly the pre-0007 posture, which remains the conformance floor. Schema:
 fixture: `spec/test-vectors/mandate-revocation.json` (verified by both
 reference implementations and `verify.mjs`).
 
+**Sub-delegation** ([proposal 0009](proposals/0009-sub-delegation.md)). A
+delegate MAY re-delegate a **narrowed** slice of its authority to a
+sub-agent, forming an **attenuation-only mandate chain**. A sub-mandate is a
+mandate with three additional fields: `parent_id` and `depth` (in the signed
+header, present only when `parent_id` is set — so a root mandate is
+byte-identical to a single-hop one) and `parent` (the full parent mandate
+embedded inline, recursively; carried as transport, verified on its own
+signature). The sub-principal is the parent's delegate: the holder of the
+parent mandate signs the child with its **own** key — no key sharing, no root
+involvement.
+
+The load-bearing invariant is **monotone attenuation: a child can only
+NARROW scope and SHORTEN the window, never widen or extend.** A verifier
+walks the chain link-by-link. For each child→parent link it MUST check:
+`depth == parent.depth + 1` (root depth 0) and `depth` within an
+implementation cap; `parent_id == parent.mandate_id`; the **delegate join**
+— `parent.delegate_id == child.principal.host_id` (the parent delegated *to*
+this sub-principal); `scope ⊆ parent.scope` (every child scope entry matches
+the parent under the §2 grammar); and `[valid_from, valid_until] ⊆` the
+parent's window. It then recurses into `parent` (carrying host time and the
+revocation set, not the leaf's delegate/capability bindings) to the root (no
+`parent`) — ordinary single-hop verification. Every hop verifies under the
+key in its own `principal.host_identity`, so the whole chain verifies
+**offline, with no prior relationship** — the single-hop trust model made
+inductive.
+
+At gate 5 the caller binds to the leaf's `delegate_id`, ancestors bind via
+the join, and the leaf's scope gate stays correct because leaf ⊆ every
+ancestor by induction. The evidence subject additionally records the
+**root principal**, so the signed chain shows both the acting delegate and
+the ultimate authority. Revocation composes for free: each link's
+`not_revoked` check runs against that link's own principal key, so revoking
+any ancestor kills the whole leaf chain. A bad chain — attenuation
+violation, broken join, over-depth, or a revoked ancestor — is the existing
+`mandate_invalid` denial; no new code. Schema:
+[mandate.schema.json](../schemas/mandate.schema.json) (the three additive
+optional fields); fixture: `spec/test-vectors/mandate-chain.json` (verified
+by both reference implementations and `verify.mjs`).
+
 **Forwarding.** An intermediary that forwards an invocation (a gateway routing
 to member hosts) MUST forward a presented `mandate` **unchanged** on the
 forwarded envelope ([proposal 0004](proposals/0004-mandate-forwarding.md)).
@@ -553,8 +594,10 @@ authority lands verified in the executing host's signed chain regardless of
 how many intermediaries sit between. Delegate binding composes with transport
 auth where that auth verified the original caller (the front door); the
 executing host enforces signature, attestation, window, and scope in full.
-Mandate re-issuance/attenuation at intermediaries (sub-delegation) is
-deliberately out of scope.
+Alternatively an intermediary MAY re-issue an **attenuated** sub-mandate
+(embedding the received mandate as `parent`, Sub-delegation above) before
+forwarding — narrowing authority as work fans out; forwarding a mandate
+unchanged remains valid and is the floor.
 
 ## 11. Routing & Reachability
 

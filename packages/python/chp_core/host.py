@@ -553,7 +553,7 @@ class LocalCapabilityHost:
         # (out-of-scope = policy_blocked, the §2 semantics).
         if envelope.mandate is not None:
             from .revocations import load_mandate_revocations
-            from .signing import scope_allows, verify_mandate
+            from .signing import mandate_root_principal, scope_allows, verify_mandate
             from .types import utc_now
             subj = envelope.subject if isinstance(envelope.subject, dict) else {}
             verified_caller = subj.get("id") if subj.get("verified") else None
@@ -582,12 +582,17 @@ class LocalCapabilityHost:
                         retryable=False,
                     ),
                 )
+            immediate = (envelope.mandate.get("principal") or {}).get("host_id")
+            root = mandate_root_principal(envelope.mandate)
             envelope.subject = {
                 "id": envelope.mandate.get("delegate_id"),
                 "type": "mandate",
                 "verified": True,
                 "mandate_id": envelope.mandate.get("mandate_id"),
-                "principal": (envelope.mandate.get("principal") or {}).get("host_id"),
+                "principal": immediate,
+                # Sub-delegation (§10, proposal 0009): the chain's ultimate
+                # authority. Equals `principal` for a single-hop mandate.
+                "root_principal": root,
             }
 
         # Governance gate — enforced on every invocation path (host.invoke,

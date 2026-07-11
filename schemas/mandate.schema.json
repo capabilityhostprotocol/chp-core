@@ -52,6 +52,20 @@
     "canonicalization": {
       "const": "chp-stable-v1"
     },
+    "depth": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Sub-delegation (chp-v0.2.md section 10, proposal 0009): chain depth, root omits it (depth 0), each attenuating link increments. Signed-header field, present only when parent_id is set."
+    },
+    "parent_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Sub-delegation: the mandate_id of the parent this link attenuates. Signed-header field. The embedded 'parent' MUST have this mandate_id."
+    },
+    "parent": {
+      "$ref": "#",
+      "description": "Sub-delegation: the full parent mandate embedded inline (recursive). Carried as transport (verified on its own signature); the child commits to it via the signed parent_id and the delegate join (parent.delegate_id == this.principal.host_id). A child may only NARROW scope and SHORTEN the window."
+    },
     "principal": {
       "type": "object",
       "required": [

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-core"
-version = "0.16.0"
+version = "0.17.0"
 description = "Capability Host Protocol — local execution evidence for agents, tools, and systems"
 readme = "README.md"
 requires-python = ">=3.10"

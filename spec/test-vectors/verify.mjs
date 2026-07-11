@@ -166,31 +166,53 @@ if (input.kind === "adapter-provenance") {
     ? `VALID (chain-witness: ${w.host_id} countersigned ${input.host_id}@seq ${input.sequence}, head ${String(input.store_head).slice(0, 16)}…)`
     : "INVALID");
 } else if (input.kind === "mandate") {
-  // Mandate (chp-v0.2.md §10): the principal key signs the canonical header
-  // — a bounded, expiring, capability-scoped grant to a named delegate.
-  const principal = input.principal ?? {};
-  const pPub = createPublicKey({
-    key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
-                        Buffer.from(principal.public_key ?? "", "base64")]),
-    format: "der", type: "spki",
-  });
-  const vCanon = (obj, sigB64) =>
-    edVerify(null, Buffer.from(canon(obj), "utf8"), pPub, Buffer.from(sigB64, "base64"));
-  const header = { kind: input.kind, mandate_id: input.mandate_id,
-                   delegate_id: input.delegate_id, scope: input.scope,
-                   valid_from: input.valid_from, valid_until: input.valid_until,
-                   created_at: input.created_at, canonicalization: input.canonicalization };
-  ok = input.signature?.algorithm === "ed25519" && vCanon(header, input.signature.signature);
-  const att = principal.host_identity;
-  if (att) {
-    const claim = { host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
-                    valid_from: att.valid_from, valid_until: att.valid_until,
-                    ...("anchors" in att ? { anchors: att.anchors } : {}) };
-    if (!(att.host_id === principal.host_id && att.public_key === principal.public_key
-          && vCanon(claim, att.signature))) { console.error("principal attestation INVALID"); ok = false; }
-  } else { console.error("mandate missing principal attestation"); ok = false; }
+  // Mandate (chp-v0.2.md §10) + sub-delegation chains (§10, proposal 0009):
+  // the principal key signs the canonical header (a sub-mandate's header also
+  // covers depth+parent_id — present only when parent_id is set, so a root is
+  // byte-identical); each link must ATTENUATE its embedded parent, recursively.
+  const scopeAllows = (scope, cap) => (scope ?? []).some(
+    (s) => cap === s || (String(s).endsWith("*") && cap.startsWith(String(s).slice(0, -1))));
+  const verifyLink = (m) => {
+    const principal = m.principal ?? {};
+    const pPub = createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                          Buffer.from(principal.public_key ?? "", "base64")]),
+      format: "der", type: "spki",
+    });
+    const vC = (obj, sigB64) =>
+      edVerify(null, Buffer.from(canon(obj), "utf8"), pPub, Buffer.from(sigB64, "base64"));
+    const header = { kind: m.kind, mandate_id: m.mandate_id,
+                     delegate_id: m.delegate_id, scope: m.scope,
+                     valid_from: m.valid_from, valid_until: m.valid_until,
+                     created_at: m.created_at, canonicalization: m.canonicalization,
+                     ...(m.parent_id ? { depth: m.depth, parent_id: m.parent_id } : {}) };
+    let good = m.signature?.algorithm === "ed25519" && vC(header, m.signature.signature);
+    const att = principal.host_identity;
+    if (att) {
+      const claim = { host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
+                      valid_from: att.valid_from, valid_until: att.valid_until,
+                      ...("anchors" in att ? { anchors: att.anchors } : {}) };
+      if (!(att.host_id === principal.host_id && att.public_key === principal.public_key
+            && vC(claim, att.signature))) { console.error("principal attestation INVALID"); good = false; }
+    } else { console.error("mandate missing principal attestation"); good = false; }
+    if (m.parent) {
+      const p = m.parent;
+      const attenuates = (m.scope ?? []).length > 0
+        && (m.scope ?? []).every((s) => scopeAllows(p.scope, s))
+        && String(p.valid_from ?? "") <= String(m.valid_from ?? "")
+        && String(m.valid_until ?? "") <= String(p.valid_until ?? "")
+        && p.delegate_id === principal.host_id
+        && m.parent_id === p.mandate_id
+        && m.depth === ((p.depth ?? 0) + 1);
+      if (!attenuates) { console.error("sub-mandate does not attenuate its parent"); good = false; }
+      if (!verifyLink(p)) good = false;
+    }
+    return good;
+  };
+  ok = verifyLink(input);
   console.log(ok
-    ? `VALID (mandate ${input.mandate_id}: ${principal.host_id} → ${input.delegate_id}, scope [${(input.scope ?? []).join(", ")}], until ${input.valid_until})`
+    ? `VALID (mandate ${input.mandate_id}: ${(input.principal ?? {}).host_id} → ${input.delegate_id}`
+      + `${input.parent_id ? ` — sub of ${input.parent_id} at depth ${input.depth}` : ""})`
     : "INVALID");
 } else if (input.kind === "mandate-revocation") {
   // Mandate revocation (chp-v0.2.md §10, proposal 0007): the principal key
