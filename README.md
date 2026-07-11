@@ -127,6 +127,18 @@ The host emits `execution_started` and `execution_completed` evidence for the in
 - `docs/release-checklist-v0.1.md`: release-readiness checklist
 - `docs/packaging-v0.1.md`: packaging and versioning plan
 
+## Production Posture
+
+The reference implementation is hardened for production operation: WAL
+multi-writer safety with hot backup (`chp store backup --verify`), SIGTERM
+drain (in-flight work completes before exit), a fail-loud auth flag
+(`CHP_HOST_REQUIRE_AUTH=1`), non-root container images with health checks,
+scheduled retention, and operator metrics (store size, witness-loop
+liveness, revocation counts, internal errors). Operations, backup/restore,
+rolling upgrades, and the key-compromise runbook:
+[docs/production-runbook.md](docs/production-runbook.md). Vulnerability
+reporting: [SECURITY.md](SECURITY.md).
+
 ## CHP vs MCP
 
 MCP exposes tools and context to AI applications. CHP governs and evidences execution of capabilities.

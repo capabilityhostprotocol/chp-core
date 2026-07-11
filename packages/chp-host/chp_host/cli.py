@@ -61,6 +61,10 @@ def _inject_keychain_secrets(keys: list[str]) -> None:
 def _cmd_serve(args: argparse.Namespace) -> int:
     if getattr(args, "secrets_from_keychain", None):
         _inject_keychain_secrets(args.secrets_from_keychain)
+    # SIGTERM drain: must be installed from the MAIN thread (a signal.signal
+    # restriction) — env mode runs its servers in worker threads.
+    from chp_core.http import install_sigterm_drain
+    install_sigterm_drain()
     # Environment mode: start all local hosts defined in the manifest concurrently.
     env_name = args.environment or os.environ.get("CHP_ENVIRONMENT")
     if env_name:
@@ -469,9 +473,11 @@ def _cmd_uninstall_service(args: argparse.Namespace) -> int:
 
 def _cmd_gateway(args: argparse.Namespace) -> int:
     """Start a CHP HTTP gateway that routes across all transports in an environment."""
+    from chp_core.http import install_sigterm_drain
     from chp_core.transport import HttpTransport, LocalTransport
     from .router import MultiHostRouter
 
+    install_sigterm_drain()  # main thread — before any server thread spawns
     keychain_keys = getattr(args, "secrets_from_keychain", None) or []
     if keychain_keys:
         _inject_keychain_secrets(keychain_keys)
@@ -519,10 +525,15 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         )
         transports.append(LocalTransport(local_host, name=profile.host_id))
 
-    # Remote HTTP hosts from agent_remotes.
+    # Remote HTTP hosts from agent_remotes. Per-member timeout/retries come
+    # from the manifest entry (production knobs — a slow member should not
+    # hold a router thread for the global default, and retries stay opt-in
+    # per the at-most-once caveat on the client).
     for remote in env.resolve_remotes():
         transports.append(HttpTransport(
             remote.url, name=remote.url, api_key=remote.api_key,
+            timeout=int(remote.timeout_s) if remote.timeout_s else 30,
+            retries=int(remote.retries or 0),
         ))
         if remote.role:
             host_roles[remote.url] = remote.role
@@ -556,6 +567,20 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
     if probe_interval > 0:
         router.start_prober(probe_interval)
         print(f"Health prober: every {probe_interval:g}s")
+
+    # Background catalog refresher (hardening arc): keeps node restarts/
+    # upgrades propagating WITHOUT the invoke path ever paying the discover
+    # fan-out (the pre-arc behavior stalled the first post-TTL invoke behind
+    # the slowest member).
+    router.start_catalog_refresher()
+
+    # Scheduled retention (hardening arc): off unless configured.
+    retention_interval = float(getattr(gw, "retention_interval_s", 0) or 0) if gw else 0.0
+    retention_config = getattr(gw, "retention_config", None) if gw else None
+    if retention_interval > 0 and retention_config:
+        from .retention import start_retention_loop
+        start_retention_loop(store_path, retention_config, retention_interval)
+        print(f"Retention: every {retention_interval:g}s from {retention_config}")
 
     # Mesh witnessing (§12): countersign every peer's store head each tick —
     # the receipts this node keeps are records peers' operators cannot delete.
@@ -1167,7 +1192,9 @@ def _cmd_mesh_add(args: argparse.Namespace) -> int:
         key_name = next_peer_key_name(data)
 
     try:
-        add_remote(url, api_key_env=key_name, role=role)
+        add_remote(url, api_key_env=key_name, role=role,
+                   timeout_s=getattr(args, "timeout_s", None),
+                   retries=int(getattr(args, "retries", 0) or 0))
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -1750,6 +1777,19 @@ def _restart_chp_services() -> list[str]:
     units = [parts[0] for line in r.stdout.splitlines() if (parts := line.split())]
     for u in units:
         subprocess.run(["systemctl", "--user", "restart", u], capture_output=True, text=True)
+    # System scope too (deploy/chp-host.service installs there): plain
+    # systemctl as root, sudo -n otherwise — report skips instead of hanging
+    # on a password prompt inside a detached update.
+    r = subprocess.run(
+        ["systemctl", "--no-legend", "list-units", "chp-*.service"],
+        capture_output=True, text=True,
+    )
+    system_units = [parts[0] for line in r.stdout.splitlines() if (parts := line.split())]
+    for u in system_units:
+        cmd = (["systemctl", "restart", u] if os.geteuid() == 0
+               else ["sudo", "-n", "systemctl", "restart", u])
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        units.append(u if result.returncode == 0 else f"{u} (SKIPPED: needs root)")
     return units
 
 
@@ -2263,6 +2303,12 @@ def build_parser() -> argparse.ArgumentParser:
     mesh_add.add_argument("url", help="Base URL of the CHP host (e.g. http://100.1.2.3:8803).")
     mesh_add.add_argument("--role", default="worker", choices=list(_ROLE_PROFILES), help="Role label.")
     mesh_add.add_argument("--key-name", dest="key_name", help="api_key_env name to use (default: CHP_PEER_n_KEY).")
+    mesh_add.add_argument("--timeout-s", dest="timeout_s", type=float, default=None,
+                          help="Per-member transport timeout in seconds (default 30).")
+    mesh_add.add_argument("--retries", type=int, default=0,
+                          help="Opt-in client retries for this member (default 0 — "
+                               "a mid-flight drop may have executed; keep 0 for "
+                               "non-idempotent capabilities).")
     mesh_add.set_defaults(func=_cmd_mesh_add)
 
     mesh_list = mesh_sub.add_parser("list", help="List mesh remotes and probe their health.")

@@ -49,6 +49,8 @@ User={user}
 ExecStart={python} -m chp_host.cli serve --profile {profile_path}{secrets_args}
 Restart=on-failure
 RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
 EnvironmentFile=-%h/.chp/{host_id}.env
 
 [Install]

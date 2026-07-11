@@ -628,3 +628,66 @@ class TestProber:
                 raise AssertionError("prober never observed the dead member")
         finally:
             stop()
+
+
+# ---------------------------------------------------------------------------
+# Hot path: catalog refresh must never stall a known-capability invoke
+# ---------------------------------------------------------------------------
+
+class TestCatalogHotPath:
+    @pytest.mark.asyncio
+    async def test_slow_member_does_not_stall_known_capability(self, monkeypatch):
+        """Pre-hardening, the first invoke after the catalog TTL paid a serial
+        discover of EVERY member — one hung member stalled unrelated invokes
+        for its full timeout. Known capabilities must now route immediately."""
+        import time as _time
+
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+
+        class HungTransport(LocalTransport):
+            async def discover(self):
+                await asyncio.sleep(10)
+                return await super().discover()
+
+        hung = HungTransport(make_echo_host("B", "b", cap_id="cap.hung"), name="B")
+        router = MultiHostRouter([a])
+        await router.connect()
+        # Simulate the hung member joining + a long-expired catalog TTL.
+        router._transports.append(hung)
+        router._last_discover = -10_000.0
+
+        t0 = _time.monotonic()
+        result = await router.ainvoke("echo.who", {})
+        elapsed = _time.monotonic() - t0
+        assert result.data == {"host": "a"}
+        assert elapsed < 1.0, (
+            f"known-capability invoke stalled {elapsed:.1f}s behind a hung member")
+
+    @pytest.mark.asyncio
+    async def test_unknown_capability_triggers_inline_refresh(self):
+        """A just-registered capability routes via the stale-while-revalidate
+        inline refresh without waiting for a background tick."""
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        late = LocalTransport(make_echo_host("C", "c", cap_id="cap.late"), name="C")
+        router = MultiHostRouter([a])
+        await router.connect()
+        router._transports.append(late)
+        router._last_discover = -10_000.0
+
+        result = await router.ainvoke("cap.late", {})
+        assert result.outcome == "success"
+
+    @pytest.mark.asyncio
+    async def test_refresh_keeps_last_known_catalog_for_failing_member(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        router = MultiHostRouter([a])
+        await router.connect()
+        assert router.hosts_for("echo.who") == ["A"]
+
+        async def _boom():
+            raise ConnectionError("down")
+
+        a.discover = _boom  # type: ignore[method-assign]
+        await router._refresh_catalog()
+        # last-known catalog retained — routes not dropped on a failed refresh
+        assert router.hosts_for("echo.who") == ["A"]
