@@ -6,12 +6,14 @@ import {
   buildChainWitness,
   buildContinuityStatement,
   buildMandate,
+  buildMandateRevocation,
   buildProvenanceStatement,
   computeStoreHead,
   keypairFromSeed,
   verifyChainWitness,
   verifyContinuity,
   verifyMandate,
+  verifyMandateRevocation,
   verifyProvenanceStatement,
 } from '../src/index.js';
 
@@ -29,6 +31,52 @@ describe('statement builders — TS build parity (round-trip under own verifiers
     expect((m.principal as Record<string, unknown>).key_history).toBeUndefined();
     const v = verifyMandate(m, { atTime: TS, capabilityId: 'a.first', delegateId: 'agent-z' });
     expect(v.valid).toBe(true);
+  });
+
+  it('buildMandateRevocation → verifyMandateRevocation; revokes under verifyMandate', () => {
+    const m = buildMandate('principal-b', key, {
+      delegateId: 'agent-z', scope: ['a.first'],
+      validFrom: TS, validUntil: '2027-01-01T00:00:00Z', createdAt: TS,
+      mandateId: 'mnd_revoke_test',
+    });
+    const rev = buildMandateRevocation(m, key, { revokedAt: TS, reason: 'test' });
+    expect(verifyMandateRevocation(rev).valid).toBe(true);
+    const revoked = verifyMandate(m, { atTime: TS, revocations: [rev] });
+    expect(revoked.valid).toBe(false);
+    expect(revoked.checks.not_revoked).toBe(false);
+    expect(verifyMandate(m, { atTime: TS, revocations: [] }).valid).toBe(true);
+  });
+
+  it('a revocation signed by a non-issuer key is INERT (issuer-only rule)', () => {
+    const m = buildMandate('principal-b', key, {
+      delegateId: 'agent-z', scope: ['a.first'],
+      validFrom: TS, validUntil: '2027-01-01T00:00:00Z', createdAt: TS,
+      mandateId: 'mnd_forge_test',
+    });
+    const attacker = keypairFromSeed(Buffer.from(Array.from({ length: 32 }, (_, i) => i + 77)));
+    // buildMandateRevocation itself refuses a non-issuer key...
+    expect(() => buildMandateRevocation(m, attacker, { revokedAt: TS })).toThrow(/issuer/);
+    // ...so forge via an impostor mandate naming the same id: self-consistent
+    // but inert against the real mandate (key mismatch at verification).
+    const impostor = buildMandate('principal-b', attacker, {
+      delegateId: 'agent-z', scope: ['a.first'],
+      validFrom: TS, validUntil: '2027-01-01T00:00:00Z', createdAt: TS,
+      mandateId: 'mnd_forge_test',
+    });
+    const forged = buildMandateRevocation(impostor, attacker, { revokedAt: TS });
+    expect(verifyMandateRevocation(forged).valid).toBe(true);
+    const v = verifyMandate(m, { atTime: TS, revocations: [forged] });
+    expect(v.valid).toBe(true);
+    expect(v.checks.not_revoked).toBe(true);
+  });
+
+  it('cross-verifies the Python-signed mandate-revocation vector pair', () => {
+    const dir = fileURLToPath(new URL('../../../spec/test-vectors/', import.meta.url));
+    const mandate = JSON.parse(readFileSync(dir + 'mandate.json', 'utf8'));
+    const rev = JSON.parse(readFileSync(dir + 'mandate-revocation.json', 'utf8'));
+    expect(verifyMandateRevocation(rev).valid).toBe(true);
+    const revoked = verifyMandate(mandate, { atTime: TS, revocations: [rev] });
+    expect(revoked.checks.not_revoked).toBe(false);
   });
 
   it('tampered mandate fails its own verifier', () => {

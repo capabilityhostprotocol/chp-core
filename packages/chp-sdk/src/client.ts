@@ -105,6 +105,69 @@ export class RemoteCapabilityHost {
     }) as Promise<InvocationResult>;
   }
 
+  /**
+   * Streaming invocation (proposal 0006): POSTs `mode:"stream"` and yields
+   * `{delta}` frames, then finally `{result}` with the standard
+   * InvocationResult. If the host answers plain JSON (a denial, or a host
+   * that processed synchronously — the Content-Type switch), the single
+   * `{result}` is yielded with no deltas. NOTE the deliberate asymmetry with
+   * Python's `invoke_stream` (terminal result = StopIteration.value): a
+   * yielded terminal frame is the idiomatic JS shape for async generators.
+   */
+  async *invokeStream(
+    capabilityId: string,
+    payload: JsonValue = {},
+    opts: { correlation?: JsonValue; subject?: JsonValue; version?: string; mandate?: JsonValue } = {},
+  ): AsyncGenerator<{ delta: JsonValue } | { result: InvocationResult }, void, unknown> {
+    const body: Record<string, JsonValue> = {
+      capability_id: capabilityId,
+      payload,
+      mode: 'stream',
+      correlation: opts.correlation ?? {},
+      subject: opts.subject ?? { id: 'remote', type: 'user' },
+    };
+    if (opts.version) body.version = opts.version;
+    if (opts.mandate) body.mandate = opts.mandate;
+    const resp = await fetch(`${this.base}/invoke`, {
+      method: 'POST',
+      headers: this.headers(true),
+      body: JSON.stringify(body),
+    });
+    const ctype = resp.headers.get('content-type') ?? '';
+    if (!ctype.includes('text/event-stream')) {
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(`CHP remote ${resp.status} on /invoke: ${text.slice(0, 300)}`);
+      yield { result: JSON.parse(text) as InvocationResult };
+      return;
+    }
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let event: string | null = null;
+    let sawResult = false;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trimEnd();
+        buf = buf.slice(nl + 1);
+        if (line.startsWith('event: ')) event = line.slice('event: '.length).trim();
+        else if (line.startsWith('data: ')) {
+          const data = JSON.parse(line.slice('data: '.length)) as Record<string, JsonValue>;
+          if (event === 'result') {
+            sawResult = true;
+            yield { result: data as unknown as InvocationResult };
+          } else if (event === 'chunk') {
+            yield { delta: data.delta ?? null };
+          }
+        }
+      }
+    }
+    if (!sawResult) throw new Error('stream ended without a terminal result frame');
+  }
+
   async replay(correlationId: string): Promise<JsonValue[]> {
     const r = (await this.req(`/replay/${encodeURIComponent(correlationId)}`, {
       headers: this.headers(),

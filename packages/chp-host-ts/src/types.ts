@@ -83,7 +83,16 @@ export interface Ctx {
   childCorrelation(): Correlation;
 }
 
-export type Handler = (ctx: Ctx, payload: JsonValue) => JsonValue | Promise<JsonValue>;
+/** Terminal sentinel a STREAMING handler yields last (async generators cannot
+ * return values portably): its `data` becomes the InvocationResult's data.
+ * Internal to the host — never a wire object (the terminal SSE frame carries
+ * a standard InvocationResult). Python parity: `chp_core.types.StreamResult`. */
+export class StreamResult {
+  constructor(readonly data: JsonValue) {}
+}
+
+export type Handler = (ctx: Ctx, payload: JsonValue) =>
+  JsonValue | Promise<JsonValue> | AsyncGenerator<JsonValue | StreamResult, void, unknown>;
 
 export interface PolicyConfig {
   allowed_capability_ids?: string[];
