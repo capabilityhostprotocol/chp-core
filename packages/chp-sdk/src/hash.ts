@@ -33,6 +33,15 @@ export function payloadCommitment(payload: JsonValue | undefined): string {
   return sha256hex(canon(payload ?? {}));
 }
 
+/** chp-chunk-seq-v1 (spec §13.1): SHA-256 over the ordered stream chunk deltas,
+ * each canonicalized with chp-stable-v1 and newline-terminated (the §12
+ * store-head line scheme) — byte-exact across implementations. */
+export function chunkSeqDigest(deltas: JsonValue[]): string {
+  const h = createHash('sha256');
+  for (const d of deltas) h.update(canon(d) + '\n');
+  return h.digest('hex');
+}
+
 /** SHA-256 over the canonical stable fields of an event (+ prev_hash). Under
  * chp-event-hash-v2 (§14) the payload is replaced by its commitment, so the
  * payload can be withheld from a bundle without moving the hash. */

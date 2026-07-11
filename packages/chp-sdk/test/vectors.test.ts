@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { contentHash, payloadCommitment, EVENT_HASH_V2, type EvidenceEvent } from '../src/hash.js';
+import { contentHash, payloadCommitment, chunkSeqDigest, EVENT_HASH_V2, type EvidenceEvent } from '../src/hash.js';
 import { verifyBundle } from '../src/verify.js';
 import { withholdPayloads } from '../src/signing.js';
 import type { JsonValue } from '../src/canon.js';
@@ -71,6 +71,13 @@ describe('published test vectors', () => {
     expect(v.valid).toBe(false);
     expect(v.checks.payload_commitments).toBe(false);
     expect(v.checks.event_hashes).toBe(true); // hash binds the commitment, not the payload
+  });
+
+  it('recomputes the chp-chunk-seq-v1 digest (§13.1)', () => {
+    const v = load('chunk-seq.json');
+    expect(chunkSeqDigest(v.deltas)).toBe(v.chunk_seq_digest);
+    // order matters — a permutation must not match
+    expect(chunkSeqDigest([...v.deltas].reverse())).not.toBe(v.chunk_seq_digest);
   });
 
   it('withholdPayloads keeps the signature valid (TS-native round trip)', () => {

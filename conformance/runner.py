@@ -2114,6 +2114,72 @@ async def check_streaming_invocation(host: Any) -> None:
     assert data.get("joined") == "s1s2s3", f"sync mode returns the terminal data: {data}"
 
 
+async def check_streaming_completion(host: Any) -> None:
+    """v0.2 §13.1 (proposal 0012): a streaming invocation records its chunks and
+    commits a `chp-chunk-seq-v1` digest into `execution_completed`; each
+    `event: chunk` frame carries an `id:` line; a retried invocation_id REPLAYS
+    the recorded chunks (replayed:true, no re-execution); a `Last-Event-ID`
+    reconnect RESUMES from the offset off the recorded buffer."""
+    import json as _json
+    import urllib.request
+
+    from chp_core.host import chunk_seq_digest
+
+    base = getattr(host, "_base", None)
+    assert base, "streaming-completion check requires a wire host"
+    api_key = getattr(host, "_api_key", None)
+
+    def _stream(inv_id: str, last_event_id: int | None = None):
+        headers = {"Content-Type": "application/json",
+                   **({"X-CHP-Key": api_key} if api_key else {}),
+                   **({"Last-Event-ID": str(last_event_id)} if last_event_id is not None else {})}
+        body = {"capability_id": "conformance.stream", "mode": "stream", "payload": {},
+                "invocation_id": inv_id, "correlation": {"correlation_id": inv_id}}
+        req = urllib.request.Request(f"{base}/invoke", data=_json.dumps(body).encode(),
+                                     headers=headers, method="POST")
+        resp = urllib.request.urlopen(req, timeout=30)
+        chunks: list = []
+        ids: list = []
+        result = None
+        event = None
+        eid = None
+        for line in resp.read().decode().splitlines():
+            if line.startswith("id: "):
+                eid = line[len("id: "):].strip()
+            elif line.startswith("event: "):
+                event = line[len("event: "):].strip()
+            elif line.startswith("data: "):
+                data = _json.loads(line[len("data: "):])
+                if event == "chunk":
+                    chunks.append(data.get("delta"))
+                    ids.append(eid)
+                elif event == "result":
+                    result = data
+        return chunks, ids, result
+
+    inv = f"{RUN}-stream-complete"
+    # 1. Fresh stream: chunks each carry an id: line; evidence commits the digest.
+    chunks, ids, result = _stream(inv)
+    assert chunks == ["s1", "s2", "s3"], f"fixture chunks expected, got {chunks}"
+    assert ids == ["0", "1", "2"], f"each chunk MUST carry an id: line, got {ids}"
+    assert result is not None and not result.get("replayed"), "first run is a fresh execution"
+    done = [e for e in host.replay(inv) if e.get("event_type") == "execution_completed"][0]
+    assert done["payload"].get("chunk_count") == 3, "execution_completed must carry chunk_count"
+    assert done["payload"].get("chunk_seq_digest") == chunk_seq_digest(chunks), (
+        "the committed chp-chunk-seq-v1 digest must match the delivered sequence")
+
+    # 2. Retry the SAME id → REPLAY: identical chunks, replayed:true, no re-exec.
+    r_chunks, _, r_result = _stream(inv)
+    assert r_chunks == chunks, f"replay must re-stream identical chunks, got {r_chunks}"
+    assert r_result is not None and r_result.get("replayed") is True, (
+        "a retried streaming invocation_id MUST replay (§13.1)")
+
+    # 3. Last-Event-ID:0 → RESUME from chunk index 1 (off the recorded buffer).
+    res_chunks, res_ids, _ = _stream(inv, last_event_id=0)
+    assert res_chunks == ["s2", "s3"], f"resume from id 0 yields chunks 1.., got {res_chunks}"
+    assert res_ids[:2] == ["1", "2"], f"resumed chunks keep absolute ids, got {res_ids}"
+
+
 async def check_idempotent_replay(host: Any) -> None:
     """v0.2 §13 (proposal 0008): a host that already recorded an
     invocation_id replays the RECORDED result — identical data, marked
@@ -2205,6 +2271,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("sub-delegation (v0.2 §10, proposal 0009)", check_sub_delegation),
     ("revocation freshness (v0.2 §12, proposal 0010)", check_revocation_freshness),
     ("selective disclosure (v0.2 §14, proposal 0011)", check_selective_disclosure),
+    ("streaming completion (v0.2 §13.1, proposal 0012)", check_streaming_completion),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {
