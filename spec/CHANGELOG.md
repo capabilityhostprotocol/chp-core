@@ -5,6 +5,28 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.2.9] — additive over 0.2.8 — **released 2026-07-11**
+
+### Added
+- **Revocation freshness — witnessed revocation heads** (chp-v0.2.md §12
+  "Revocation freshness", [proposals/0010](proposals/0010-revocation-freshness.md)):
+  a **`chp-revocation-head-v1`** digest of the held revocation *identifiers*
+  (sorted `m\x00{mandate_id}\x00{principal_key}` / `k\x00{revoked_key_id}`,
+  SHA-256) is bound into the witnessed store head. `GET /head` gains
+  `revocation_head`; the `chain-witness` signed header gains it
+  **omit-when-absent** (the §10 byte rule — the published `chain-witness.json`
+  vector and every pre-0010 statement are byte-identical). `POST /witness`
+  recomputes the host's own `revocation_head` before persisting
+  (`revocation_head_mismatch`, 409) and snapshots the revocation-identifier
+  set beside the receipt. Because the held set is append-only, an identifier
+  present in an earlier witnessed snapshot but absent later is a **`dropped`
+  revocation — a provable denial of revocation** (`chp revocation verify`).
+  The witness signs only the digest; no revocation id leaks. Discharges the
+  0005/0007 "witnessed heads as a revocation-freshness channel" deferral.
+  Wire suite **23→24** ("revocation freshness"); both reference hosts pass.
+  *Vector: `test-vectors/chain-witness-revfresh.json` (only new file);
+  guards `spec_defines_revocation_freshness` + `revocation_head_vector_verifies`.*
+
 ## [0.2.8] — additive over 0.2.7 — **released 2026-07-11**
 
 ### Added

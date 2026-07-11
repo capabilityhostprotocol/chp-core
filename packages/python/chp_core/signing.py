@@ -865,21 +865,30 @@ _CHAIN_WITNESS_HEADER_FIELDS = ("kind", "host_id", "sequence", "store_head",
 
 
 def chain_witness_header(statement: dict) -> dict:
-    """The witness-signed header of a chain-witness statement (§12)."""
-    return {k: statement.get(k) for k in _CHAIN_WITNESS_HEADER_FIELDS}
+    """The witness-signed header of a chain-witness statement (§12). A
+    revocation-freshness statement (proposal 0010) additionally covers
+    ``revocation_head`` — present ONLY when set, so a pre-0010 statement's
+    header is byte-identical (the §10 omit-when-empty rule)."""
+    header = {k: statement.get(k) for k in _CHAIN_WITNESS_HEADER_FIELDS}
+    if statement.get("revocation_head"):
+        header["revocation_head"] = statement["revocation_head"]
+    return header
 
 
 def build_chain_witness(witnessed_host_id: str, sequence: int, store_head: str,
                         witness_key: HostKey, *, witness_id: str,
                         witnessed_at: str,
-                        anchors: list[dict] | None = None) -> dict:
+                        anchors: list[dict] | None = None,
+                        revocation_head: str | None = None) -> dict:
     """A peer's signed countersignature over another host's store head
     (proposal 0005, chp-v0.2.md §12): "at global sequence N, HOST's store
     digested to ROOT." The fourth statement-family member. The witness signs
-    only the ROOT (no correlation ids leak); because chains are append-only,
-    the witnessed host's history at sequence ≤ N is committed — a later
-    rewrite recomputes to a different root. The record's value is that it
-    lives with the WITNESS: the witnessed operator cannot delete it."""
+    only the ROOT(s) (no correlation or revocation ids leak); because chains
+    are append-only, the witnessed host's history at sequence ≤ N is committed
+    — a later rewrite recomputes to a different root. The record's value is
+    that it lives with the WITNESS: the witnessed operator cannot delete it.
+    When ``revocation_head`` is supplied (proposal 0010) it is countersigned
+    too, making a dropped revocation detectable."""
     if not witness_key.can_sign:
         raise SigningUnavailable("witness key has no private component; cannot sign")
     statement: dict = {
@@ -890,6 +899,8 @@ def build_chain_witness(witnessed_host_id: str, sequence: int, store_head: str,
         "witnessed_at": witnessed_at,
         "canonicalization": CANONICALIZATION,
     }
+    if revocation_head:
+        statement["revocation_head"] = revocation_head
     statement["witness"] = {
         "host_id": witness_id,
         "public_key": witness_key.public_key_b64,

@@ -34,6 +34,11 @@
       "pattern": "^[0-9a-f]{64}$",
       "description": "chp-store-head-v1 digest of the store at `sequence`."
     },
+    "revocation_head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "OPTIONAL chp-revocation-head-v1 digest of the witnessed host's held revocation set (chp-v0.2.md section 12 Revocation freshness, proposal 0010). Present only when the witnessed head carried one (omit-when-absent) — a pre-0010 statement omits it and is byte-identical. Signed into the header when present."
+    },
     "witnessed_at": {
       "type": "string"
     },

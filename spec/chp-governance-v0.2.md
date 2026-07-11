@@ -1,6 +1,6 @@
 # Capability Host Protocol — Governance Vocabulary (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.8 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md). Governance is CHP's
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md). Governance is CHP's
 differentiator: the boundary doesn't just record *what an agent did*, it records
 *what governed it* — denials, risk tiers, autonomy budgets, human approval,
 safety guardrails — as first-class, correlated evidence on the same signed plane.

@@ -330,6 +330,8 @@ export function verifyChainWitness(
 
   const header: Record<string, JsonValue> = {};
   for (const f of CHAIN_WITNESS_VERIFY_FIELDS) header[f] = statement[f] ?? null;
+  // revocation_head (proposal 0010) is header-signed only when present.
+  if (statement.revocation_head) header.revocation_head = statement.revocation_head;
   checks.signature = sig.algorithm === 'ed25519' && !!pubKey
     && verifyCanon(pubKey, header, String(sig.signature ?? ''));
 

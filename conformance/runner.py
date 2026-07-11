@@ -1836,6 +1836,69 @@ async def check_witness_roundtrip(host: Any) -> None:
         assert exc.code in (400, 409), f"expected 400/409 refusal, got {exc.code}"
 
 
+async def check_revocation_freshness(host: Any) -> None:
+    """v0.2 §12 Revocation freshness (proposal 0010): the witnessed head binds
+    a `chp-revocation-head-v1` digest. `/head` returns `revocation_head`; a
+    statement carrying the correct one round-trips; a statement over a WRONG
+    revocation_head is refused (409) — the parallel of the wrong-store-head
+    branch, so a witness cannot countersign a set the host does not hold."""
+    import base64
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from chp_core import signing
+    from chp_core.types import utc_now
+
+    base = getattr(host, "_base", None)
+    assert base, "revocation-freshness check requires a wire host"
+    api_key = getattr(host, "_api_key", None)
+
+    def _req(path: str, body=None):
+        req = urllib.request.Request(
+            f"{base}{path}",
+            data=_json.dumps(body).encode() if body is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"X-CHP-Key": api_key} if api_key else {})},
+            method="POST" if body is not None else "GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return _json.loads(resp.read().decode())
+
+    def _key():
+        priv = ed25519.Ed25519PrivateKey.generate()
+        pub = base64.b64encode(priv.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+        return signing.HostKey(key_id=signing.key_id_for(base64.b64decode(pub)),
+                               public_key_b64=pub, _private=priv)
+
+    head = _req("/head")
+    assert head.get("revocation_head"), f"/head must return revocation_head: {head}"
+    assert len(head["revocation_head"]) == 64, "revocation_head must be a 64-hex digest"
+
+    # 1. A statement carrying the CORRECT revocation_head is accepted.
+    stmt = signing.build_chain_witness(
+        str(head["host_id"]), int(head["sequence"]), str(head["store_head"]),
+        _key(), witness_id="freshness-witness", witnessed_at=utc_now(),
+        revocation_head=str(head["revocation_head"]))
+    accepted = _req("/witness", stmt)
+    assert accepted.get("accepted") is True, f"fresh witness must be accepted: {accepted}"
+
+    # 2. A statement over a WRONG revocation_head is refused (409).
+    head2 = _req("/head")
+    bad = signing.build_chain_witness(
+        str(head2["host_id"]), int(head2["sequence"]), str(head2["store_head"]),
+        _key(), witness_id="freshness-witness", witnessed_at=utc_now(),
+        revocation_head="a" * 64)  # a set the host does not hold
+    try:
+        _req("/witness", bad)
+        raise AssertionError("a wrong revocation_head must be refused")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 409, f"expected 409 revocation_head_mismatch, got {exc.code}"
+
+
 async def check_mandate_revocation(host: Any) -> None:
     """v0.2 §10 Revocation (proposal 0007): withdrawing authority before
     expiry. The runner plays PRINCIPAL: a mandated invoke succeeds; the
@@ -2104,6 +2167,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("streaming invocation (binding, proposal 0006)", check_streaming_invocation),
     ("idempotent replay (v0.2 §13, proposal 0008)", check_idempotent_replay),
     ("sub-delegation (v0.2 §10, proposal 0009)", check_sub_delegation),
+    ("revocation freshness (v0.2 §12, proposal 0010)", check_revocation_freshness),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

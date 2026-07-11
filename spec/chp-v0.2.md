@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.8 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 
@@ -667,20 +667,25 @@ a peer signed.
 **The `chain-witness` statement** — the fourth statement-family member
 (bundles §3, provenance §9, mandates §10): the witness signs the canonical
 header `{kind, host_id (witnessed), sequence, store_head, witnessed_at,
-canonicalization}`, with the witness's attestation (anchors §3.1) embedded.
-The witness signs only the **root**; the witnessed host's correlation ids
-never leave it. Schema:
+canonicalization}` — plus `revocation_head` when the witnessed head carried
+one (Revocation freshness below; present only when set, the §10
+omit-when-empty rule, so a pre-0010 statement is byte-identical) — with the
+witness's attestation (anchors §3.1) embedded. The witness signs only the
+**root(s)**; the witnessed host's correlation ids and revocation ids never
+leave it. Schema:
 [chain-witness.schema.json](../schemas/chain-witness.schema.json); fixture:
 `spec/test-vectors/chain-witness.json` (verified by both reference
 implementations and `verify.mjs`).
 
 **Exchange.** `GET /head` (authed — the sequence discloses activity volume)
-returns `{host_id, scheme, sequence, store_head, at}`. A witness fetches it,
-builds the statement, and `POST /witness` delivers it; the witnessed host
-MUST verify the signature **and recompute its own head at that sequence**
-before persisting — never store an unverified receipt. On acceptance the
-witnessed host snapshots its leaves-at-N beside the statement (the signed
-root makes the snapshot tamper-evident). `GET /witnesses` (authed) serves
+returns `{host_id, scheme, sequence, store_head, revocation_head, at}`. A
+witness fetches it, builds the statement, and `POST /witness` delivers it; the
+witnessed host MUST verify the signature **and recompute its own head at that
+sequence** — and its own `revocation_head` — before persisting, never storing
+an unverified or non-matching receipt (`revocation_head_mismatch`, 409). On
+acceptance the witnessed host snapshots its leaves-at-N and its
+revocation-identifier set beside the statement (the signed roots make the
+snapshots tamper-evident). `GET /witnesses` (authed) serves
 received statements — a host publishing third-party countersignatures over
 its own history. The witness retains every statement it issued: those records
 are the threat-model core. Witness records MUST NOT enter the evidence store
@@ -697,6 +702,25 @@ forge a different valid hash); differing hash → **`tampered`**; a correlation
 present at ≤ N but missing from the snapshot → **`tampered`** (inserted
 history). Honest lifecycle and rewriting are thereby distinguishable with no
 witness-expiry rules.
+
+**Revocation freshness** ([proposal 0010](proposals/0010-revocation-freshness.md)).
+Revocation (§10) is best-effort push, and a host could silently drop a
+revocation it received with no way to prove otherwise. The fix rides this
+same channel: a **`chp-revocation-head-v1`** digest — SHA-256 over the held
+revocation *identifiers* (`m\x00{mandate_id}\x00{principal.public_key}\n` per
+mandate revocation, `k\x00{revoked_key_id}\n` per key revocation, sorted;
+identifiers, never the statements, so re-serialization does not move the
+head; a host with none has the well-defined empty-set digest) — is bound into
+the witnessed head. The witness countersigns `revocation_head` alongside
+`store_head`; the witnessed host recomputes its own before persisting a
+receipt and snapshots its revocation-identifier set beside it. An auditor
+(`chp revocation verify`) recomputes the digest over a snapshot to prove it
+is what a peer signed, then compares snapshots and the current set: because
+the held set is append-only, **an identifier present in an earlier witnessed
+snapshot but absent later is a `dropped` revocation — a provable denial of
+revocation.** The witness signs only the digest; no revocation id leaks to
+peers. Lawful revocation-expiry dispositions and cross-mesh freshness quorum
+are out of scope (named in proposal 0010).
 
 **Cadence and posture.** Any authed peer MAY witness any peer; the reference
 gateway carries an opt-in witnessing loop (`gateway.witness_interval_s`,

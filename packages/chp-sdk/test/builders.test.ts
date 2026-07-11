@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   buildChainWitness,
+  computeRevocationHead,
+  verifyChainWitness,
   buildContinuityStatement,
   buildMandate,
   buildMandateRevocation,
@@ -83,6 +85,31 @@ describe('statement builders — TS build parity (round-trip under own verifiers
     expect(v.valid).toBe(true);
     expect(v.checks.parent_valid).toBe(true);
     expect(mandateRootPrincipal(sub)).toBe('vector-principal');
+  });
+
+  it('revocation_head: build + verify a chain-witness carrying it; omit-when-absent', () => {
+    const rh = computeRevocationHead(['m\x00m1\x00k', 'k\x00abc123']);
+    const stmt = buildChainWitness('host-a', 5, '0'.repeat(64), key, {
+      witnessId: 'w', witnessedAt: TS, revocationHead: rh });
+    expect(stmt.revocation_head).toBe(rh);
+    expect(verifyChainWitness(stmt, { expectedHostId: 'host-a' }).valid).toBe(true);
+    // absent → no key, byte-identical header path (single-hop)
+    const plain = buildChainWitness('host-a', 5, '0'.repeat(64), key, {
+      witnessId: 'w', witnessedAt: TS });
+    expect(plain.revocation_head).toBeUndefined();
+    expect(verifyChainWitness(plain).valid).toBe(true);
+  });
+
+  it('cross-verifies the Python-signed chain-witness-revfresh vector', () => {
+    const dir = fileURLToPath(new URL('../../../spec/test-vectors/', import.meta.url));
+    const stmt = JSON.parse(readFileSync(dir + 'chain-witness-revfresh.json', 'utf8'));
+    expect(stmt.revocation_head).toMatch(/^[0-9a-f]{64}$/);
+    expect(verifyChainWitness(stmt, { expectedHostId: 'vector-witnessed-host' }).valid).toBe(true);
+    // recompute the digest from the same fixed ids → matches the signed head
+    expect(computeRevocationHead([
+      'm\x00mnd_fixture0001\x00cvZ2Qm5jZml4dHVyZXB1YmtleXYx',
+      'k\x00d20d8b42b94c3375',
+    ])).toBe(stmt.revocation_head);
   });
 
   it('buildMandateRevocation → verifyMandateRevocation; revokes under verifyMandate', () => {

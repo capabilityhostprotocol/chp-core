@@ -503,26 +503,42 @@ export function computeStoreHead(
   return { scheme: 'chp-store-head-v1', sequence, store_head: h.digest('hex'), leaves: obj };
 }
 
+/** chp-revocation-head-v1: sha256 over sorted revocation-identifier lines
+ * (`m\x00{mandate_id}\x00{principal_key}` / `k\x00{revoked_key_id}`), each
+ * terminated `\n` — byte-compatible with Python `compute_revocation_head`.
+ * The empty set has a well-defined digest. */
+export function computeRevocationHead(ids: string[]): string {
+  const h = createHash('sha256');
+  for (const line of [...ids].sort()) h.update(`${line}\n`);
+  return h.digest('hex');
+}
+
 const CHAIN_WITNESS_HEADER_FIELDS = [
   'kind', 'host_id', 'sequence', 'store_head', 'witnessed_at', 'canonicalization',
 ] as const;
 
-/** The witness-signed header of a chain-witness statement (§12). */
+/** The witness-signed header of a chain-witness statement (§12). A
+ * revocation-freshness statement (proposal 0010) additionally covers
+ * `revocation_head` — present ONLY when set, so a pre-0010 statement's header
+ * is byte-identical (the §10 omit-when-empty rule). */
 export function chainWitnessHeader(statement: Record<string, JsonValue>): JsonValue {
   const h: Record<string, JsonValue> = {};
   for (const f of CHAIN_WITNESS_HEADER_FIELDS) h[f] = statement[f] ?? null;
+  if (statement.revocation_head) h.revocation_head = statement.revocation_head;
   return h;
 }
 
 /** A peer's signed countersignature over another host's store head (§12) —
  * byte-compatible with Python `build_chain_witness`. The witness signs only
- * the ROOT; the witnessed host's correlation ids never leave it. */
+ * the ROOT(s); the witnessed host's correlation and revocation ids never
+ * leave it. `revocationHead` (proposal 0010) is countersigned when supplied. */
 export function buildChainWitness(
   witnessedHostId: string,
   sequence: number,
   storeHead: string,
   key: HostKey,
-  opts: { witnessId: string; witnessedAt: string; anchors?: JsonValue[] | null },
+  opts: { witnessId: string; witnessedAt: string; anchors?: JsonValue[] | null;
+    revocationHead?: string | null },
 ): Record<string, JsonValue> {
   if (!key.privateKey) throw new Error('witness key has no private component; cannot sign');
   const statement: Record<string, JsonValue> = {
@@ -533,6 +549,7 @@ export function buildChainWitness(
     witnessed_at: opts.witnessedAt,
     canonicalization: CANONICALIZATION,
   };
+  if (opts.revocationHead) statement.revocation_head = opts.revocationHead;
   statement.witness = {
     host_id: opts.witnessId,
     public_key: key.publicKeyB64,

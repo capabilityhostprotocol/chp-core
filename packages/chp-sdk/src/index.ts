@@ -42,6 +42,7 @@ export {
   buildChainWitness,
   chainWitnessHeader,
   computeStoreHead,
+  computeRevocationHead,
   type StoreHead,
 } from './signing.js';
 export {

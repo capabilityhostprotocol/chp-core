@@ -41,13 +41,20 @@ def _load_json(path: Path, default):
         return default
 
 
-def record_received(statement: JSON, leaves: dict) -> None:
+def record_received(statement: JSON, leaves: dict,
+                    revocations: list | None = None) -> None:
     """Persist a verified received witness statement WITH the leaves snapshot
-    at its sequence (caller has already verified signature + head match)."""
+    at its sequence (caller has already verified signature + head match). When
+    the statement countersigns a ``revocation_head`` (proposal 0010), the held
+    revocation-identifier set is snapshotted too, so the freshness audit can
+    recompute the digest and detect a dropped revocation."""
     path = witness_dir() / "received.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     receipts = _load_json(path, [])
-    receipts.append({"statement": statement, "leaves": leaves})
+    receipt: JSON = {"statement": statement, "leaves": leaves}
+    if revocations is not None:
+        receipt["revocations"] = revocations
+    receipts.append(receipt)
     path.write_text(json.dumps(receipts, indent=2, sort_keys=True) + "\n")
 
 

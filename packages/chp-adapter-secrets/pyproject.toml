@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-secrets"
-version = "0.17.0"
+version = "0.18.0"
 description = "CHP capability adapter — runtime credential injection from env/file/memory backends"
 readme = "README.md"
 requires-python = ">=3.10"
