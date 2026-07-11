@@ -578,6 +578,7 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                           "witness": (body.get("witness") or {}).get("host_id")})
 
     def _own_key_revocations(self) -> list:
+        from . import signing
         my_id = getattr(self.server.chp_host, "host_id",
                         getattr(self.server.chp_host, "_host_id", ""))
         try:
