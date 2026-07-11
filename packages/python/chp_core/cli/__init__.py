@@ -25,6 +25,7 @@ from ._core import (
     cmd_retention_apply,
     cmd_bundle_minimize,
     cmd_bundle_verify,
+    cmd_stream_verify,
     cmd_revocation_verify,
     cmd_store_backup,
     cmd_serve_demo,
@@ -798,6 +799,17 @@ def build_parser() -> argparse.ArgumentParser:
     b_ver.add_argument("--key-id", default=None, dest="key_id",
                        help="Pin the expected signer key_id.")
     b_ver.set_defaults(func=cmd_bundle_verify)
+
+    # chp stream — streaming completion (spec §13.1, proposal 0012)
+    stream_p = subcommands.add_parser(
+        "stream",
+        help="Streaming completion: verify a chunk-sequence digest (spec §13.1, proposal 0012).")
+    stream_sub = stream_p.add_subparsers(dest="stream_command", required=True)
+    s_ver = stream_sub.add_parser(
+        "verify",
+        help="Recompute chp-chunk-seq-v1 over ordered deltas and compare to the committed chunk_seq_digest.")
+    s_ver.add_argument("file", help="JSON with `deltas` (list) + `chunk_seq_digest`.")
+    s_ver.set_defaults(func=cmd_stream_verify)
 
     keygen_p = subcommands.add_parser("keygen", help="Generate a host ed25519 signing keypair.")
     keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")

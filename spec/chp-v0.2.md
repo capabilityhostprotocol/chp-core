@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure 2026-07-11**). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion** 2026-07-11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -759,9 +759,9 @@ The idempotency key is the envelope's existing `invocation_id` — no new
 header or field. A caller that wants retry-safety presents the SAME id on
 every attempt; a fresh id (the default) always means a fresh execution.
 Replay covers every processed outcome — `success`, `failure`, `denied`,
-`skipped`; a replayed denial is the same denial and gates do not re-run
-(their decision is part of the recorded outcome). Streaming invocations are
-excluded (named deferral). The scope is a single host: replay happens only
+`skipped` — and, since v0.3.1, **streaming invocations too** (§13.1); a
+replayed denial is the same denial and gates do not re-run (their decision is
+part of the recorded outcome). The scope is a single host: replay happens only
 on the host that served the original — cross-owner dedupe at a gateway is
 deliberately out of scope.
 
@@ -784,8 +784,45 @@ host MAY additionally bind replay to the original caller identity.
 With this section, the reference client's opt-in retry and the reference
 gateway's owner-failover reuse ONE `invocation_id` across attempts, making
 both provably safe against replay-conformant hosts. Distributed result
-caches, streaming replay, and an `invocation_replayed` evidence type are
-deliberately out of scope (named in proposal 0008).
+caches and an `invocation_replayed` evidence type are deliberately out of
+scope (named in proposal 0008).
+
+### 13.1 Streaming replay & resume
+
+*(v0.3.1, [proposals/0012](proposals/0012-streaming-completion.md).) Idempotent
+replay extended to streams, plus mid-stream resume.*
+
+A streaming invocation (`mode:"stream"`, §binding "Streaming invocations")
+records its ordered chunk deltas beside the recorded terminal result — serving
+state in the same window-bounded cache, **never hashed into the evidence
+chain** — and commits a **`chp-chunk-seq-v1`** digest of them into its
+`execution_completed` evidence as `chunk_seq_digest` =
+`sha256( Σ chp-stable-v1(delta_i) + "\n" )` (the §12 store-head line scheme,
+each delta canonicalized so the digest is byte-exact across implementations),
+alongside a `chunk_count`. Both fields are **omit-when-absent** — only streaming completions carry them, so a non-stream
+event is byte-identical. The digest makes the delivered sequence tamper-evident:
+a resumed or replayed stream is verifiable against what was originally
+committed. Per-chunk events are NOT emitted (they are transport, not evidence).
+
+- **Replay.** A retried streaming `invocation_id` whose chunks are still cached
+  MUST **re-stream the recorded chunks, then the recorded terminal result**,
+  with `"replayed": true`; no lifecycle events are appended (the execution did
+  not re-happen). If the chunks are no longer cached (cache cap or window
+  expiry) the host MAY replay the terminal result as a single degenerate stream
+  — still idempotent. A cap on retained chunks/bytes is permitted; over it, a
+  stream is recorded non-resumable but still emits its digest.
+- **Resume.** Each `event: chunk` SSE frame carries an `id: <n>` line (n =
+  0-based chunk index); the terminal `result` frame carries the final id. A
+  client whose connection drops reconnects with the **same `invocation_id`** and
+  a `Last-Event-ID: <n>` request header; the host resumes from chunk **n+1** off
+  the recorded buffer, then the terminal result. Resume is replay-from-offset; a
+  fresh replay is resume-from-(-1) — one path. A host that does not implement
+  resume answers the reconnect as a fresh stream (the client consumes from the
+  start); `id:` is standard SSE a pre-0012 client ignores.
+
+Deferred (proposal 0012): live mid-flight resume (reconnecting to a
+still-producing generator), per-chunk hashed events, SSE keep-alive pings,
+backpressure, durable cross-restart chunk storage, and cross-host resume.
 
 ## 14. Selective Disclosure — Withholdable Payloads
 
