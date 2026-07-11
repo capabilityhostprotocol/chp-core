@@ -1008,6 +1008,25 @@ def cmd_bundle_verify(args: argparse.Namespace) -> int:
     return 0 if v.valid else 1
 
 
+def cmd_stream_verify(args: argparse.Namespace) -> int:
+    """Streaming chunk-sequence check (§13.1, proposal 0012): recompute
+    `chp-chunk-seq-v1` over an ordered list of chunk deltas and confirm it
+    equals the committed `chunk_seq_digest` — so a replayed/resumed stream is
+    provably the sequence its `execution_completed` evidence committed. The
+    input JSON carries `deltas` (a list) and `chunk_seq_digest`. Exit 1 on
+    mismatch."""
+    from ..host import chunk_seq_digest
+
+    with open(args.file) as fh:
+        doc = json.load(fh)
+    recomputed = chunk_seq_digest(doc["deltas"])
+    committed = doc.get("chunk_seq_digest")
+    match = recomputed == committed
+    print(json.dumps({"match": match, "chunk_count": len(doc["deltas"]),
+                      "recomputed": recomputed, "committed": committed}, indent=2))
+    return 0 if match else 1
+
+
 def cmd_provenance_verify(args: argparse.Namespace) -> int:
     import hashlib
     from pathlib import Path

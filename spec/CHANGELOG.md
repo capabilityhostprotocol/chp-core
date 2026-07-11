@@ -5,6 +5,40 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.3.1] — additive over 0.3.0 — **released 2026-07-11**
+
+### Added
+- **Streaming completion — chunk-sequence evidence, resume & replay**
+  (chp-v0.2.md **§13.1** + chp-http-binding.md streaming section,
+  [proposals/0012](proposals/0012-streaming-completion.md)): idempotent replay
+  (§13) extends to `mode:"stream"` invocations. A stream records its ordered
+  chunk deltas as window-bounded serving state (never hashed) and commits a
+  **`chp-chunk-seq-v1`** digest — `sha256(Σ chp-stable-v1(delta_i) + "\n")` —
+  plus `chunk_count` into its `execution_completed` payload
+  (**omit-when-absent**, so non-stream events are byte-identical). A retried
+  streaming `invocation_id` re-streams the recorded chunks + terminal result
+  (`replayed:true`); each `event: chunk` SSE frame gains an `id: <n>` line and a
+  client reconnecting with `Last-Event-ID: <n>` resumes from chunk n+1 (resume =
+  replay-from-offset). Wire conformance grows by one check.
+
+### Compatibility
+- **Additive, no byte changes.** The chunk fields ride in the freeform
+  `execution_completed` payload (like usage tokens) — **no schema change**, and
+  every published vector is byte-identical. SSE `id:` is standard SSE a pre-0012
+  client ignores; a host without resume answers a reconnect as a fresh stream.
+  No new denial code or evidence type (a stream stays the `execution_*` bracket).
+
+### Regression gate
+- New vector `chunk-seq.json`; `git diff spec/test-vectors/` shows only it.
+  Guards `spec_defines_streaming_replay` + `chunk_seq_vector_verifies`. Both
+  reference hosts pass the new wire check (stream → drop → `Last-Event-ID`
+  resume; retried id → replayed stream with identical chunks).
+
+### Deferred
+- Live mid-flight resume (reconnecting to a still-producing generator);
+  per-chunk hashed events; SSE keep-alive pings; backpressure; durable
+  cross-restart chunk storage; cross-host resume.
+
 ## [0.3.0] — first canon evolution over 0.2.9 — **released 2026-07-11**
 
 ### Added

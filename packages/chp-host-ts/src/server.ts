@@ -247,10 +247,20 @@ export function createHostServer(
       // client switches on Content-Type.
       if (env.mode === 'stream') {
         let committed = false;
-        const sse = (event: string, data: JsonValue): void => {
-          res.write(`event: ${event}\ndata: ${JSON.stringify(sortKeys(data))}\n\n`);
+        // Resumable streams (§13.1): a reconnect carries the last chunk id seen;
+        // resume from the next chunk off the recorded buffer. On client drop keep
+        // draining the generator so it records the FULL stream (→ resumable).
+        let clientGone = false;
+        res.on('close', () => { clientGone = true; });
+        const parsed = Number.parseInt(String(req.headers['last-event-id'] ?? ''), 10);
+        const resumeFrom = Number.isFinite(parsed) ? parsed : -1;
+        let nextId = resumeFrom + 1;
+        const sse = (event: string, data: JsonValue, eid?: number): void => {
+          if (clientGone) return;
+          const idLine = eid !== undefined ? `id: ${eid}\n` : '';
+          res.write(`${idLine}event: ${event}\ndata: ${JSON.stringify(sortKeys(data))}\n\n`);
         };
-        for await (const item of host.ainvokeStream(env)) {
+        for await (const item of host.ainvokeStream(env, resumeFrom)) {
           if ('result' in item && !committed) {
             return sendJson(res, 200, item.result as unknown as JsonValue);
           }
@@ -259,8 +269,8 @@ export function createHostServer(
             req.socket.setTimeout(600_000); // real streams outlive the default
             res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
           }
-          if ('result' in item) sse('result', item.result as unknown as JsonValue);
-          else sse('chunk', { delta: item.chunk });
+          if ('result' in item) sse('result', item.result as unknown as JsonValue, nextId);
+          else { sse('chunk', { delta: item.chunk }, nextId); nextId += 1; }
         }
         return void res.end();
       }

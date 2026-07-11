@@ -125,8 +125,15 @@ on Content-Type. Evidence brackets the stream: `execution_started` at open,
 advertises streaming via `modes: ["sync","stream"]`; `mode:"stream"` against
 a sync-only capability is the ordinary gate-4 `unsupported_mode` denial.
 SSE frames are transport, not canonical objects — nothing here is hashed or
-signed. Keep-alive ping frames and resumable streams are deliberately
-unspecified.
+signed. **Resumable streams** (v0.3.1, [proposal 0012](proposals/0012-streaming-completion.md),
+chp-v0.2.md §13.1): each `event: chunk` frame carries an `id: <n>` line (n =
+0-based chunk index) and the terminal `result` frame the final id; a client
+whose connection drops reconnects to `POST /invoke` with the **same
+`invocation_id`** and a `Last-Event-ID: <n>` header, and the host resumes the
+stream from chunk **n+1** off its recorded buffer (then the terminal result).
+Resume and streaming replay (a retried `invocation_id`) share one
+replay-from-offset path; a host that does not implement resume answers the
+reconnect as a fresh stream. Keep-alive ping frames remain unspecified.
 
 **Idempotent replay** ([proposal 0008](proposals/0008-idempotent-replay.md),
 chp-v0.2.md §13). The envelope's `invocation_id` is the idempotency key — no
