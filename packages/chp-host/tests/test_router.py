@@ -691,3 +691,85 @@ class TestCatalogHotPath:
         await router._refresh_catalog()
         # last-known catalog retained — routes not dropped on a failed refresh
         assert router.hosts_for("echo.who") == ["A"]
+
+
+class TestFailoverIdempotency:
+    @pytest.mark.asyncio
+    async def test_failover_reuses_one_invocation_id(self):
+        """spec §13: every owner attempt carries the SAME invocation_id so a
+        host that executed before the drop replays instead of re-executing."""
+        seen: list[str] = []
+
+        class DeadTransport(LocalTransport):
+            async def ainvoke_envelope(self, envelope):
+                seen.append(envelope.invocation_id)
+                raise ConnectionError("down")
+
+        class AliveTransport(LocalTransport):
+            async def ainvoke_envelope(self, envelope):
+                seen.append(envelope.invocation_id)
+                return await super().ainvoke_envelope(envelope)
+
+        dead = DeadTransport(make_echo_host("A", "a"), name="A")
+        alive = AliveTransport(make_echo_host("B", "b"), name="B")
+        router = MultiHostRouter([dead, alive])
+        await router.connect()
+
+        result = await router.ainvoke("echo.who", {})
+        assert result.data == {"host": "b"}
+        assert len(seen) == 2
+        assert seen[0] == seen[1], "failover must reuse ONE invocation_id"
+
+
+class TestCircuitBreaker:
+    @pytest.mark.asyncio
+    async def test_threshold_gates_unhealthy_marking(self):
+        """breaker_threshold=3: two failures leave the host healthy in the
+        routing order; the third consecutive failure trips it."""
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        router = MultiHostRouter([a], breaker_threshold=3)
+        await router.connect()
+        router._mark_unhealthy(a)
+        router._mark_unhealthy(a)
+        assert router._is_healthy(a), "below threshold must stay healthy"
+        router._mark_unhealthy(a)
+        assert not router._is_healthy(a), "threshold reached must trip"
+
+    @pytest.mark.asyncio
+    async def test_success_resets_the_failure_count(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        router = MultiHostRouter([a], breaker_threshold=3)
+        await router.connect()
+        router._mark_unhealthy(a)
+        router._mark_unhealthy(a)
+        router._mark_healthy(a)  # success resets — failures must be CONSECUTIVE
+        router._mark_unhealthy(a)
+        router._mark_unhealthy(a)
+        assert router._is_healthy(a)
+
+    @pytest.mark.asyncio
+    async def test_half_open_admits_one_probe(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        router = MultiHostRouter([a], recheck_interval=0.0)
+        await router.connect()
+        router._mark_unhealthy(a)  # threshold 1: trips immediately
+        # Window (0s) elapsed → half-open: exactly ONE trial admitted.
+        assert router._is_healthy(a)
+        assert not router._is_healthy(a), "half-open must cap trials at one"
+        router._mark_healthy(a)  # the probe succeeded
+        assert router._is_healthy(a)
+
+    @pytest.mark.asyncio
+    async def test_repeat_trips_escalate_the_window(self):
+        a = LocalTransport(make_echo_host("A", "a"), name="A")
+        router = MultiHostRouter([a], recheck_interval=10.0)
+        await router.connect()
+        import time as _time
+        router._mark_unhealthy(a)
+        first_until = router._unhealthy[a.name] - _time.monotonic()
+        router._mark_healthy(a)
+        router._trip_counts[a.name] = 3  # simulate prior trips
+        router._mark_unhealthy(a)
+        fourth_until = router._unhealthy[a.name] - _time.monotonic()
+        assert fourth_until > first_until * 3, "repeat trips must escalate"
+        assert fourth_until <= 10.0 * 8 + 1, "escalation must cap at 8x"

@@ -365,6 +365,17 @@ def check_alignment(repo_root: Path) -> JSON:
             and "`redacted`" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Idempotent replay (§13, proposal 0008): section, the key rule, the
+        # serving-state stance, and the replayed marker.
+        add_check(
+            checks,
+            "spec_defines_idempotency",
+            "## 13. Reliability — Idempotent Replay" in spec_v02
+            and "MUST NOT" in spec_v02
+            and "serving state, never evidence" in spec_v02
+            and '"replayed": true' in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
         # Revocation (§10 Revocation, proposal 0007): statement kind, the
         # issuer-only rule's load-bearing phrase, and both routes.
         add_check(

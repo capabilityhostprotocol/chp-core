@@ -81,6 +81,10 @@ class GatewayConfig:
     # to the gateway store, then rebuilds the correlation-heads cache.
     retention_interval_s: float = 0.0
     retention_config: str | None = None
+    # Circuit breaker (reliability arc): consecutive failures before a member
+    # trips unhealthy. Default 1 (first-failure trip — the reference/§11
+    # behavior); raise for production meshes with flaky links.
+    breaker_threshold: int = 1
 
 
 @dataclass
@@ -150,6 +154,7 @@ class EnvironmentConfig:
                 retention_interval_s=float(gateway_raw.get("retention_interval_s", 0) or 0),
                 retention_config=(str(Path(str(gateway_raw["retention_config"])).expanduser())
                                   if gateway_raw.get("retention_config") else None),
+                breaker_threshold=int(gateway_raw.get("breaker_threshold", 1) or 1),
             )
             if isinstance(gateway_raw, dict)
             else None
