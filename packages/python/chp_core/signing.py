@@ -965,9 +965,21 @@ _MANDATE_HEADER_FIELDS = ("kind", "mandate_id", "delegate_id", "scope",
                           "canonicalization")
 
 
+# Sub-delegation chains (§10, proposal 0009) are capped so an over-deep or
+# malicious embedded chain fails WITHOUT recursing to the Python recursion limit.
+_MAX_MANDATE_DEPTH = 8
+
+
 def mandate_header(mandate: dict) -> dict:
-    """The principal-signed header of a mandate (§10)."""
-    return {k: mandate.get(k) for k in _MANDATE_HEADER_FIELDS}
+    """The principal-signed header of a mandate (§10). A sub-mandate (proposal
+    0009) additionally covers ``depth`` and ``parent_id`` — but ONLY when
+    ``parent_id`` is set, so a root/single-hop mandate's header is
+    byte-identical to v0.2.3 (the omit-when-absent byte rule)."""
+    header = {k: mandate.get(k) for k in _MANDATE_HEADER_FIELDS}
+    if mandate.get("parent_id"):
+        header["depth"] = mandate.get("depth")
+        header["parent_id"] = mandate.get("parent_id")
+    return header
 
 
 def scope_allows(scope: list, capability_id: str) -> bool:
@@ -976,6 +988,33 @@ def scope_allows(scope: list, capability_id: str) -> bool:
         capability_id == s or (str(s).endswith("*") and capability_id.startswith(str(s)[:-1]))
         for s in scope
     )
+
+
+def _attenuates(child: dict, parent: dict) -> dict[str, bool]:
+    """Sub-delegation attenuation checks (§10, proposal 0009): a child may only
+    NARROW scope and SHORTEN the window relative to its parent, and its link
+    must join to the parent it names. Returns the per-check dict (all True =
+    a valid attenuating link)."""
+    child_scope = child.get("scope") or []
+    parent_scope = parent.get("scope") or []
+    parent_depth = int(parent.get("depth") or 0)
+    return {
+        # every child scope entry must be permitted by the parent's grammar
+        "attenuation_scope": bool(child_scope)
+        and all(scope_allows(parent_scope, s) for s in child_scope),
+        # child window ⊆ parent window (lexical ISO compare, as temporal does)
+        "attenuation_window": (
+            str(parent.get("valid_from") or "") <= str(child.get("valid_from") or "")
+            and str(child.get("valid_until") or "") <= str(parent.get("valid_until") or "")),
+        # the parent delegated TO this sub-principal (the load-bearing binding)
+        "delegate_join": parent.get("delegate_id") == (child.get("principal") or {}).get("host_id"),
+        # the child commits to exactly this parent
+        "parent_id_match": child.get("parent_id") == parent.get("mandate_id"),
+        # depth is exact + capped (bounds recursion; blocks re-parenting-as-shallow)
+        "depth": (isinstance(child.get("depth"), int)
+                  and child["depth"] == parent_depth + 1
+                  and child["depth"] <= _MAX_MANDATE_DEPTH),
+    }
 
 
 def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
@@ -1019,6 +1058,61 @@ def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
         "signature": _sign(host_key._private, _canon(mandate_header(mandate))),
     }
     return mandate
+
+
+def build_sub_mandate(parent: dict, host_key: HostKey, *, delegate_id: str,
+                      scope: list[str], valid_from: str, valid_until: str,
+                      created_at: str, mandate_id: str | None = None,
+                      anchors: list[dict] | None = None) -> dict:
+    """Attenuate a PARENT mandate into a sub-mandate (proposal 0009). The signer
+    is the parent's delegate acting as a sub-principal — ``host_key`` MUST
+    attest the parent's ``delegate_id`` (the delegate join). Refuses to sign a
+    non-attenuating child (fail fast): a child may only NARROW scope and SHORTEN
+    the window. The parent is embedded inline as transport (verified on its own
+    signature); the child commits to it via the signed ``parent_id``."""
+    if not host_key.can_sign:
+        raise SigningUnavailable("sub-principal key has no private component; cannot sign")
+    from .types import new_id
+    principal_id = str(parent.get("delegate_id") or "")
+    child: dict = {
+        "kind": "mandate",
+        "mandate_id": mandate_id or new_id("mnd"),
+        "delegate_id": delegate_id,
+        "scope": sorted(scope),
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "created_at": created_at,
+        "canonicalization": CANONICALIZATION,
+        "depth": int(parent.get("depth") or 0) + 1,
+        "parent_id": str(parent.get("mandate_id") or ""),
+    }
+    child["principal"] = {
+        "host_id": principal_id,
+        "public_key": host_key.public_key_b64,
+        "host_identity": build_attestation(
+            principal_id, host_key, valid_from=created_at, anchors=anchors),
+    }
+    att = _attenuates(child, parent)
+    if not all(att.values()):
+        raise ValueError("sub-mandate does not attenuate its parent: "
+                         + ", ".join(k for k, v in att.items() if not v))
+    child["parent"] = parent
+    child["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": host_key.key_id,
+        "signature": _sign(host_key._private, _canon(mandate_header(child))),
+    }
+    return child
+
+
+def mandate_root_principal(mandate: dict) -> str | None:
+    """Walk to the root of a mandate chain and return its principal host_id
+    (the ultimate authority). For a single-hop mandate this is its own
+    principal."""
+    node = mandate
+    while isinstance(node.get("parent"), dict):
+        node = node["parent"]
+    return (node.get("principal") or {}).get("host_id")
 
 
 def verify_mandate(mandate: dict, *, at_time: str | None = None,
@@ -1091,6 +1185,24 @@ def verify_mandate(mandate: dict, *, at_time: str | None = None,
             and _verify_sig(pub, _canon(mandate_revocation_header(r)),
                             str((r.get("signature") or {}).get("signature") or ""))
             for r in revocations)
+
+    # Sub-delegation (§10, proposal 0009): when a parent is embedded, this link
+    # must ATTENUATE it and the parent must itself verify — recursively to the
+    # root. The parent recursion carries host time + the revocation set (so
+    # every ancestor's temporal and not_revoked run against ITS own key), but
+    # NOT the leaf's delegate/capability bindings (those are leaf-only). A
+    # revoked ancestor fails its not_revoked → the whole leaf chain fails.
+    parent = mandate.get("parent")
+    if parent is not None:
+        att_checks = _attenuates(mandate, parent)
+        checks.update(att_checks)
+        # Only recurse when depth is sane — an over-deep or malformed embedded
+        # chain must fail WITHOUT recursing toward the interpreter's limit.
+        if att_checks["depth"] and isinstance(parent, dict):
+            checks["parent_valid"] = verify_mandate(
+                parent, at_time=at_time, revocations=revocations).valid
+        else:
+            checks["parent_valid"] = False
 
     valid = all(checks.values())
     reason = None if valid else "mandate checks failed: " + ", ".join(

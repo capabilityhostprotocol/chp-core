@@ -12,6 +12,7 @@ from ._core import (
     cmd_invoke,
     cmd_anchor_did,
     cmd_keygen,
+    cmd_mandate_delegate,
     cmd_mandate_issue,
     cmd_mandate_revoke,
     cmd_mandate_verify,
@@ -701,6 +702,22 @@ def build_parser() -> argparse.ArgumentParser:
     mnd_issue.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
     mnd_issue.add_argument("--out", default=None, help="Write the mandate here instead of stdout.")
     mnd_issue.set_defaults(func=cmd_mandate_issue)
+    mnd_delegate = mandate_sub.add_parser(
+        "delegate",
+        help="Sub-delegate: attenuate a parent mandate into a narrower sub-mandate (spec §10, proposal 0009).")
+    mnd_delegate.add_argument("--parent", required=True,
+                              help="Path to the parent mandate JSON (this host must hold its delegate key).")
+    mnd_delegate.add_argument("--delegate", required=True,
+                              help="The sub-agent being authorized.")
+    mnd_delegate.add_argument("--scope", required=True,
+                              help="Comma-separated scope — MUST be a subset of the parent's.")
+    mnd_delegate.add_argument("--ttl-hours", default="24", dest="ttl_hours",
+                              help="Validity from now (must end within the parent's window).")
+    mnd_delegate.add_argument("--valid-until", default=None, dest="valid_until",
+                              help="Explicit expiry (must be ≤ the parent's).")
+    mnd_delegate.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
+    mnd_delegate.add_argument("--out", default=None, help="Write the sub-mandate here instead of stdout.")
+    mnd_delegate.set_defaults(func=cmd_mandate_delegate)
     mnd_verify = mandate_sub.add_parser(
         "verify", help="Verify a mandate offline (signature, identity, window, scope).")
     mnd_verify.add_argument("mandate", help="Path to a mandate JSON file.")
