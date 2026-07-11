@@ -43,7 +43,11 @@ accordingly on shared machines).
 | `CHP_HOST_MAX_BODY_BYTES` | 8 MiB | Request-body cap |
 | `CHP_HTTP_LOG` | off | `1` = access log to stderr |
 | mesh remote `timeout_s` | 30 | Per-member transport timeout |
-| mesh remote `retries` | 0 | Opt-in client retry — a mid-flight drop may have EXECUTED (at-most-once is not guaranteed on that path); keep 0 for non-idempotent capabilities |
+| mesh remote `retries` | 0 | Opt-in client retry. Every attempt reuses ONE `invocation_id`, so against replay-conformant hosts (spec §13, chp-core ≥0.16) a drop-after-execution replays the recorded result — retries are safe. Against older hosts keep 0 for non-idempotent capabilities |
+| `CHP_RESULT_CACHE_TTL_S` | 86400 | Idempotent-replay window (spec §13); 0 disables replay |
+| `gateway.breaker_threshold` | 1 | Consecutive failures before a member trips unhealthy; raise (e.g. 3) on flaky links. Tripped windows escalate ×2 per repeat, cap 8×; half-open admits one probe |
+| `CHP_HTTP_KEEPALIVE` | 1 | Client keep-alive connections (thread-local); `0` restores one-shot requests (proxies) |
+| `CHP_ROUTER_STATS_TIMEOUT` | 2 | least_loaded stats-probe budget on the invoke path |
 | `gateway.probe_interval_s` | off | Continuous health probing (§11 evidence) |
 | `gateway.witness_interval_s` | off | Mesh witnessing loop (§12) |
 | `gateway.retention_interval_s` + `retention_config` | off | Scheduled retention |

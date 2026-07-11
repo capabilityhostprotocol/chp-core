@@ -1,6 +1,6 @@
 # Capability Host Protocol — Governed Invocation Pipeline (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.6 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Normative.** Additive over [v0.1](chp-v0.1.md); refines the
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.7 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Normative.** Additive over [v0.1](chp-v0.1.md); refines the
 outcome model (§8) and denial semantics (§9) of v0.1 and the governance
 vocabulary of [chp-governance-v0.2.md](chp-governance-v0.2.md).
 
@@ -45,6 +45,14 @@ by a host's pipeline: `host_unreachable` — a **routing intermediary** could
 reach no owner of the capability, so the invocation never arrived at any host
 (chp-v0.2.md §11, chp-http-binding.md §3). It is still a PROCESSED denial
 (HTTP 200, evidence at the intermediary), just not a pipeline gate.
+
+**Gate 0 — idempotent replay** (chp-v0.2.md §13, proposal 0008): before gate 1,
+a host that has already recorded this `invocation_id` returns the RECORDED
+result (`"replayed": true`) and runs NOTHING below — including denials: a
+replayed denial is the same denial, and gates do not re-run because their
+decision is part of the recorded outcome. No events are emitted for an
+execution that did not happen. Transport auth (binding §2) has already run —
+replay never bypasses it. Streaming mode is excluded.
 
 | # | Gate | Trigger (exact predicate) | Outcome | Code | `retryable` | Events emitted |
 |---|------|---------------------------|---------|------|-------------|----------------|

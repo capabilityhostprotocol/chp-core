@@ -5,6 +5,25 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.2.7] — additive over 0.2.6 — **released 2026-07-11**
+
+### Added
+- **Idempotent invocation replay — making retries safe** (chp-v0.2.md §13,
+  pipeline gate 0, [proposals/0008](proposals/0008-idempotent-replay.md)):
+  a host that has already RECORDED an `invocation_id` MUST NOT re-execute it
+  — it returns the recorded result with **`"replayed": true`** (omitted when
+  false; every existing result byte-identical). The idempotency key is the
+  envelope's existing `invocation_id` (no new header/field); replay covers
+  every processed outcome incl. denials (gates do not re-run); scope is the
+  single serving host; the result cache is SERVING state, never evidence
+  (window-bounded, default 24h; purge cascades). Streaming excluded (named
+  deferral). **No new denial codes, evidence types, schemas, or vectors.**
+  Reference: client retry + gateway failover now thread ONE stable
+  `invocation_id` across attempts — §11's "may have executed" retry caveat
+  is neutralized against replay-conformant hosts. Wire suite **21→22**
+  ("idempotent replay"); both reference hosts 22/22. *Guard:
+  `spec_defines_idempotency`.*
+
 ## [0.2.6] — additive over 0.2.5 — **released 2026-07-10**
 
 ### Added

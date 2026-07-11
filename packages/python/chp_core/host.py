@@ -478,6 +478,17 @@ class LocalCapabilityHost:
         if isinstance(envelope, dict):
             envelope = InvocationEnvelope.from_mapping(envelope)
 
+        # Gate 0 — idempotent replay (spec §13, proposal 0008): an already-
+        # recorded invocation_id replays its recorded result; no gate below
+        # runs and no events are emitted for an execution that did not
+        # happen. Streaming is excluded (named deferral).
+        if envelope.mode != "stream":
+            cached = self._lookup_recorded_result(envelope.invocation_id)
+            if cached is not None:
+                from .metrics import record_idempotent_replay
+                record_idempotent_replay()
+                return envelope, None, cached
+
         if not envelope.capability_id or not envelope.capability_id.strip():
             return envelope, None, self._deny(
                 envelope,
@@ -641,10 +652,62 @@ class LocalCapabilityHost:
 
         return envelope, entry, None
 
+    def _lookup_recorded_result(self, invocation_id: str) -> "InvocationResult | None":
+        """Gate 0 lookup: rebuild the recorded InvocationResult (replayed=True),
+        or None. Best-effort — a cache error means a fresh execution."""
+        lookup = getattr(self.store, "lookup_result", None)
+        if lookup is None:
+            return None
+        try:
+            data = lookup(invocation_id)
+        except Exception:  # noqa: BLE001 — cache trouble must not block invokes
+            return None
+        if not isinstance(data, dict):
+            return None
+        from .types import CorrelationContext
+        denial_raw = data.get("denial")
+        denial = None
+        if isinstance(denial_raw, dict):
+            denial = DenialReason(
+                code=str(denial_raw.get("code", "")),
+                message=str(denial_raw.get("message", "")),
+                invariant_id=denial_raw.get("invariant_id"),
+                retryable=bool(denial_raw.get("retryable", False)),
+                details=denial_raw.get("details") or {},
+            )
+        return InvocationResult(
+            invocation_id=str(data.get("invocation_id", invocation_id)),
+            capability_id=str(data.get("capability_id", "")),
+            capability_version=data.get("capability_version"),
+            correlation=CorrelationContext.from_mapping(data.get("correlation")),
+            outcome=data.get("outcome", "success"),
+            success=bool(data.get("success", False)),
+            data=data.get("data"),
+            error=data.get("error"),
+            denial=denial,
+            evidence_ids=list(data.get("evidence_ids") or []),
+            started_at=data.get("started_at"),
+            completed_at=str(data.get("completed_at") or ""),
+            replayed=True,
+        )
+
+    def _record_result(self, result: InvocationResult) -> InvocationResult:
+        """Record a processed result for idempotent replay (spec §13).
+        Best-effort: recording trouble never fails the invocation."""
+        if result.replayed:
+            return result
+        record = getattr(self.store, "record_result", None)
+        if record is not None:
+            try:
+                record(result.invocation_id, result.to_dict())
+            except Exception:  # noqa: BLE001
+                pass
+        return result
+
     async def ainvoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
         envelope, entry, early = self._prepare(envelope)
         if early is not None:
-            return early
+            return self._record_result(early)
         assert entry is not None  # _prepare contract: no early result ⇒ resolved entry
         descriptor = entry.descriptor
 
@@ -680,7 +743,7 @@ class LocalCapabilityHost:
                 outcome="success",
                 redacted=False,
             )
-            return InvocationResult(
+            return self._record_result(InvocationResult(
                 invocation_id=envelope.invocation_id,
                 capability_id=descriptor.id,
                 capability_version=descriptor.version,
@@ -690,7 +753,7 @@ class LocalCapabilityHost:
                 data=data,
                 evidence_ids=[started.event_id, *ctx._evidence_ids, completed.event_id],
                 started_at=started.timestamp,
-            )
+            ))
         except Exception as exc:
             failed = self.emit_evidence(
                 "execution_failed",
@@ -711,7 +774,7 @@ class LocalCapabilityHost:
                     ),
                 },
             )
-            return InvocationResult(
+            return self._record_result(InvocationResult(
                 invocation_id=envelope.invocation_id,
                 capability_id=descriptor.id,
                 capability_version=descriptor.version,
@@ -721,7 +784,7 @@ class LocalCapabilityHost:
                 error={"type": exc.__class__.__name__, "message": str(exc)},
                 evidence_ids=[started.event_id, *ctx._evidence_ids, failed.event_id],
                 started_at=started.timestamp,
-            )
+            ))
 
     async def ainvoke_stream(self, envelope: InvocationEnvelope | JSON):
         """Streaming invocation (proposal 0006): an async generator that yields

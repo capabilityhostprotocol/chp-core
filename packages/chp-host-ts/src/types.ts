@@ -74,6 +74,9 @@ export interface InvocationResult {
   evidence_ids: string[];
   started_at?: string;
   completed_at?: string;
+  /** Idempotent replay marker (spec §13): present (true) only when this
+   * result was served from the recorded-result cache. */
+  replayed?: boolean;
 }
 
 export interface Ctx {

@@ -556,7 +556,8 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
         Path.home() / ".chp" / "gateway-mesh.sqlite")
     store = SQLiteEvidenceStore(store_path)
     router = MultiHostRouter(transports, selection=selection, host_id=host_id,
-                             host_roles=host_roles, store=store)
+                             host_roles=host_roles, store=store,
+                             breaker_threshold=int(getattr(gw, "breaker_threshold", 1) or 1) if gw else 1)
     print(f"CHP gateway {host_id!r} — connecting to {len(transports)} transport(s) "
           f"(selection={selection}, evidence={store_path})...")
     asyncio.run(router.connect())

@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.6 additions 2026-07-09/10). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.7 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience.
 
@@ -663,3 +663,44 @@ the assurance story from tamper-evident to tamper-proof-against-the-operator.
 Witness-of-witness chains, cross-mesh witnessing, quorum policies, and
 external transparency-log anchoring are deliberately out of scope (named in
 proposal 0005).
+
+## 13. Reliability — Idempotent Replay
+
+Retry stays with the caller (§11), but §11's honest caveat — a connection
+that drops after execution leaves "never ran" indistinguishable from "ran,
+response lost" — made every retry of non-idempotent work a gamble. This
+section closes it ([proposal 0008](proposals/0008-idempotent-replay.md)):
+**a host that has already recorded an invocation's `invocation_id` MUST NOT
+re-execute it; it returns the recorded result.**
+
+The idempotency key is the envelope's existing `invocation_id` — no new
+header or field. A caller that wants retry-safety presents the SAME id on
+every attempt; a fresh id (the default) always means a fresh execution.
+Replay covers every processed outcome — `success`, `failure`, `denied`,
+`skipped`; a replayed denial is the same denial and gates do not re-run
+(their decision is part of the recorded outcome). Streaming invocations are
+excluded (named deferral). The scope is a single host: replay happens only
+on the host that served the original — cross-owner dedupe at a gateway is
+deliberately out of scope.
+
+**The result cache is serving state, never evidence.** Evidence remains the
+audit record and deliberately does not persist handler result data; the
+recorded result lives in a host-local, window-bounded cache (reference:
+`invocation_results` beside the §12 serving artifacts; default retention
+24h). After the window a duplicate id executes fresh — idempotency is a
+bounded-window guarantee. Purging a correlation (§12 retention) MUST also
+drop its cached results: a lawfully purged invocation must not remain
+replayable. A replayed response carries `"replayed": true` on the
+`InvocationResult` (omitted when false — additive and byte-stable); no
+lifecycle events are appended for an execution that did not happen.
+
+**Security.** Replay is not a new disclosure — the result was already
+returned once, and a replay passes the same transport auth (and per-caller
+key scope, §2) as any invocation. Ids are 128-bit random by construction; a
+host MAY additionally bind replay to the original caller identity.
+
+With this section, the reference client's opt-in retry and the reference
+gateway's owner-failover reuse ONE `invocation_id` across attempts, making
+both provably safe against replay-conformant hosts. Distributed result
+caches, streaming replay, and an `invocation_replayed` evidence type are
+deliberately out of scope (named in proposal 0008).

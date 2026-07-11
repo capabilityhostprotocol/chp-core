@@ -43,6 +43,9 @@ export class LocalCapabilityHost {
   /** Received mandate revocations (§10 Revocation) — in-memory for this
    * conformance host; gate 5 consults them under the issuer-only rule. */
   readonly mandateRevocations: Record<string, JsonValue>[] = [];
+  /** Recorded results for idempotent replay (§13) — serving state, never
+   * evidence; in-memory for this conformance host. */
+  private readonly invocationResults = new Map<string, InvocationResult>();
 
   constructor(
     readonly hostId = 'ts-chp-host',
@@ -205,6 +208,16 @@ export class LocalCapabilityHost {
     };
     const decided = (early: InvocationResult) => ({ env, entry: null, early });
 
+    // Gate 0 — idempotent replay (spec §13, proposal 0008): an already-
+    // recorded invocation_id replays its recorded result; nothing below
+    // runs and no events are emitted. Streaming excluded (named deferral).
+    if (env.mode !== 'stream') {
+      const recorded = this.invocationResults.get(env.invocation_id!);
+      if (recorded) {
+        return { env, entry: null, early: { ...recorded, replayed: true } as InvocationResult };
+      }
+    }
+
     // Gate 1: non-empty id
     if (!env.capability_id || !env.capability_id.trim()) {
       return decided(this.deny(env, { code: 'capability_not_found', message: 'capability_id must be non-empty', retryable: false }));
@@ -309,9 +322,17 @@ export class LocalCapabilityHost {
     };
   }
 
+  /** Record a processed result for idempotent replay (§13) — first wins. */
+  private recordResult(result: InvocationResult): InvocationResult {
+    if (!result.replayed && !this.invocationResults.has(result.invocation_id)) {
+      this.invocationResults.set(result.invocation_id, result);
+    }
+    return result;
+  }
+
   async ainvokeEnvelope(input: InvocationEnvelope): Promise<InvocationResult> {
     const { env, entry, early } = this.prepare(input);
-    if (early) return early;
+    if (early) return this.recordResult(early);
     const d = entry!.descriptor;
 
     // Gate 11: execute
@@ -329,18 +350,18 @@ export class LocalCapabilityHost {
         data = terminal;
       }
       const done = this.emit('execution_completed', env, { capability_uri: `${d.id}:${d.version}` }, 'success');
-      return this.result(env, {
+      return this.recordResult(this.result(env, {
         outcome: 'success', success: true, capability_version: d.version,
         data: data as JsonValue, evidence_ids: [started.event_id, done.event_id], started_at: started.timestamp,
-      });
+      }));
     } catch (err) {
       const failed = this.emit('execution_failed', env, { capability_uri: `${d.id}:${d.version}` }, 'failure',
         { error: { type: (err as Error).name, message: (err as Error).message } });
-      return this.result(env, {
+      return this.recordResult(this.result(env, {
         outcome: 'failure', success: false, capability_version: d.version,
         error: { type: (err as Error).name, message: (err as Error).message },
         evidence_ids: [started.event_id, failed.event_id], started_at: started.timestamp,
-      });
+      }));
     }
   }
 
