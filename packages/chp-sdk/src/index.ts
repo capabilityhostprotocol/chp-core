@@ -10,7 +10,7 @@
  */
 
 export { canon, encodeStr, type JsonValue } from './canon.js';
-export { contentHash, rootHash, type EvidenceEvent } from './hash.js';
+export { contentHash, rootHash, payloadCommitment, EVENT_HASH_V2, type EvidenceEvent } from './hash.js';
 export { verifyChain, type ChainResult } from './chain.js';
 export { orderEvents } from './ordering.js';
 export {
@@ -25,6 +25,7 @@ export {
   buildAttestation,
   buildBundle,
   signBundle,
+  withholdPayloads,
   buildTaskBundle,
   computeTaskRootHash,
   taskBundleHeader,

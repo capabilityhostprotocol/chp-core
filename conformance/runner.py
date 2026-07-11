@@ -1899,6 +1899,42 @@ async def check_revocation_freshness(host: Any) -> None:
         assert exc.code == 409, f"expected 409 revocation_head_mismatch, got {exc.code}"
 
 
+async def check_selective_disclosure(host: Any) -> None:
+    """v0.2 §14 (proposal 0011): the host emits chp-event-hash-v2 events, so an
+    exported signed bundle can have payloads WITHHELD yet still verify against the
+    same signed root (the signature is untouched); a DISCLOSED payload is bound to
+    its commitment, so a swapped one is refused."""
+    import json as _json
+
+    from chp_core.signing import verify_bundle, withhold_payloads
+
+    corr = f"{RUN}-conf-disclose-001"
+    await invoke_host(host, "conformance.echo", {"value": "secret-xyz"},
+                      correlation={"correlation_id": corr})
+    bundle = host.export_bundle(corr)
+    events = bundle.get("events") or []
+    assert any(ev.get("hash_scheme") == "chp-event-hash-v2" for ev in events), (
+        "host must emit chp-event-hash-v2 events (evidence born withholdable)")
+    assert verify_bundle(bundle).valid, "baseline export must verify"
+
+    # Withhold every payload → still verifies; root + signature unchanged.
+    minimized = withhold_payloads(bundle)
+    assert minimized["root_hash"] == bundle["root_hash"], "withholding moved the root"
+    assert minimized.get("signature") == bundle.get("signature"), "withholding touched the signature"
+    vm = verify_bundle(minimized)
+    assert vm.valid, f"withheld bundle must verify: {vm.reason}"
+    assert vm.checks.get("payload_commitments") is True
+    assert "secret-xyz" not in _json.dumps(minimized), "a withheld payload leaked"
+
+    # A tampered DISCLOSED payload (commitment kept) is refused.
+    forged = _json.loads(_json.dumps(bundle))
+    v2 = next(ev for ev in forged["events"] if ev.get("hash_scheme") == "chp-event-hash-v2")
+    v2["payload"] = {"forged": True}
+    vf = verify_bundle(forged)
+    assert not vf.valid and vf.checks.get("payload_commitments") is False, (
+        "a tampered disclosed payload must be refused")
+
+
 async def check_mandate_revocation(host: Any) -> None:
     """v0.2 §10 Revocation (proposal 0007): withdrawing authority before
     expiry. The runner plays PRINCIPAL: a mandated invoke succeeds; the
@@ -2168,6 +2204,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("idempotent replay (v0.2 §13, proposal 0008)", check_idempotent_replay),
     ("sub-delegation (v0.2 §10, proposal 0009)", check_sub_delegation),
     ("revocation freshness (v0.2 §12, proposal 0010)", check_revocation_freshness),
+    ("selective disclosure (v0.2 §14, proposal 0011)", check_selective_disclosure),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

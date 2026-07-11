@@ -7,7 +7,7 @@
 
 import { verify as edVerify } from 'node:crypto';
 import { canon, type JsonValue } from './canon.js';
-import { rootHash, type EvidenceEvent } from './hash.js';
+import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
 import { attenuates, bundleHeader, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader } from './signing.js';
 import { didKeyToRaw, verifySshsig } from './sshsig.js';
@@ -37,6 +37,16 @@ export function verifyBundle(
   const chain = verifyChain(events);
   checks.event_hashes = chain.eventHashesOk;
   checks.root_hash = bundle.root_hash === rootHash(events);
+
+  // Selective disclosure (§14): a DISCLOSED chp-event-hash-v2 payload must match
+  // the commitment its content_hash bound; a WITHHELD payload ({chp_withheld:true})
+  // is skipped — the commitment alone secures the chain. v1 events are not checked.
+  checks.payload_commitments = events.every((ev) => {
+    if (ev.hash_scheme !== EVENT_HASH_V2) return true;
+    const payload = ev.payload as Record<string, unknown> | undefined;
+    if (payload && payload.chp_withheld === true) return true;
+    return payloadCommitment(ev.payload) === ev.payload_commitment;
+  });
 
   const assurance = (bundle.assurance as string) ?? 'none';
 

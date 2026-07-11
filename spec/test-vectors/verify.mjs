@@ -48,15 +48,25 @@ function encodeStr(s) {
 }
 const sha256hex = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
+// chp-event-hash-v2 (14): sha256(chp-stable-v1(payload)). Empty payload = {}.
+const payloadCommitment = (payload) => sha256hex(canon(payload ?? {}));
+
 function contentHash(ev, prevHash) {
   const corr = ev.correlation || {};
   const stable = {
     event_id: ev.event_id, event_type: ev.event_type, invocation_id: ev.invocation_id,
     capability_id: ev.capability_id, host_id: ev.host_id,
     correlation_id: typeof corr === "object" ? (corr.correlation_id ?? null) : null,
-    timestamp: ev.timestamp, outcome: ev.outcome ?? null, payload: ev.payload ?? {},
+    timestamp: ev.timestamp, outcome: ev.outcome ?? null,
     prev_hash: prevHash ?? null,
   };
+  // Per-event hash scheme (2/14): v2 commits to payload_commitment in place of
+  // the inline payload, so the payload may be withheld. Absent scheme = v1.
+  if (ev.hash_scheme === "chp-event-hash-v2") {
+    stable.payload_commitment = ev.payload_commitment ?? payloadCommitment(ev.payload);
+  } else {
+    stable.payload = ev.payload ?? {};
+  }
   return sha256hex(canon(stable));
 }
 
@@ -69,6 +79,13 @@ for (const ev of bundle.events) {
   const recomputed = contentHash(ev, ev.prev_hash ?? null);
   if (recomputed !== ev.content_hash) { console.error(`content_hash mismatch on ${ev.event_id}`); ok = false; }
   if ((ev.prev_hash ?? null) !== prev) { console.error(`chain break at ${ev.event_id}`); ok = false; }
+  // v2 (14): a DISCLOSED payload must match the signed commitment; a WITHHELD
+  // one ({chp_withheld:true}) is skipped — the commitment alone secures the chain.
+  if (ev.hash_scheme === "chp-event-hash-v2"
+      && !(ev.payload && ev.payload.chp_withheld === true)
+      && payloadCommitment(ev.payload) !== ev.payload_commitment) {
+    console.error(`payload_commitment mismatch on ${ev.event_id}`); ok = false;
+  }
   prev = ev.content_hash;
   h.update(ev.content_hash + "\n");                 // root = SHA256 over content_hashes joined by \n
 }

@@ -1,0 +1,32 @@
+{
+  "canonicalization": "chp-stable-v1",
+  "created_at": "2026-07-11T21:18:03.707638Z",
+  "kind": "adapter-provenance",
+  "package": "chp-adapter-github",
+  "publisher": {
+    "host_id": "chp-release",
+    "host_identity": {
+      "anchors": [
+        {
+          "countersignature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg5qHZxtZ8HVlzspvd/WxFfXKRm6\ngyof2xXFalgUb/bHMAAAAPY2hwLWhvc3QtYW5jaG9yAAAAAAAAAAZzaGE1MTIAAABTAAAA\nC3NzaC1lZDI1NTE5AAAAQE5WEoiFMzOzfYAjeNVgWnjWh0BZkhX5ZU23jEgvZVO5/wk0bd\n/x9S7lds1MJ5ceUKgIcnLAejTfdVmYbpIJQQw=\n-----END SSH SIGNATURE-----\n",
+          "did": "did:key:z6MkuyYxVQL4aRVpAKPbG4tc15FJ9E1ryZSSHjFyqsBBuxAn",
+          "type": "did"
+        }
+      ],
+      "host_id": "chp-release",
+      "key_id": "d20d8b42b94c3375",
+      "public_key": "3iXoZQbvRVRl2rCRDpb6BYwLETaTpjtvJuvfA9EN7bU=",
+      "signature": "dgGDAIR7ZFKilyAmUcMuy4/Nlq/9yF5AtaTsb/KVVJGtO55dSnzV7NVQvhCCbDW7TCRplhKBVfnDEupKna2RBA==",
+      "valid_from": "2026-07-11T21:18:03.707638Z",
+      "valid_until": null
+    },
+    "public_key": "3iXoZQbvRVRl2rCRDpb6BYwLETaTpjtvJuvfA9EN7bU="
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "d20d8b42b94c3375",
+    "signature": "oT/SS6hUGyllMzl3D5KdK5hu5QZ27ISDJ/+X4bFlVlMwVhFy3eOlQFDyTfzAMfTt6WbWLDEeKOc8nbWKMhsVDA=="
+  },
+  "version": "0.18.0",
+  "wheel_sha256": "4f31ebcef7a6b9145c3e0eb4488151a567293a13c0ec13913f67f5c376dad74a"
+}

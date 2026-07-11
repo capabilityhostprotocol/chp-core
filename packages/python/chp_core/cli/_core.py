@@ -957,6 +957,57 @@ def cmd_revocation_verify(args: argparse.Namespace) -> int:
     return 1 if audit["verdict"] in ("dropped", "snapshot_invalid") else 0
 
 
+def cmd_bundle_minimize(args: argparse.Namespace) -> int:
+    """Selective disclosure (§14, proposal 0011): write a disclosure-minimized
+    copy of a signed bundle — chp-event-hash-v2 payloads matching the filter are
+    WITHHELD ({"chp_withheld": true}) while their commitment is kept, so the root
+    and signature are unchanged and the ORIGINAL signature still verifies. With no
+    filter, every v2 payload is withheld. Writes to --out (default stdout)."""
+    import sys
+
+    from .. import signing
+
+    with open(args.bundle) as fh:
+        bundle = json.load(fh)
+
+    caps, evids = set(args.capability or []), set(args.event or [])
+    predicate = None
+    if caps or evids:
+        def predicate(ev: dict) -> bool:  # noqa: F811 — filter selected events only
+            return ev.get("capability_id") in caps or ev.get("event_id") in evids
+
+    minimized = signing.withhold_payloads(bundle, predicate)
+    withheld = sum(1 for e in minimized.get("events", [])
+                   if isinstance(e.get("payload"), dict) and e["payload"].get("chp_withheld") is True)
+    rendered = json.dumps(minimized, indent=2)
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(rendered + "\n")
+        print(f"withheld {withheld} payload(s) -> {args.out}", file=sys.stderr)
+    else:
+        print(rendered)
+    v = signing.verify_bundle(minimized)
+    if not v.valid:  # a minimized bundle MUST still verify — that is the point
+        print(f"WARNING: minimized bundle does not verify: {v.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_bundle_verify(args: argparse.Namespace) -> int:
+    """Verify a bundle (§14-aware): recompute each event under its declared
+    hash_scheme, check the root + signature, and bind every DISCLOSED
+    chp-event-hash-v2 payload to its commitment (a withheld payload is
+    tolerated). Exit 1 if invalid."""
+    from .. import signing
+
+    with open(args.bundle) as fh:
+        bundle = json.load(fh)
+    v = signing.verify_bundle(bundle, expected_key_id=args.key_id)
+    print(json.dumps({"valid": v.valid, "assurance": v.assurance,
+                      "checks": v.checks, "reason": v.reason}, indent=2))
+    return 0 if v.valid else 1
+
+
 def cmd_provenance_verify(args: argparse.Namespace) -> int:
     import hashlib
     from pathlib import Path

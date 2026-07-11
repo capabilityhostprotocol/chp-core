@@ -5,6 +5,47 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.3.0] — first canon evolution over 0.2.9 — **released 2026-07-11**
+
+### Added
+- **Selective disclosure — withholdable payloads** (chp-v0.2.md §2 +
+  new **§14 "Selective disclosure"**, [proposals/0011](proposals/0011-selective-disclosure.md)):
+  a second, opt-in per-event content-hash scheme **`chp-event-hash-v2`**. Its
+  `content_hash` stable object replaces the inline `payload` with
+  `payload_commitment = sha256(chp-stable-v1(payload))`, so a signed bundle can
+  **withhold** a payload (marker `{"chp_withheld": true}`, commitment retained)
+  and still verify against the same signed root — the signature is untouched
+  (root builds only on `content_hash`). A disclosed payload is bound by
+  `sha256(chp-stable-v1(payload)) == payload_commitment`. Events self-describe
+  via a new `hash_scheme` field; a verifier recomputes each event under the
+  scheme it declares, so a chain MAY mix v1 and v2. `evidence-event` schema
+  gains optional `hash_scheme` (`const chp-event-hash-v2`) + `payload_commitment`
+  (`^[0-9a-f]{64}$`). Wire conformance grows by one check.
+
+### Compatibility
+- **v1 events byte-identical.** `hash_scheme` is absent on every pre-0011 event,
+  so existing chains, store heads, witnessed receipts, signed bundles, and the
+  published `event.json` / `signed-bundle.json` vectors are unchanged. This is a
+  **minor** bump (not a patch) because it introduces a new *canon rule*, even
+  though no existing bytes move. Bundle `protocol_version` becomes `"0.3"` on
+  0.19 hosts, but verification branches on the per-event `hash_scheme`.
+- **Not retention redaction.** Selective disclosure never NULLs, deletes, or
+  forges a hash; it is disjoint from §4/§12 redaction/purge in both mechanism
+  and vocabulary (withhold/minimize vs redact/purge). No new denial code or
+  evidence type — a stale/forged disclosure is the existing `tampered` verdict.
+
+### Regression gate
+- New vectors `event-hash-v2.json` + `bundle-withheld.json`; `git diff
+  spec/test-vectors/` shows ONLY the new files. Guards
+  `spec_defines_selective_disclosure` + `event_hash_v2_vector_verifies`. Both
+  reference hosts pass the new wire check; a withheld export verifies, a
+  disclosed event is commitment-checked, a tampered-disclosed payload is refused.
+
+### Deferred
+- Per-field / sub-payload Merkle commitments; retroactive v1→v2; withholding
+  non-payload fields; encrypting (vs dropping) withheld payloads; disclosure
+  receipts.
+
 ## [0.2.9] — additive over 0.2.8 — **released 2026-07-11**
 
 ### Added

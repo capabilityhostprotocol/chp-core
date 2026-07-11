@@ -72,6 +72,16 @@
       "type": ["string", "null"],
       "description": "content_hash of the preceding event in the same correlation chain. Null for the first event. Forms a tamper-detectable linked chain per spec §6 (Evidence MUST be append-only).",
       "pattern": "^[a-f0-9]{64}$"
+    },
+    "hash_scheme": {
+      "type": "string",
+      "const": "chp-event-hash-v2",
+      "description": "Per-event content-hash scheme (chp-v0.2.md §2/§14, proposal 0011). Present only for chp-event-hash-v2 events; absent means the default chp-event-hash-v1 (inline payload). A verifier recomputes this event's content_hash under the scheme it declares."
+    },
+    "payload_commitment": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256(chp-stable-v1(payload)) — present on chp-event-hash-v2 events. The content_hash commits to this in place of the inline payload, so the payload MAY be withheld ({\"chp_withheld\": true}) while the event still verifies (§14)."
     }
   },
   "$defs": {

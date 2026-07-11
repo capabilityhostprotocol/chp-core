@@ -9,7 +9,7 @@
 
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, type KeyObject } from 'node:crypto';
 import { canon, type JsonValue } from './canon.js';
-import { rootHash, type EvidenceEvent } from './hash.js';
+import { EVENT_HASH_V2, rootHash, type EvidenceEvent } from './hash.js';
 
 export const CANONICALIZATION = 'chp-stable-v1';
 export const SIGNATURE_ALGORITHM = 'ed25519';
@@ -131,6 +131,25 @@ export function signBundle(
     signature: signCanon(key.privateKey, bundleHeader(signed)),
   };
   return signed;
+}
+
+/** Selective disclosure (chp-v0.2.md §14): return a disclosure-minimized copy of
+ * a bundle — every chp-event-hash-v2 event for which `predicate` is true has its
+ * payload replaced by `{ chp_withheld: true }`, keeping its payload_commitment and
+ * content_hash. Root hash and signature are UNCHANGED (they bind only
+ * content_hash), so the ORIGINAL signature still verifies. Default withholds every
+ * v2 event; v1 events carry no commitment and are left intact. */
+export function withholdPayloads(
+  bundle: Record<string, JsonValue>,
+  predicate: (ev: EvidenceEvent) => boolean = () => true,
+): Record<string, JsonValue> {
+  const out = JSON.parse(JSON.stringify(bundle)) as Record<string, JsonValue>;
+  for (const ev of (out.events as EvidenceEvent[] | undefined) ?? []) {
+    if (ev.hash_scheme === EVENT_HASH_V2 && ev.payload_commitment && predicate(ev)) {
+      ev.payload = { chp_withheld: true };
+    }
+  }
+  return out;
 }
 
 // ── Task bundles — cross-host verification unit (chp-v0.2.md §8) ────────────
