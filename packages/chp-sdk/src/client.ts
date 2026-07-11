@@ -4,6 +4,7 @@
  * returns HTTP 200 with the verdict in the body; only transport failures throw.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { JsonValue } from './canon.js';
 
 export interface InvocationResult {
@@ -117,55 +118,77 @@ export class RemoteCapabilityHost {
   async *invokeStream(
     capabilityId: string,
     payload: JsonValue = {},
-    opts: { correlation?: JsonValue; subject?: JsonValue; version?: string; mandate?: JsonValue } = {},
+    opts: { correlation?: JsonValue; subject?: JsonValue; version?: string; mandate?: JsonValue;
+            invocationId?: string; resumeAttempts?: number } = {},
   ): AsyncGenerator<{ delta: JsonValue } | { result: InvocationResult }, void, unknown> {
+    // Pin ONE invocation_id for the whole call (§13.1) so a dropped connection
+    // resumes the SAME recorded stream via Last-Event-ID.
+    const invocationId = opts.invocationId ?? `inv_${randomUUID()}`;
     const body: Record<string, JsonValue> = {
       capability_id: capabilityId,
       payload,
       mode: 'stream',
       correlation: opts.correlation ?? {},
       subject: opts.subject ?? { id: 'remote', type: 'user' },
+      invocation_id: invocationId,
     };
     if (opts.version) body.version = opts.version;
     if (opts.mandate) body.mandate = opts.mandate;
-    const resp = await fetch(`${this.base}/invoke`, {
-      method: 'POST',
-      headers: this.headers(true),
-      body: JSON.stringify(body),
-    });
-    const ctype = resp.headers.get('content-type') ?? '';
-    if (!ctype.includes('text/event-stream')) {
-      const text = await resp.text();
-      if (!resp.ok) throw new Error(`CHP remote ${resp.status} on /invoke: ${text.slice(0, 300)}`);
-      yield { result: JSON.parse(text) as InvocationResult };
-      return;
-    }
-    const reader = resp.body!.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    let event: string | null = null;
-    let sawResult = false;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trimEnd();
-        buf = buf.slice(nl + 1);
-        if (line.startsWith('event: ')) event = line.slice('event: '.length).trim();
-        else if (line.startsWith('data: ')) {
-          const data = JSON.parse(line.slice('data: '.length)) as Record<string, JsonValue>;
-          if (event === 'result') {
-            sawResult = true;
-            yield { result: data as unknown as InvocationResult };
-          } else if (event === 'chunk') {
-            yield { delta: data.delta ?? null };
+    const rawBody = JSON.stringify(body);
+    const resumeAttempts = opts.resumeAttempts ?? 5;
+
+    let lastId = -1; // highest chunk index delivered to the caller so far
+    for (let attempt = 0; attempt <= resumeAttempts; attempt++) {
+      const headers = this.headers(true);
+      if (lastId >= 0) headers['Last-Event-ID'] = String(lastId); // reconnect: resume
+      try {
+        const resp = await fetch(`${this.base}/invoke`, { method: 'POST', headers, body: rawBody });
+        const ctype = resp.headers.get('content-type') ?? '';
+        if (!ctype.includes('text/event-stream')) {
+          const text = await resp.text();
+          if (!resp.ok) throw new Error(`CHP remote ${resp.status} on /invoke: ${text.slice(0, 300)}`);
+          yield { result: JSON.parse(text) as InvocationResult };
+          return;
+        }
+        const reader = resp.body!.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let event: string | null = null;
+        let eid: number | null = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trimEnd();
+            buf = buf.slice(nl + 1);
+            if (line.startsWith('id: ')) {
+              const n = Number.parseInt(line.slice('id: '.length).trim(), 10);
+              eid = Number.isFinite(n) ? n : null;
+            } else if (line.startsWith('event: ')) {
+              event = line.slice('event: '.length).trim();
+            } else if (line.startsWith('data: ')) {
+              const data = JSON.parse(line.slice('data: '.length)) as Record<string, JsonValue>;
+              if (event === 'result') {
+                yield { result: data as unknown as InvocationResult };
+                return;
+              }
+              if (event === 'chunk') {
+                if (eid !== null && eid <= lastId) continue; // dedupe after resume
+                if (eid !== null) lastId = eid;
+                yield { delta: data.delta ?? null };
+              }
+            }
           }
         }
+        // Stream closed with no terminal result → mid-stream drop; reconnect.
+        throw new Error('stream ended without a terminal result frame');
+      } catch (err) {
+        if (attempt >= resumeAttempts) throw err;
+        // reconnect from lastId via Last-Event-ID
       }
     }
-    if (!sawResult) throw new Error('stream ended without a terminal result frame');
   }
 
   async replay(correlationId: string): Promise<JsonValue[]> {

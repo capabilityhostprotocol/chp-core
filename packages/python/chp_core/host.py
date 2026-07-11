@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import os
 import threading
 import traceback
@@ -12,6 +14,18 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 MAX_REPLAY_LIMIT = 10_000
+
+
+def chunk_seq_digest(deltas: list) -> str:
+    """`chp-chunk-seq-v1` (spec §13.1): SHA-256 over the ordered stream chunk
+    deltas, each canonicalized with chp-stable-v1 and newline-terminated — the
+    §12 store-head line scheme, so the digest is byte-exact across
+    implementations. Committed into a stream's `execution_completed` evidence so
+    the delivered sequence is tamper-evident."""
+    digest = hashlib.sha256()
+    for delta in deltas:
+        digest.update((json.dumps(delta, sort_keys=True) + "\n").encode())
+    return digest.hexdigest()
 
 from .store import EVENT_HASH_V2, SQLiteEvidenceStore, _payload_commitment
 from .decorators import adapt_callable, get_capability_descriptor
@@ -480,14 +494,14 @@ class LocalCapabilityHost:
 
         # Gate 0 — idempotent replay (spec §13, proposal 0008): an already-
         # recorded invocation_id replays its recorded result; no gate below
-        # runs and no events are emitted for an execution that did not
-        # happen. Streaming is excluded (named deferral).
-        if envelope.mode != "stream":
-            cached = self._lookup_recorded_result(envelope.invocation_id)
-            if cached is not None:
-                from .metrics import record_idempotent_replay
-                record_idempotent_replay()
-                return envelope, None, cached
+        # runs and no events are emitted for an execution that did not happen.
+        # Streams replay too (§13.1, proposal 0012) — ainvoke_stream re-streams
+        # the recorded chunks before yielding this result.
+        cached = self._lookup_recorded_result(envelope.invocation_id)
+        if cached is not None:
+            from .metrics import record_idempotent_replay
+            record_idempotent_replay()
+            return envelope, None, cached
 
         if not envelope.capability_id or not envelope.capability_id.strip():
             return envelope, None, self._deny(
@@ -696,18 +710,41 @@ class LocalCapabilityHost:
             replayed=True,
         )
 
-    def _record_result(self, result: InvocationResult) -> InvocationResult:
+    def _record_result(self, result: InvocationResult,
+                       chunks: list | None = None) -> InvocationResult:
         """Record a processed result for idempotent replay (spec §13).
-        Best-effort: recording trouble never fails the invocation."""
+        Best-effort: recording trouble never fails the invocation. For a stream
+        (§13.1) the ordered chunk deltas ride under a serving-only ``_chunks``
+        key so a retried id can re-stream them; capped by
+        ``CHP_STREAM_CACHE_MAX_CHUNKS`` (default 10000) — over the cap the stream
+        is recorded non-resumable (replay degrades to the terminal result)."""
         if result.replayed:
             return result
         record = getattr(self.store, "record_result", None)
         if record is not None:
+            payload = result.to_dict()
+            if chunks is not None:
+                cap = int(os.environ.get("CHP_STREAM_CACHE_MAX_CHUNKS", "10000"))
+                if len(chunks) <= cap:
+                    payload = {**payload, "_chunks": chunks}
             try:
-                record(result.invocation_id, result.to_dict())
+                record(result.invocation_id, payload)
             except Exception:  # noqa: BLE001
                 pass
         return result
+
+    def _lookup_recorded_chunks(self, invocation_id: str) -> list | None:
+        """The recorded stream chunk deltas for a replayed streaming id, or None
+        (never cached, over the cap, or TTL-expired). Serving state — read off
+        the same §13 result cache row as ``_lookup_recorded_result``."""
+        lookup = getattr(self.store, "lookup_result", None)
+        if lookup is None:
+            return None
+        try:
+            data = lookup(invocation_id)
+        except Exception:  # noqa: BLE001
+            return None
+        return data.get("_chunks") if isinstance(data, dict) else None
 
     async def ainvoke_envelope(self, envelope: InvocationEnvelope | JSON) -> InvocationResult:
         envelope, entry, early = self._prepare(envelope)
@@ -791,7 +828,8 @@ class LocalCapabilityHost:
                 started_at=started.timestamp,
             ))
 
-    async def ainvoke_stream(self, envelope: InvocationEnvelope | JSON):
+    async def ainvoke_stream(self, envelope: InvocationEnvelope | JSON,
+                             resume_from: int = -1):
         """Streaming invocation (proposal 0006): an async generator that yields
         ``{"chunk": <delta>}`` items and finally ``{"result": InvocationResult}``.
 
@@ -800,10 +838,21 @@ class LocalCapabilityHost:
         prior chunks — the HTTP binding uses that to answer plain JSON without
         committing to an SSE response. Evidence brackets the stream:
         ``execution_started`` at open, ``execution_completed`` (with lifted
-        usage) or ``execution_failed`` at close. A non-generator handler in
-        stream mode degrades to a single terminal result."""
+        usage + the §13.1 chunk-sequence digest) or ``execution_failed`` at
+        close. A non-generator handler in stream mode degrades to a single
+        terminal result.
+
+        ``resume_from`` (§13.1): on an idempotent-replay hit the recorded chunk
+        deltas are re-streamed starting AFTER this 0-based index (default -1 =
+        from the start); an SSE `Last-Event-ID` reconnect passes the last chunk
+        id it saw. Resume is replay-from-offset."""
         envelope, entry, early = self._prepare(envelope)
         if early is not None:
+            # Streaming replay (§13.1): re-stream the recorded chunks from the
+            # resume offset, then the recorded terminal result (replayed=True).
+            for delta in (self._lookup_recorded_chunks(envelope.invocation_id)
+                          or [])[resume_from + 1:]:
+                yield {"chunk": delta}
             yield {"result": early}
             return
         assert entry is not None  # _prepare contract: no early result ⇒ resolved entry
@@ -821,14 +870,23 @@ class LocalCapabilityHost:
         try:
             raw = entry.handler(ctx, envelope.payload)
             data = None
+            chunks: list = []
             if inspect.isasyncgen(raw):
                 async for item in raw:
                     if isinstance(item, StreamResult):
                         data = item.data
                     else:
+                        chunks.append(item)
                         yield {"chunk": item}
             else:
                 data = await raw if inspect.isawaitable(raw) else raw
+            # §13.1 chunk-sequence evidence: commit a digest of the delivered
+            # deltas (omit-when-absent — a non-stream/zero-chunk completion is
+            # byte-identical). The chunks themselves are serving state (recorded
+            # below for replay/resume), never hashed into the chain.
+            stream_meta = ({"chunk_count": len(chunks),
+                            "chunk_seq_digest": chunk_seq_digest(chunks)}
+                           if chunks else {})
             completed = self.emit_evidence(
                 "execution_completed",
                 envelope,
@@ -836,11 +894,11 @@ class LocalCapabilityHost:
                 # unredacted so token accounting survives (the redactor would
                 # scrub *_tokens keys as secrets).
                 payload={"capability_uri": descriptor.capability_uri,
-                         **_usage_of(data)},
+                         **_usage_of(data), **stream_meta},
                 outcome="success",
                 redacted=False,
             )
-            yield {"result": InvocationResult(
+            result = InvocationResult(
                 invocation_id=envelope.invocation_id,
                 capability_id=descriptor.id,
                 capability_version=descriptor.version,
@@ -850,7 +908,11 @@ class LocalCapabilityHost:
                 data=data,
                 evidence_ids=[started.event_id, *ctx._evidence_ids, completed.event_id],
                 started_at=started.timestamp,
-            )}
+            )
+            # Record for idempotent streaming replay (§13.1) — with the ordered
+            # chunks so a retried id (or a Last-Event-ID reconnect) re-streams.
+            self._record_result(result, chunks=chunks or None)
+            yield {"result": result}
         except Exception as exc:
             failed = self.emit_evidence(
                 "execution_failed",
@@ -868,7 +930,7 @@ class LocalCapabilityHost:
                     ),
                 },
             )
-            yield {"result": InvocationResult(
+            fail_result = InvocationResult(
                 invocation_id=envelope.invocation_id,
                 capability_id=descriptor.id,
                 capability_version=descriptor.version,
@@ -878,7 +940,11 @@ class LocalCapabilityHost:
                 error={"type": exc.__class__.__name__, "message": str(exc)},
                 evidence_ids=[started.event_id, *ctx._evidence_ids, failed.event_id],
                 started_at=started.timestamp,
-            )}
+            )
+            # Record the failure for idempotent replay (§13.1) — a retried id
+            # replays the same failure, no partial chunks re-streamed.
+            self._record_result(fail_result)
+            yield {"result": fail_result}
 
     def emit_evidence(
         self,

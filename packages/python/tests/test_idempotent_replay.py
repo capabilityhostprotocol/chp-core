@@ -94,7 +94,10 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second.replayed)
         self.assertEqual(host._test_calls["n"], 2)
 
-    async def test_stream_mode_excluded(self) -> None:
+    async def test_stream_mode_replays(self) -> None:
+        """§13.1 (proposal 0012): a retried streaming invocation_id replays —
+        re-streams the recorded chunks then the recorded result (replayed=True),
+        with no re-execution."""
         host = _host()
 
         async def streaming(_ctx, _payload):
@@ -112,11 +115,12 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         env2 = InvocationEnvelope(capability_id="replay.stream", payload={},
                                   mode="stream", invocation_id="inv_stream_dup")
         items2 = [i async for i in host.ainvoke_stream(env2)]
-        # Streams never replay: both runs streamed chunks + a fresh result.
-        self.assertTrue(any("chunk" in i for i in items1))
-        self.assertTrue(any("chunk" in i for i in items2))
+        chunks1 = [i["chunk"] for i in items1 if "chunk" in i]
+        chunks2 = [i["chunk"] for i in items2 if "chunk" in i]
+        self.assertEqual(chunks1, ["c1"])
+        self.assertEqual(chunks2, chunks1)  # recorded chunks re-streamed on replay
         result2 = [i for i in items2 if "result" in i][0]["result"]
-        self.assertFalse(result2.replayed)
+        self.assertTrue(result2.replayed)
 
 
 class ReplayCacheTests(unittest.TestCase):

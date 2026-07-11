@@ -657,13 +657,23 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             self._write_json(result.to_dict())
             return
 
-        agen = host.ainvoke_stream(envelope)
+        # Resumable streams (§13.1, proposal 0012): a reconnect carries the last
+        # chunk id it saw; the host resumes from the next chunk off its recorded
+        # buffer. Absent/garbage → -1 (from the start).
+        try:
+            resume_from = int(self.headers.get("Last-Event-ID", "-1"))
+        except (TypeError, ValueError):
+            resume_from = -1
+
+        agen = host.ainvoke_stream(envelope, resume_from=resume_from)
         loop = asyncio.new_event_loop()
+        client_gone = False
         try:
             first = loop.run_until_complete(agen.__anext__())
             if "result" in first:
-                # No chunk was produced before the outcome (denial, skip, or a
-                # non-generator handler) — answer plain JSON.
+                # No chunk was produced before the outcome (denial, skip, a
+                # non-generator handler, or a resume past the last chunk) —
+                # answer plain JSON.
                 self._write_json(first["result"].to_dict())
                 return
             # A real stream: raise the per-connection socket timeout (a slow
@@ -674,21 +684,36 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
 
-            def sse(event: str, data: JSON) -> None:
-                self.wfile.write(f"event: {event}\n".encode())
-                self.wfile.write(f"data: {json.dumps(data)}\n\n".encode())
-                self.wfile.flush()
+            def sse(event: str, data: JSON, eid: int | None = None) -> None:
+                # If the client has gone, stop writing but let the caller keep
+                # draining the generator so it records the FULL stream — that is
+                # what makes a Last-Event-ID reconnect resumable.
+                nonlocal client_gone
+                if client_gone:
+                    return
+                try:
+                    if eid is not None:
+                        self.wfile.write(f"id: {eid}\n".encode())
+                    self.wfile.write(f"event: {event}\n".encode())
+                    self.wfile.write(f"data: {json.dumps(data)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionError, OSError):
+                    client_gone = True
 
-            sse("chunk", {"delta": first["chunk"]})
+            # Chunk ids are absolute indices; a resume re-numbers from resume_from+1.
+            next_id = resume_from + 1
+            sse("chunk", {"delta": first["chunk"]}, next_id)
+            next_id += 1
             while True:
                 try:
                     item = loop.run_until_complete(agen.__anext__())
                 except StopAsyncIteration:
                     break
                 if "result" in item:
-                    sse("result", item["result"].to_dict())
+                    sse("result", item["result"].to_dict(), next_id)
                 else:
-                    sse("chunk", {"delta": item["chunk"]})
+                    sse("chunk", {"delta": item["chunk"]}, next_id)
+                    next_id += 1
         finally:
             loop.run_until_complete(agen.aclose())
             loop.close()
@@ -1211,16 +1236,28 @@ class RemoteCapabilityHost:
                       subject: JSON | None = None,
                       metadata: JSON | None = None,
                       mandate: JSON | None = None,
+                      invocation_id: str | None = None,
+                      resume_attempts: int = 5,
                       timeout: int = 600):
         """Streaming invocation (binding, proposal 0006): a GENERATOR yielding
         chunk deltas; its return value (``StopIteration.value``, or capture via
         ``yield from``) is the terminal :class:`InvocationResult`. A denial —
         or any host without streaming — arrives as a plain JSON response and is
-        returned immediately with no chunks."""
+        returned immediately with no chunks.
+
+        Resumable (§13.1, proposal 0012): ONE ``invocation_id`` is pinned across
+        the whole call (auto-generated, or pass one to resume a specific stream);
+        if the connection drops mid-stream this transparently reconnects with a
+        ``Last-Event-ID`` header and resumes from the next chunk off the host's
+        recorded buffer — up to ``resume_attempts`` reconnects — so the caller
+        sees one seamless delta sequence."""
+        from .types import new_id
+
         if isinstance(correlation, CorrelationContext):
             corr_dict: JSON = correlation.to_dict()
         else:
             corr_dict = dict(correlation) if correlation else {}
+        inv_id = invocation_id or new_id("inv")  # pin ONE id for resume/replay
         body: JSON = {
             "capability_id": capability_id,
             "payload": payload or {},
@@ -1228,38 +1265,57 @@ class RemoteCapabilityHost:
             "correlation": corr_dict,
             "subject": subject or {"id": "remote", "type": "user"},
             "metadata": metadata or {},
+            "invocation_id": inv_id,
         }
         if version is not None:
             body["version"] = version
         if mandate is not None:
             body["mandate"] = mandate
-
         raw = json.dumps(body).encode("utf-8")
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["X-CHP-Key"] = self._api_key
-        req = Request(f"{self._base}/invoke", data=raw, headers=headers, method="POST")
-        resp = urlopen(req, timeout=timeout)
-        content_type = resp.headers.get("Content-Type", "")
-        if "text/event-stream" not in content_type:
-            # The outcome was decided before any chunk (denial/skip/sync host).
-            return self._parse_result(json.loads(resp.read().decode("utf-8")))
 
-        event: str | None = None
-        result: InvocationResult | None = None
-        for raw_line in resp:
-            line = raw_line.decode("utf-8").rstrip("\n")
-            if line.startswith("event: "):
-                event = line[len("event: "):].strip()
-            elif line.startswith("data: "):
-                data = json.loads(line[len("data: "):])
-                if event == "result":
-                    result = self._parse_result(data)
-                    break
-                yield data.get("delta")
-        if result is None:
-            raise ConnectionError("stream ended without a terminal result frame")
-        return result
+        last_id = -1  # highest chunk index delivered to the caller so far
+        for attempt in range(resume_attempts + 1):
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if self._api_key:
+                headers["X-CHP-Key"] = self._api_key
+            if last_id >= 0:  # reconnect: resume after the last chunk we saw
+                headers["Last-Event-ID"] = str(last_id)
+            req = Request(f"{self._base}/invoke", data=raw, headers=headers, method="POST")
+            try:
+                resp = urlopen(req, timeout=timeout)
+                content_type = resp.headers.get("Content-Type", "")
+                if "text/event-stream" not in content_type:
+                    # Outcome decided before any chunk (denial/skip/sync host),
+                    # or a resume past the last recorded chunk → the result.
+                    return self._parse_result(json.loads(resp.read().decode("utf-8")))
+                event: str | None = None
+                eid: int | None = None
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8").rstrip("\n")
+                    if line.startswith("id: "):
+                        try:
+                            eid = int(line[len("id: "):].strip())
+                        except ValueError:
+                            eid = None
+                    elif line.startswith("event: "):
+                        event = line[len("event: "):].strip()
+                    elif line.startswith("data: "):
+                        data = json.loads(line[len("data: "):])
+                        if event == "result":
+                            return self._parse_result(data)
+                        # Skip any chunk at/below what we already delivered — a
+                        # reconnect resumes at n+1, but guard duplicates anyway.
+                        if eid is not None and eid <= last_id:
+                            continue
+                        if eid is not None:
+                            last_id = eid
+                        yield data.get("delta")
+                # Stream closed with no terminal result → mid-stream drop; retry.
+                raise ConnectionError("stream ended without a terminal result frame")
+            except (ConnectionError, TimeoutError, OSError):
+                if attempt >= resume_attempts:
+                    raise
+                continue  # reconnect from last_id via Last-Event-ID
 
     def discover(self, **filter_kwargs: Any) -> JSON:
         """Return the host descriptor, optionally filtering capabilities."""

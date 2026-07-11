@@ -186,6 +186,14 @@ if (input.kind === "adapter-provenance") {
     ? `VALID (chain-witness: ${w.host_id} countersigned ${input.host_id}@seq ${input.sequence}, head ${String(input.store_head).slice(0, 16)}…`
       + `${input.revocation_head ? `, revocation_head ${String(input.revocation_head).slice(0, 16)}…` : ""})`
     : "INVALID");
+} else if (input.kind === "chunk-seq") {
+  // chp-chunk-seq-v1 (§13.1): SHA-256 over each chp-stable-v1(delta) + "\n", in order.
+  const h = createHash("sha256");
+  for (const d of input.deltas) h.update(canon(d) + "\n");
+  const digest = h.digest("hex");
+  ok = digest === input.chunk_seq_digest;
+  console.log(ok ? `VALID (chunk-seq: ${input.deltas.length} deltas → ${digest.slice(0, 16)}…)`
+                 : "INVALID (chunk-seq digest mismatch)");
 } else if (input.kind === "mandate") {
   // Mandate (chp-v0.2.md §10) + sub-delegation chains (§10, proposal 0009):
   // the principal key signs the canonical header (a sub-mandate's header also

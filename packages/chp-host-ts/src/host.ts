@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import { StreamResult } from './types.js';
@@ -46,6 +46,8 @@ export class LocalCapabilityHost {
   /** Recorded results for idempotent replay (§13) — serving state, never
    * evidence; in-memory for this conformance host. */
   private readonly invocationResults = new Map<string, InvocationResult>();
+  /** Recorded stream chunk deltas for §13.1 replay/resume — serving state. */
+  private readonly invocationChunks = new Map<string, JsonValue[]>();
 
   constructor(
     readonly hostId = 'ts-chp-host',
@@ -215,13 +217,12 @@ export class LocalCapabilityHost {
     const decided = (early: InvocationResult) => ({ env, entry: null, early });
 
     // Gate 0 — idempotent replay (spec §13, proposal 0008): an already-
-    // recorded invocation_id replays its recorded result; nothing below
-    // runs and no events are emitted. Streaming excluded (named deferral).
-    if (env.mode !== 'stream') {
-      const recorded = this.invocationResults.get(env.invocation_id!);
-      if (recorded) {
-        return { env, entry: null, early: { ...recorded, replayed: true } as InvocationResult };
-      }
+    // recorded invocation_id replays its recorded result; nothing below runs
+    // and no events are emitted. Streams replay too (§13.1, proposal 0012) —
+    // ainvokeStream re-streams the recorded chunks before yielding this result.
+    const recorded = this.invocationResults.get(env.invocation_id!);
+    if (recorded) {
+      return { env, entry: null, early: { ...recorded, replayed: true } as InvocationResult };
     }
 
     // Gate 1: non-empty id
@@ -330,10 +331,13 @@ export class LocalCapabilityHost {
     };
   }
 
-  /** Record a processed result for idempotent replay (§13) — first wins. */
-  private recordResult(result: InvocationResult): InvocationResult {
+  /** Record a processed result for idempotent replay (§13) — first wins. For a
+   * stream (§13.1) the ordered chunk deltas are recorded too, so a retried id or
+   * a Last-Event-ID reconnect can re-stream them. */
+  private recordResult(result: InvocationResult, chunks?: JsonValue[]): InvocationResult {
     if (!result.replayed && !this.invocationResults.has(result.invocation_id)) {
       this.invocationResults.set(result.invocation_id, result);
+      if (chunks) this.invocationChunks.set(result.invocation_id, chunks);
     }
     return result;
   }
@@ -379,11 +383,15 @@ export class LocalCapabilityHost {
    * with no prior chunks — the binding uses that to answer plain JSON
    * without committing to SSE. Evidence brackets the stream. A non-generator
    * handler degrades to a single terminal result. */
-  async *ainvokeStream(input: InvocationEnvelope): AsyncGenerator<
+  async *ainvokeStream(input: InvocationEnvelope, resumeFrom = -1): AsyncGenerator<
     { chunk: JsonValue } | { result: InvocationResult }, void, unknown
   > {
     const { env, entry, early } = this.prepare(input);
     if (early) {
+      // Streaming replay (§13.1): re-stream the recorded chunks from the resume
+      // offset, then the recorded terminal result (replayed=true).
+      const recorded = this.invocationChunks.get(env.invocation_id!) ?? [];
+      for (const chunk of recorded.slice(resumeFrom + 1)) yield { chunk };
       yield { result: early };
       return;
     }
@@ -394,27 +402,40 @@ export class LocalCapabilityHost {
     try {
       const raw = await entry!.handler(ctx, env.payload ?? {});
       let data: JsonValue = null;
+      const chunks: JsonValue[] = [];
       if (isAsyncGenerator(raw)) {
         for await (const item of raw) {
           if (item instanceof StreamResult) data = item.data;
-          else yield { chunk: item };
+          else { chunks.push(item as JsonValue); yield { chunk: item }; }
         }
       } else {
         data = raw as JsonValue;
       }
-      const done = this.emit('execution_completed', env, { capability_uri: `${d.id}:${d.version}` }, 'success');
-      yield { result: this.result(env, {
+      // §13.1 chunk-sequence evidence: commit a digest of the delivered deltas
+      // (omit-when-absent — a non-stream/zero-chunk completion is byte-identical).
+      const donePayload: Record<string, JsonValue> = { capability_uri: `${d.id}:${d.version}` };
+      if (chunks.length) {
+        donePayload.chunk_count = chunks.length;
+        donePayload.chunk_seq_digest = chunkSeqDigest(chunks);
+      }
+      const done = this.emit('execution_completed', env, donePayload, 'success');
+      const result = this.result(env, {
         outcome: 'success', success: true, capability_version: d.version,
         data, evidence_ids: [started.event_id, done.event_id], started_at: started.timestamp,
-      }) };
+      });
+      // Record for idempotent streaming replay (§13.1) with the ordered chunks.
+      this.recordResult(result, chunks.length ? chunks : undefined);
+      yield { result };
     } catch (err) {
       const failed = this.emit('execution_failed', env, { capability_uri: `${d.id}:${d.version}` }, 'failure',
         { error: { type: (err as Error).name, message: (err as Error).message } });
-      yield { result: this.result(env, {
+      const failResult = this.result(env, {
         outcome: 'failure', success: false, capability_version: d.version,
         error: { type: (err as Error).name, message: (err as Error).message },
         evidence_ids: [started.event_id, failed.event_id], started_at: started.timestamp,
-      }) };
+      });
+      this.recordResult(failResult);
+      yield { result: failResult };
     }
   }
 

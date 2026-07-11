@@ -1,0 +1,18 @@
+{
+  "chunk_seq_digest": "b027525dddd4d3db15c6fd8ab257bb6fbad85948a2378f2bd59589c1d8dfd160",
+  "deltas": [
+    {
+      "token": "t0"
+    },
+    {
+      "token": "caf\u00e9 \ud83d\udd12"
+    },
+    {
+      "i": 2,
+      "token": "t2"
+    }
+  ],
+  "kind": "chunk-seq",
+  "note": "chp-chunk-seq-v1 (chp-v0.2.md 13.1): sha256 over each chp-stable-v1(delta) + '\\n', in order. A resumed/replayed stream is verifiable against this committed digest.",
+  "scheme": "chp-chunk-seq-v1"
+}

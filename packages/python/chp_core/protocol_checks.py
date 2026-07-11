@@ -420,6 +420,17 @@ def check_alignment(repo_root: Path) -> JSON:
             and "chp_withheld" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Streaming completion (§13.1, proposal 0012): the chunk-seq digest, the
+        # replay extension, and the resume header.
+        add_check(
+            checks,
+            "spec_defines_streaming_replay",
+            "Streaming replay" in spec_v02
+            and "chp-chunk-seq-v1" in spec_v02
+            and "Last-Event-ID" in spec_v02
+            and "chunk_seq_digest" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.
@@ -658,6 +669,23 @@ def check_alignment(repo_root: Path) -> JSON:
             )
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "event_hash_v2_vector_verifies", False, {"error": str(exc)})
+
+    # Streaming chunk-seq vector (§13.1, proposal 0012): the published deltas
+    # recompute to the committed chp-chunk-seq-v1 digest.
+    chunk_seq_vec = repo_root / "spec" / "test-vectors" / "chunk-seq.json"
+    if chunk_seq_vec.exists():
+        try:
+            from .host import chunk_seq_digest as _csd
+
+            cs = read_json(chunk_seq_vec)
+            add_check(
+                checks,
+                "chunk_seq_vector_verifies",
+                _csd(cs["deltas"]) == cs["chunk_seq_digest"],
+                {"hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "chunk_seq_vector_verifies", False, {"error": str(exc)})
 
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])
