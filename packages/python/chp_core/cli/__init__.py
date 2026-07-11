@@ -22,6 +22,7 @@ from ._core import (
     cmd_rotate_key,
     cmd_replay,
     cmd_retention_apply,
+    cmd_store_backup,
     cmd_serve_demo,
     cmd_validate_contract,
     cmd_verify_evidence,
@@ -638,6 +639,20 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--expect-key", default=None, dest="expect_key", metavar="KEY_ID",
                           help="Pin the signer: reject a bundle signed by any other key.")
     verify_p.set_defaults(func=cmd_verify_evidence)
+
+    store_p = subcommands.add_parser(
+        "store", help="Evidence-store operations (hot backup).")
+    store_sub = store_p.add_subparsers(dest="store_command", required=True)
+    store_backup_p = store_sub.add_parser(
+        "backup",
+        help="Hot backup via sqlite's online backup API — safe while serving "
+             "(never `cp` a live WAL database).")
+    store_backup_p.add_argument("destination", help="Path for the backup copy.")
+    store_backup_p.add_argument("--store", default=".chp/evidence.sqlite",
+                                help="Source evidence store (default: .chp/evidence.sqlite).")
+    store_backup_p.add_argument("--verify", action="store_true",
+                                help="Verify every correlation chain on the copy; exit 1 on breaks.")
+    store_backup_p.set_defaults(func=cmd_store_backup)
 
     retention_p = subcommands.add_parser("retention", help="Apply evidence retention (chain-preserving).")
     retention_sub = retention_p.add_subparsers(dest="retention_command", required=True)

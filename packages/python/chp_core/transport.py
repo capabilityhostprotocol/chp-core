@@ -127,8 +127,12 @@ class HttpTransport:
         name: str | None = None,
         timeout: int = 30,
         api_key: str | None = None,
+        retries: int = 0,
     ) -> None:
-        self._remote = RemoteCapabilityHost(base_url, timeout=timeout, api_key=api_key)
+        # retries forwards the client's opt-in retry (default 0 — a mid-flight
+        # drop may have executed; at-most-once is not guaranteed on that path).
+        self._remote = RemoteCapabilityHost(
+            base_url, timeout=timeout, api_key=api_key, retries=retries)
         self.name = name or base_url.rstrip("/")
         self.url = base_url.rstrip("/")
 

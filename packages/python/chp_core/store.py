@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -62,10 +63,40 @@ class SQLiteEvidenceStore:
         # proceed without blocking the append writer, and avoids ROLLBACK-journal
         # corruption on unclean shutdown. synchronous=NORMAL is the standard WAL
         # pairing. (:memory: ignores journal pragmas.) Same pattern as memory.py.
+        # Multi-writer posture: hook entrypoints (and any cross-process writer)
+        # open their OWN store on the same file — WAL allows one writer at a
+        # time, and sqlite's default busy_timeout of 0 turns the second writer
+        # into an immediate "database is locked" error. A finite wait absorbs
+        # the short single-row contention window; keep it finite so a genuinely
+        # wedged database still fails visibly. MUST be set BEFORE the WAL
+        # pragma: the journal-mode switch itself takes a lock, so concurrent
+        # first-opens die right here without the timeout.
+        busy_ms = int(os.environ.get("CHP_STORE_BUSY_TIMEOUT_MS", "5000"))
+        self._conn.execute(f"PRAGMA busy_timeout={busy_ms}")
         if self.path != ":memory:":
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._ensure_wal(busy_ms)
         self._init_schema()
+
+    def _ensure_wal(self, busy_ms: int) -> None:
+        """Switch to WAL with an explicit bounded retry: the journal-mode
+        change is the one lock sqlite acquires WITHOUT invoking the busy
+        handler, so concurrent first-opens of the same file raise 'database
+        is locked' immediately despite busy_timeout. Once the file is in WAL
+        the mode is persistent and the read-only check short-circuits."""
+        import time as _time
+
+        deadline = _time.monotonic() + busy_ms / 1000.0
+        while True:
+            try:
+                mode = self._conn.execute("PRAGMA journal_mode").fetchone()[0]
+                if str(mode).lower() != "wal":
+                    self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                return
+            except sqlite3.OperationalError:
+                if _time.monotonic() >= deadline:
+                    raise
+                _time.sleep(0.01)
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -524,6 +555,38 @@ class SQLiteEvidenceStore:
             valid=first_broken is None,
             first_broken_sequence=first_broken,
         )
+
+    def size_info(self) -> dict[str, int]:
+        """Operator-facing size stats for /metrics: on-disk bytes
+        (page_count × page_size — includes free pages, matches what disk
+        monitoring sees) and total event rows. Three cheap statements."""
+        with self._lock:
+            page_count = int(self._conn.execute("PRAGMA page_count").fetchone()[0])
+            page_size = int(self._conn.execute("PRAGMA page_size").fetchone()[0])
+            events = int(self._conn.execute(
+                "SELECT COUNT(*) FROM evidence_events").fetchone()[0])
+        return {"size_bytes": page_count * page_size, "events": events}
+
+    def backup_to(self, dst_path: str | Path) -> dict[str, int]:
+        """Hot backup via sqlite's online backup API — WAL-safe and consistent
+        while the store keeps serving (a filesystem `cp` of a live WAL
+        database is NOT). Returns the copy's size stats."""
+        dst = str(dst_path)
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        dst_conn = sqlite3.connect(dst)
+        try:
+            with self._lock:
+                self._conn.commit()
+                self._conn.backup(dst_conn)
+            dst_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            dst_conn.commit()
+        finally:
+            dst_conn.close()
+        copy = SQLiteEvidenceStore(dst)
+        try:
+            return copy.size_info()
+        finally:
+            copy.close()
 
     def export_correlation(self, correlation_id: str) -> list[JSON]:
         """Ordered events for a correlation, each with its stored content_hash /
