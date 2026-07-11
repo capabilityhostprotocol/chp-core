@@ -98,8 +98,16 @@ class SQLiteEvidenceStore:
                     raise
                 _time.sleep(0.01)
 
+    # Bump when _init_schema's DDL changes; opens of an already-current store
+    # skip the whole DDL block (hooks open a store PER CALL — a dozen
+    # idempotent DDL statements per hook is measurable latency).
+    _SCHEMA_VERSION = 3
+
     def _init_schema(self) -> None:
         with self._lock:
+            current = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+            if current == self._SCHEMA_VERSION:
+                return
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS evidence_sequence (
@@ -189,6 +197,7 @@ class SQLiteEvidenceStore:
                 )
                 """
             )
+            self._conn.execute(f"PRAGMA user_version={self._SCHEMA_VERSION}")
             self._conn.commit()
 
     def _rebuild_heads_locked(self) -> None:

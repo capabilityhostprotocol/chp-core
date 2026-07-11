@@ -1,49 +1,80 @@
 # CHP Roadmap
 
-> CHP makes capability execution visible, replayable, and ready for governance.
+> CHP makes capability execution visible, replayable, and provable — a single
+> signed, governed evidence plane for agent work.
 
 ## Shipped
 
-**v0.1 — Local Execution Evidence**  
-Protocol spec, JSON schemas, Python reference host (`chp-core`), TypeScript types
-(`@capabilityhostprotocol/types`), append-only SQLite evidence store, replay by
-correlation ID, conformance suite.
+**v0.1 — Local Execution Evidence**
+Protocol spec, JSON schemas, Python reference host (`chp-core`), TypeScript
+types, append-only SQLite evidence store, replay by correlation ID,
+conformance suite. Local visibility is free.
 
-**v0.1 Adapter Tier — 66 Governed Adapters**  
-Full `chp-adapter-*` library: HTTP, filesystem, git, GitHub, Radicle, audit, secrets,
-CI, conformance, safety, planning, delegation, composition, jobs, HuggingFace, TEI,
-vLLM, Scout, SGLang, smolagents, Tailscale, and more. Every adapter wraps its
-operations in evidence. See `docs/capabilities/adapter-build-status.md`.
+**v0.1 Adapter Tier — Governed Adapters**
+The `chp-adapter-*` library: HTTP, filesystem, git, GitHub, Radicle, audit,
+secrets, CI, conformance, safety, planning, delegation, composition, jobs,
+inference (HuggingFace/TEI/vLLM/SGLang/MLX), and more. Every adapter wraps
+its operations in evidence.
 
-**v0.1 Host Infrastructure — `chp-host`**  
-`chp-host serve/mcp/gateway/init/mesh` CLI. Profile-based host config, multi-host
-router, Tailscale mesh, `chp-host init` one-command node setup, `chp-host mesh`
-peer management, zero-arg gateway via `~/.chp/mesh.json`.
+**v0.2 — Evidence Integrity (spec v0.2.0 → v0.2.7, eight shipped proposals)**
+Everything below is conformance-asserted: the black-box wire suite runs
+**22 checks against two independent implementations** (Python + TypeScript),
+plus an 8-check mesh suite for routing gateways.
 
-**Claude Desktop / MCP Integration**  
-`chp-host mcp` exposes all capabilities as MCP tools. Every Claude tool call is
-governed and evidenced. See `docs/claude-desktop-mcp.md`.
+- **Signed evidence** (§3): `chp-stable-v1` canonicalization, ed25519 signed
+  bundles, graduated assurance tiers, anchored identity (domain +
+  Radicle-DID), chained key rotation and revocation.
+- **Cross-host verification** (§8): task bundles with causal closure —
+  federated `/verify` and `/export` across a mesh.
+- **Supply chain** (§9, proposal 0001): publisher-signed adapter provenance
+  with an install-time gate.
+- **Delegated authority** (§10, proposals 0002/0004/0007): signed, expiring,
+  capability-scoped **mandates**; forwarded unchanged through intermediaries;
+  **revocable before expiry** (issuer-only rule, `/revocations` distribution).
+- **Governed reachability** (§11, proposal 0003): routing is evidence —
+  `host_unreachable` denials, transition-gated health events, replayable
+  failovers.
+- **Mesh witnessing** (§12, proposal 0005): peers countersign each other's
+  store heads — evidence becomes tamper-proof *against the host's own
+  operator*, with lawful retention distinguishable from rewriting.
+- **Governed streaming** (proposal 0006): SSE invocations run the full gate
+  pipeline first; denials never commit to a stream.
+- **Idempotent replay** (§13, proposal 0008): a host never re-executes a
+  recorded `invocation_id` — retries and failover are provably safe.
 
-## Active — Multi-Host Mesh
+**Production posture (0.15–0.16)**
+Multi-writer-safe store with hot backup (`chp store backup --verify`),
+SIGTERM draining, structured error surfacing, fail-loud auth
+(`CHP_HOST_REQUIRE_AUTH`), non-root health-checked containers, scheduled
+retention, keep-alive client, circuit breaker, and operator metrics — see
+[production-runbook.md](production-runbook.md) and [SECURITY.md](../SECURITY.md).
 
-Ongoing work to make distributed CHP clusters feel natural:
+## Active
 
-- **Bootstrap scripts** — `scripts/bootstrap-mac.sh`, `scripts/bootstrap-linux.sh`
-- **Service persistence** — LaunchAgent on macOS, systemd on Linux, auto-loaded by init
-- **Tailscale mesh** — peer discovery via `chp.adapters.tailscale.chp_hosts`
-- **Edge nodes** — Synology NAS (port 8802), Raspberry Pi (port 8801)
+- **Path to 1.0** — the spec has been additive through eight proposals; the
+  remaining work is stability evidence, not features: a published
+  compatibility statement, a spec-freeze window with no needed changes, and
+  feedback from implementers we don't operate ourselves.
+- **Making the proofs visible** — the documentation and examples lag the
+  protocol: witnessing, revocation, streaming, and replay deserve worked,
+  reproducible demonstrations.
 
-## Next — v0.2 Protocol
+## Next (demand-gated)
 
-The v0.2 protocol layer adds tamper-evident evidence and richer query:
+Protocol changes go through [spec/proposals/](../spec/proposals/) and are
+deliberately demand-gated — these are named deferrals waiting for a concrete
+asker, not commitments:
 
-- **Evidence integrity** — JCS hash chains, ed25519 signed bundles, graduated assurance
-  (`none` / `hash-chain` / `signed`). Design: `docs/design/evidence-integrity-v0.2.md`
-- **Streaming evidence** — chunked evidence events during long-running capabilities
-- **Evidence query API** — filter by capability_id, time range, outcome, issue_id
-- **Capability versioning** — schema evolution path, `deprecated` lifecycle state
-- **`chp verify`** — portable bundle verification CLI
+- Sub-delegation / mandate attenuation; revocation gossip and freshness proofs
+- Witness quorum policies, witness-of-witness, transparency-log anchoring
+- Streaming replay, resumable streams; gateway-level (cross-owner) dedupe
+- Selective disclosure of evidence
+- `chp-jcs-v1` canonicalization (RFC 8785) as a non-breaking alternative
 
-## Guiding Rule
+## Guiding Rules
 
-Local visibility should be free. Production trust should be paid.
+1. **Local visibility is free; production trust is the product.**
+2. **Everything additive** — a v0.1-only host stays conformant; published
+   test vectors never change bytes.
+3. **Structure follows demand** — a proposal ships when someone needs it,
+   with its conformance check, or it stays a named deferral.
