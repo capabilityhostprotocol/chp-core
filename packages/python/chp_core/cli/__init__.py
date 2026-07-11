@@ -23,6 +23,7 @@ from ._core import (
     cmd_rotate_key,
     cmd_replay,
     cmd_retention_apply,
+    cmd_revocation_verify,
     cmd_store_backup,
     cmd_serve_demo,
     cmd_validate_contract,
@@ -758,6 +759,20 @@ def build_parser() -> argparse.ArgumentParser:
     wit_verify.add_argument("--receipts", default=None,
                             help="Receipts JSON (default: ~/.chp/witnesses/received.json).")
     wit_verify.set_defaults(func=cmd_witness_verify)
+
+    revocation_p = subcommands.add_parser(
+        "revocation",
+        help="Revocation freshness: audit witnessed revocation heads (spec §12, proposal 0010).")
+    revocation_sub = revocation_p.add_subparsers(dest="revocation_command", required=True)
+    rev_verify = revocation_sub.add_parser(
+        "verify",
+        help="Recompute each witnessed receipt's revocation_head from its snapshot and "
+             "compare to the current held set: fresh / DROPPED / snapshot_invalid.")
+    rev_verify.add_argument("--receipts", default=None,
+                            help="Receipts JSON (default: ~/.chp/witnesses/received.json).")
+    rev_verify.add_argument("--key-dir", default=None, dest="key_dir",
+                            help="Also include this host's key revocations from key-dir.")
+    rev_verify.set_defaults(func=cmd_revocation_verify)
 
     keygen_p = subcommands.add_parser("keygen", help="Generate a host ed25519 signing keypair.")
     keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")

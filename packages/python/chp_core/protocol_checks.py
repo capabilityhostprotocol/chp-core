@@ -398,6 +398,17 @@ def check_alignment(repo_root: Path) -> JSON:
             and "NARROW scope and SHORTEN the window" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Revocation freshness (§12, proposal 0010): the digest scheme, the
+        # dropped-revocation detection, and the mismatch code.
+        add_check(
+            checks,
+            "spec_defines_revocation_freshness",
+            "**Revocation freshness**" in spec_v02
+            and "chp-revocation-head-v1" in spec_v02
+            and "provable denial" in spec_v02
+            and "revocation_head_mismatch" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.
@@ -580,6 +591,35 @@ def check_alignment(repo_root: Path) -> JSON:
             )
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "chain_witness_vector_verifies", False, {"error": str(exc)})
+
+    # Revocation-freshness vector: the chain-witness carries a signed
+    # revocation_head, and the freshness audit recomputes it from a matching
+    # snapshot (§12, proposal 0010).
+    revfresh_vec = repo_root / "spec" / "test-vectors" / "chain-witness-revfresh.json"
+    if revfresh_vec.exists():
+        try:
+            from . import revocations as _revocations
+            from .signing import verify_chain_witness as _vcw
+
+            stmt = read_json(revfresh_vec)
+            wv = _vcw(stmt, expected_host_id="vector-witnessed-host")
+            ids = _revocations.revocation_ids(
+                [{"mandate_id": "mnd_fixture0001",
+                  "principal": {"public_key": "cvZ2Qm5jZml4dHVyZXB1YmtleXYx"}}],
+                [{"revoked_key_id": "d20d8b42b94c3375"}])
+            audit = _revocations.audit_revocation_freshness(
+                [{"statement": stmt, "revocations": ids}], ids)
+            add_check(
+                checks,
+                "revocation_head_vector_verifies",
+                wv.valid and bool(stmt.get("revocation_head"))
+                and audit["verdict"] == "fresh"
+                and _revocations.compute_revocation_head(ids) == stmt["revocation_head"],
+                {"checks": wv.checks, "audit": audit,
+                 "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "revocation_head_vector_verifies", False, {"error": str(exc)})
 
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])

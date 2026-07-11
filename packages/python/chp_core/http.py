@@ -388,13 +388,22 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
                 return
             head = store.get_store_head()
+            from . import revocations as _revocations
             from .types import utc_now
+            host_id = getattr(self.server.chp_host, "host_id",
+                              getattr(self.server.chp_host, "_host_id", "unknown"))
             self._write_json({
-                "host_id": getattr(self.server.chp_host, "host_id",
-                                   getattr(self.server.chp_host, "_host_id", "unknown")),
+                "host_id": host_id,
                 "scheme": head["scheme"],
                 "sequence": head["sequence"],
                 "store_head": head["store_head"],
+                # Revocation freshness (spec §12, proposal 0010): the digest of
+                # the held revocation set the witness also countersigns. MUST
+                # match what _receive_witness recomputes — same id source.
+                "revocation_head": _revocations.compute_revocation_head(
+                    _revocations.revocation_ids(
+                        _revocations.load_mandate_revocations(),
+                        self._own_key_revocations())),
                 "at": utc_now(),
             })
             return
@@ -546,9 +555,36 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 HTTPStatus.CONFLICT, "head_mismatch",
                 "statement head does not match this store at that sequence")
             return
-        witnessing.record_received(body, head["leaves"])
+        # Revocation freshness (spec §12, proposal 0010): when the statement
+        # carries a revocation_head, it MUST match this host's current one — a
+        # witness that signed a stale set is refused. Snapshot the held ids
+        # beside the receipt so an auditor can later prove the set (and detect
+        # a dropped revocation). A pre-0010 statement (no revocation_head)
+        # persists exactly as before.
+        from . import revocations as _revocations
+        rev_snapshot = None
+        if body.get("revocation_head"):
+            rev_ids = _revocations.revocation_ids(
+                _revocations.load_mandate_revocations(),
+                self._own_key_revocations())
+            if _revocations.compute_revocation_head(rev_ids) != body["revocation_head"]:
+                self._write_error(
+                    HTTPStatus.CONFLICT, "revocation_head_mismatch",
+                    "statement revocation_head does not match this host's current set")
+                return
+            rev_snapshot = rev_ids
+        witnessing.record_received(body, head["leaves"], revocations=rev_snapshot)
         self._write_json({"accepted": True, "sequence": sequence,
                           "witness": (body.get("witness") or {}).get("host_id")})
+
+    def _own_key_revocations(self) -> list:
+        from . import signing
+        my_id = getattr(self.server.chp_host, "host_id",
+                        getattr(self.server.chp_host, "_host_id", ""))
+        try:
+            return signing.load_revocations(signing.resolve_key_dir(my_id))
+        except Exception:  # noqa: BLE001
+            return []
 
     def _receive_revocation(self, body: JSON) -> None:
         """POST /revocations (spec §10 Revocation): accept a principal's

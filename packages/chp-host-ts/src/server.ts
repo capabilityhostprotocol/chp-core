@@ -7,7 +7,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { verifyChainWitness, verifyMandateRevocation } from '@capabilityhostprotocol/sdk';
+import { verifyChainWitness, verifyMandateRevocation, computeRevocationHead } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
 import type { InvocationEnvelope, JsonValue } from './types.js';
 
@@ -53,6 +53,11 @@ export function createHostServer(
   const { apiKey } = opts;
   // Received chain-witness statements (§12) — in-memory for the conformance host.
   const receivedWitnesses: Record<string, JsonValue>[] = [];
+  // chp-revocation-head-v1 (§12, proposal 0010) over the host's held mandate
+  // revocations (in-memory conformance host has no key revocations).
+  const revocationHead = (): string => computeRevocationHead(
+    host.mandateRevocations.map((r) =>
+      `m\x00${String(r.mandate_id ?? '')}\x00${String((r.principal as Record<string, JsonValue> | undefined)?.public_key ?? '')}`));
   // Named per-caller keys (binding §2): "name:key[:scope1|scope2],…" — same
   // name may repeat (rotation overlap); a scoped key's out-of-scope invoke is
   // a PROCESSED policy_blocked denial, never a transport 403.
@@ -138,7 +143,10 @@ export function createHostServer(
       const head = host.store.getStoreHead();
       return sendJson(res, 200, {
         host_id: host.hostId, scheme: head.scheme, sequence: head.sequence,
-        store_head: head.store_head, at: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+        store_head: head.store_head,
+        // Revocation freshness (§12, proposal 0010): the held revocation set's digest.
+        revocation_head: revocationHead(),
+        at: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
       });
     }
     if (method === 'GET' && path === '/witnesses') {
@@ -159,6 +167,12 @@ export function createHostServer(
       if (mine.store_head !== stmt.store_head) {
         return err(res, 409, 'head_mismatch',
           'statement head does not match this store at that sequence');
+      }
+      // Revocation freshness (§12, proposal 0010): a statement carrying a
+      // revocation_head must match this host's current one.
+      if (stmt.revocation_head && stmt.revocation_head !== revocationHead()) {
+        return err(res, 409, 'revocation_head_mismatch',
+          'statement revocation_head does not match this host\'s current set');
       }
       receivedWitnesses.push(stmt);
       return sendJson(res, 200, {

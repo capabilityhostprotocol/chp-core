@@ -930,6 +930,33 @@ def cmd_witness_verify(args: argparse.Namespace) -> int:
     return 1 if tampered else 0
 
 
+def cmd_revocation_verify(args: argparse.Namespace) -> int:
+    """The freshness auditor act (§12, proposal 0010): recompute each witnessed
+    receipt's revocation_head from its snapshot (tamper-evidence) and compare
+    against the host's CURRENT held set — a revocation witnessed earlier but
+    now absent is a DROPPED revocation (denial of revocation). Exit 1 on
+    dropped or snapshot_invalid."""
+    import sys
+
+    from .. import revocations, signing, witnessing
+
+    if args.receipts:
+        with open(args.receipts) as fh:
+            receipts = json.load(fh)
+    else:
+        receipts = witnessing.load_received()
+    if not receipts:
+        print("no witness receipts to verify (none received yet?)", file=sys.stderr)
+        return 1
+
+    key_revs = signing.load_revocations(args.key_dir) if args.key_dir else []
+    current = revocations.revocation_ids(
+        revocations.load_mandate_revocations(), key_revs)
+    audit = revocations.audit_revocation_freshness(receipts, current)
+    print(json.dumps(audit, indent=2))
+    return 1 if audit["verdict"] in ("dropped", "snapshot_invalid") else 0
+
+
 def cmd_provenance_verify(args: argparse.Namespace) -> int:
     import hashlib
     from pathlib import Path

@@ -150,9 +150,12 @@ if (input.kind === "adapter-provenance") {
   });
   const vCanon = (obj, sigB64) =>
     edVerify(null, Buffer.from(canon(obj), "utf8"), wPub, Buffer.from(sigB64, "base64"));
+  // revocation_head (proposal 0010) is header-signed ONLY when present — a
+  // pre-0010 statement omits it and the header is byte-identical.
   const header = { kind: input.kind, host_id: input.host_id, sequence: input.sequence,
                    store_head: input.store_head, witnessed_at: input.witnessed_at,
-                   canonicalization: input.canonicalization };
+                   canonicalization: input.canonicalization,
+                   ...(input.revocation_head ? { revocation_head: input.revocation_head } : {}) };
   ok = input.signature?.algorithm === "ed25519" && vCanon(header, input.signature.signature);
   const att = w.host_identity;
   if (att) {
@@ -163,7 +166,8 @@ if (input.kind === "adapter-provenance") {
           && vCanon(claim, att.signature))) { console.error("witness attestation INVALID"); ok = false; }
   } else { console.error("chain-witness missing witness attestation"); ok = false; }
   console.log(ok
-    ? `VALID (chain-witness: ${w.host_id} countersigned ${input.host_id}@seq ${input.sequence}, head ${String(input.store_head).slice(0, 16)}…)`
+    ? `VALID (chain-witness: ${w.host_id} countersigned ${input.host_id}@seq ${input.sequence}, head ${String(input.store_head).slice(0, 16)}…`
+      + `${input.revocation_head ? `, revocation_head ${String(input.revocation_head).slice(0, 16)}…` : ""})`
     : "INVALID");
 } else if (input.kind === "mandate") {
   // Mandate (chp-v0.2.md §10) + sub-delegation chains (§10, proposal 0009):

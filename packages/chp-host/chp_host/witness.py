@@ -45,7 +45,11 @@ def witness_peer(url: str, api_key: str | None, witness_key, witness_id: str,
         return None  # unreachable or pre-§12 peer — witnessing is best-effort
     statement = build_chain_witness(
         str(head["host_id"]), int(head["sequence"]), str(head["store_head"]),
-        witness_key, witness_id=witness_id, witnessed_at=utc_now())
+        witness_key, witness_id=witness_id, witnessed_at=utc_now(),
+        # Revocation freshness (§12, proposal 0010): pass through the peer's
+        # revocation_head so the countersignature also commits to its held
+        # revocation set (a pre-0010 peer omits it — no field, byte-identical).
+        revocation_head=head.get("revocation_head"))
     # The issued record is the threat-model core: keep it BEFORE delivery —
     # even if the peer refuses the receipt, our countersignature exists.
     record_issued(statement)
