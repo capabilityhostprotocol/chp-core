@@ -5,6 +5,30 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.2.8] — additive over 0.2.7 — **released 2026-07-11**
+
+### Added
+- **Sub-delegation — attenuation-only mandate chains** (chp-v0.2.md §10
+  "Sub-delegation", [proposals/0009](proposals/0009-sub-delegation.md)): a
+  delegate may re-delegate a **narrowed** slice of its authority, forming a
+  chain verified offline link-by-link to the root principal. A sub-mandate
+  adds `parent_id` + `depth` (signed header, present only when `parent_id`
+  is set — a root mandate is **byte-identical** to a single-hop one) and
+  `parent` (the full parent embedded inline, carried as transport, verified
+  on its own signature). The load-bearing invariant is **monotone
+  attenuation**: a child can only narrow scope and shorten the window. The
+  **delegate join** (`parent.delegate_id == child.principal.host_id`) binds
+  each link; the sub-principal signs with its own key (no key sharing).
+  Revoking any link kills the suffix for free (each link's `not_revoked`
+  runs against its own principal key). Gate 5 records the **root principal**
+  in the evidence subject. A bad chain (attenuation violation, broken join,
+  over-depth, revoked ancestor) is the existing `mandate_invalid` denial —
+  **no new denial code, evidence type, schema kind, or canonical-byte
+  change**. Wire suite **22→23** ("sub-delegation"); both reference hosts
+  pass. *Vector: `test-vectors/mandate-chain.json` (only new file; mandate
+  + mandate-revocation vectors byte-identical); guards
+  `spec_defines_subdelegation` + `sub_mandate_vector_verifies`.*
+
 ## [0.2.7] — additive over 0.2.6 — **released 2026-07-11**
 
 ### Added

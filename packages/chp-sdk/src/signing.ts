@@ -219,11 +219,101 @@ const MANDATE_HEADER_FIELDS = [
 ] as const;
 
 /** The principal-signed header of a mandate (§10). `?? null` mirrors the
- * Python reference's `.get` semantics — deviating breaks signatures. */
+ * Python reference's `.get` semantics — deviating breaks signatures. A
+ * sub-mandate (proposal 0009) additionally covers `depth` + `parent_id`, but
+ * ONLY when `parent_id` is set, so a root is byte-identical to v0.2.3. */
 export function mandateHeader(mandate: Record<string, JsonValue>): JsonValue {
   const h: Record<string, JsonValue> = {};
   for (const f of MANDATE_HEADER_FIELDS) h[f] = mandate[f] ?? null;
+  if (mandate.parent_id) {
+    h.depth = mandate.depth ?? null;
+    h.parent_id = mandate.parent_id ?? null;
+  }
   return h;
+}
+
+const MAX_MANDATE_DEPTH = 8;
+
+/** The binding-§2 scope grammar (local copy — verify.ts exports the same;
+ * duplicated to keep signing.ts free of a verify.ts import cycle). */
+function scopeAllows(scope: JsonValue[], capabilityId: string): boolean {
+  return (scope ?? []).some((s) => capabilityId === s
+    || (String(s).endsWith('*') && capabilityId.startsWith(String(s).slice(0, -1))));
+}
+
+/** Sub-delegation attenuation checks (§10, proposal 0009): a child may only
+ * NARROW scope and SHORTEN the window, and its link must join to its parent.
+ * Mirrors Python `_attenuates`. */
+export function attenuates(
+  child: Record<string, JsonValue>,
+  parent: Record<string, JsonValue>,
+): Record<string, boolean> {
+  const childScope = (child.scope as string[]) ?? [];
+  const parentScope = (parent.scope as JsonValue[]) ?? [];
+  const parentDepth = Number(parent.depth ?? 0);
+  return {
+    attenuation_scope: childScope.length > 0
+      && childScope.every((s) => scopeAllows(parentScope, s)),
+    attenuation_window:
+      String(parent.valid_from ?? '') <= String(child.valid_from ?? '')
+      && String(child.valid_until ?? '') <= String(parent.valid_until ?? ''),
+    delegate_join: parent.delegate_id === (child.principal as Record<string, JsonValue>)?.host_id,
+    parent_id_match: child.parent_id === parent.mandate_id,
+    depth: typeof child.depth === 'number'
+      && child.depth === parentDepth + 1 && child.depth <= MAX_MANDATE_DEPTH,
+  };
+}
+
+/** Attenuate a PARENT mandate into a sub-mandate (proposal 0009) — byte-
+ * compatible with Python `build_sub_mandate`. The signer is the parent's
+ * delegate acting as sub-principal; refuses a non-attenuating child. */
+export function buildSubMandate(
+  parent: Record<string, JsonValue>,
+  key: HostKey,
+  opts: {
+    delegateId: string; scope: string[]; validFrom: string;
+    validUntil: string; createdAt: string; mandateId?: string;
+    anchors?: JsonValue[] | null;
+  },
+): Record<string, JsonValue> {
+  if (!key.privateKey) throw new Error('sub-principal key has no private component; cannot sign');
+  const principalId = String(parent.delegate_id ?? '');
+  const child: Record<string, JsonValue> = {
+    kind: 'mandate',
+    mandate_id: opts.mandateId ?? `mnd_${randomBytes(16).toString('hex')}`,
+    delegate_id: opts.delegateId,
+    scope: [...opts.scope].sort(),
+    valid_from: opts.validFrom,
+    valid_until: opts.validUntil,
+    created_at: opts.createdAt,
+    canonicalization: CANONICALIZATION,
+    depth: Number(parent.depth ?? 0) + 1,
+    parent_id: String(parent.mandate_id ?? ''),
+  };
+  child.principal = {
+    host_id: principalId,
+    public_key: key.publicKeyB64,
+    host_identity: buildAttestation(principalId, key, opts.createdAt, null, opts.anchors ?? null),
+  };
+  const att = attenuates(child, parent);
+  const bad = Object.entries(att).filter(([, v]) => !v).map(([k]) => k);
+  if (bad.length) throw new Error(`sub-mandate does not attenuate its parent: ${bad.join(', ')}`);
+  child.parent = parent;
+  child.signature = {
+    algorithm: SIGNATURE_ALGORITHM,
+    key_id: key.keyId,
+    signature: signCanon(key.privateKey, mandateHeader(child)),
+  };
+  return child;
+}
+
+/** The root principal host_id of a mandate chain (proposal 0009). */
+export function mandateRootPrincipal(mandate: Record<string, JsonValue>): string | null {
+  let node = mandate;
+  while (node.parent && typeof node.parent === 'object') {
+    node = node.parent as Record<string, JsonValue>;
+  }
+  return ((node.principal as Record<string, JsonValue>)?.host_id as string) ?? null;
 }
 
 /** A principal's signed grant of BOUNDED authority to a delegate (proposal

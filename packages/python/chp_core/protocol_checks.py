@@ -387,6 +387,17 @@ def check_alignment(repo_root: Path) -> JSON:
             and "GET /revocations" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Sub-delegation (§10, proposal 0009): the section, the monotone
+        # attenuation invariant, and the delegate-join binding.
+        add_check(
+            checks,
+            "spec_defines_subdelegation",
+            "**Sub-delegation**" in spec_v02
+            and "attenuation" in spec_v02
+            and "delegate join" in spec_v02
+            and "NARROW scope and SHORTEN the window" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.
@@ -528,6 +539,30 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "mandate_revocation_vector_verifies", False,
                       {"error": str(exc)})
+
+    # Sub-mandate chain vector: the attenuated chain verifies end-to-end AND a
+    # scope-widened tamper fails (proves attenuation binds; §10, proposal 0009).
+    chain_vec = repo_root / "spec" / "test-vectors" / "mandate-chain.json"
+    if chain_vec.exists():
+        try:
+            from .signing import mandate_root_principal
+            from .signing import verify_mandate as _vmc
+
+            sub = read_json(chain_vec)
+            cv = _vmc(sub, at_time=sub["valid_from"], capability_id="demo.echo",
+                      delegate_id=sub["delegate_id"])
+            widened = read_json(chain_vec)
+            widened["scope"] = ["chp.adapters.audit.*", "demo.echo"]  # broader than parent
+            add_check(
+                checks,
+                "sub_mandate_vector_verifies",
+                cv.valid and cv.checks.get("parent_valid") is True
+                and mandate_root_principal(sub) == "vector-principal"
+                and not _vmc(widened, at_time=sub["valid_from"]).valid,
+                {"checks": cv.checks, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "sub_mandate_vector_verifies", False, {"error": str(exc)})
 
     # Chain-witness vector: the countersignature statement verifies (§12).
     witness_vec = repo_root / "spec" / "test-vectors" / "chain-witness.json"

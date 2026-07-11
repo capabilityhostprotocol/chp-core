@@ -1,6 +1,6 @@
 # Capability Host Protocol — Governed Invocation Pipeline (v0.2)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.7 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Normative.** Additive over [v0.1](chp-v0.1.md); refines the
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.8 additions 2026-07-09/11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Normative.** Additive over [v0.1](chp-v0.1.md); refines the
 outcome model (§8) and denial semantics (§9) of v0.1 and the governance
 vocabulary of [chp-governance-v0.2.md](chp-governance-v0.2.md).
 
