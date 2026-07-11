@@ -84,19 +84,26 @@ def add_remote(
     api_key_env: str,
     role: str = "worker",
     optional: bool = True,
+    timeout_s: float | None = None,
+    retries: int = 0,
 ) -> None:
     data = load_mesh()
     remotes: list[dict] = data.setdefault("agent_remotes", [])
     for r in remotes:
         if r.get("url") == url:
             raise ValueError(f"Remote {url!r} already in mesh manifest.")
-    remotes.append({
+    entry: dict = {
         "url": url,
         "api_key_env": api_key_env,
         "role": role,
         "optional": optional,
         "added": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    })
+    }
+    if timeout_s:
+        entry["timeout_s"] = timeout_s
+    if retries:
+        entry["retries"] = retries
+    remotes.append(entry)
     save_mesh(data)
 
 

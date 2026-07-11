@@ -526,6 +526,49 @@ def cmd_export_evidence(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_store_backup(args: argparse.Namespace) -> int:
+    """Hot backup of an evidence store via sqlite's online backup API (a
+    filesystem cp of a live WAL database is NOT safe). --verify re-runs the
+    chain verification per correlation on the COPY and exits 1 on any break."""
+    import sys
+
+    from ..store import SQLiteEvidenceStore
+
+    src = SQLiteEvidenceStore(args.store)
+    try:
+        stats = src.backup_to(args.destination)
+    finally:
+        src.close()
+    out: dict = {"source": args.store, "destination": args.destination, **stats}
+
+    if args.verify:
+        copy = SQLiteEvidenceStore(args.destination)
+        try:
+            with copy._lock:
+                rows = copy._conn.execute(
+                    "SELECT DISTINCT correlation_id FROM evidence_events").fetchall()
+            correlations = [r[0] for r in rows]
+            broken = []
+            for cid in correlations:
+                result = copy.verify_chain(cid)
+                if not result.valid:
+                    broken.append({"correlation_id": cid,
+                                   "first_broken_sequence": result.first_broken_sequence})
+        finally:
+            copy.close()
+        out["verified_correlations"] = len(correlations)
+        out["broken"] = broken
+        out["valid"] = not broken
+        print(json.dumps(out, indent=2))
+        if broken:
+            print(f"{len(broken)} broken chain(s) in the backup copy", file=sys.stderr)
+            return 1
+        return 0
+
+    print(json.dumps(out, indent=2))
+    return 0
+
+
 def cmd_retention_apply(args: argparse.Namespace) -> int:
     """Apply retention policies to an evidence store (chain-preserving), then
     optionally compact. Config JSON: {"retain_days":30, "stores":[...],

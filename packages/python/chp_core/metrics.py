@@ -240,6 +240,68 @@ def format_integrity_prometheus() -> str:
     ]) + "\n"
 
 
+# Process-lifetime transport-error counter — unhandled server exceptions that
+# became structured 500s. Nonzero means bugs the evidence store never saw.
+_INTERNAL_ERRORS = {"count": 0}
+
+
+def record_internal_error() -> None:
+    _INTERNAL_ERRORS["count"] += 1
+
+
+def format_internal_error_prometheus() -> str:
+    return "\n".join([
+        "# HELP chp_http_internal_errors_total Unhandled exceptions surfaced as HTTP 500 (process lifetime).",
+        "# TYPE chp_http_internal_errors_total counter",
+        f"chp_http_internal_errors_total {_INTERNAL_ERRORS['count']}",
+    ]) + "\n"
+
+
+def format_ops_prometheus() -> str:
+    """Operator gauges for the sidecar state: witness-loop liveness (newest
+    issued countersignature) and the held revocation set. Cheap file reads."""
+    from . import revocations, witnessing
+
+    lines: list[str] = []
+    newest = witnessing.latest_issued_at()
+    if newest is not None:
+        try:
+            from datetime import datetime, timezone
+            ts = datetime.fromisoformat(newest.replace("Z", "+00:00"))
+            lines += [
+                "# HELP chp_witness_last_issued_timestamp_seconds Newest countersignature this host ISSUED over a peer (witness-loop liveness).",
+                "# TYPE chp_witness_last_issued_timestamp_seconds gauge",
+                f"chp_witness_last_issued_timestamp_seconds {int(ts.astimezone(timezone.utc).timestamp())}",
+            ]
+        except ValueError:
+            pass
+    mandates = len(revocations.load_mandate_revocations())
+    lines += [
+        "# HELP chp_revocations_held_total Revocation statements this host holds and enforces, by kind.",
+        "# TYPE chp_revocations_held_total gauge",
+        f'chp_revocations_held_total{{kind="mandate"}} {mandates}',
+    ]
+    try:
+        from .signing import DEFAULT_KEY_DIR, load_revocations
+        keys = len(load_revocations(DEFAULT_KEY_DIR))
+        lines.append(f'chp_revocations_held_total{{kind="key"}} {keys}')
+    except Exception:  # noqa: BLE001 — key dir may not exist
+        pass
+    return "\n".join(lines) + "\n"
+
+
+def format_store_prometheus(size_info: dict) -> str:
+    """Prometheus text for evidence-store size (pass store.size_info())."""
+    return "\n".join([
+        "# HELP chp_store_size_bytes Evidence store on-disk size (page_count x page_size).",
+        "# TYPE chp_store_size_bytes gauge",
+        f"chp_store_size_bytes {int(size_info.get('size_bytes', 0))}",
+        "# HELP chp_store_events_total Evidence events in the store.",
+        "# TYPE chp_store_events_total gauge",
+        f"chp_store_events_total {int(size_info.get('events', 0))}",
+    ]) + "\n"
+
+
 # Process-lifetime routing counters (chp-v0.2.md §11) — the mesh's reliability
 # story as scrapeable signal, not only evidence. Incremented by MultiHostRouter.
 _ROUTING_COUNTERS = {"failovers": 0, "unreachable_denials": 0}

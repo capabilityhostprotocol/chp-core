@@ -111,6 +111,9 @@ class MultiHostRouter:
         self._stats_cache: dict[str, tuple[float, JSON]] = {}
         # monotonic time of the last full catalog discovery (for TTL auto-refresh)
         self._last_discover: float = 0.0
+        # guards the inline unknown-capability refresh against a stampede
+        import threading as _threading
+        self._refresh_lock = _threading.Lock()
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
 
@@ -118,32 +121,57 @@ class MultiHostRouter:
         """Discover every host and (re)build the routing table.
 
         Hosts that fail to respond are marked unhealthy and skipped; the router
-        still comes up with whatever hosts answered.
+        still comes up with whatever hosts answered. Discovery runs in PARALLEL
+        with a per-probe timeout — one hung/DNS-stalled member must not stall
+        cold start (or, via ``_refresh_catalog``, unrelated invokes) for its
+        full transport timeout.
         """
-        self._routes.clear()
-        self._descriptors.clear()
-        for tr in self._transports:
-            try:
-                descriptor = await tr.discover()
-            except ConnectionError as exc:
+        results = await self._discover_all()
+        routes: dict[str, list[Transport]] = {}
+        descriptors: dict[str, JSON] = {}
+        for tr, outcome in results:
+            if isinstance(outcome, BaseException):
                 # Surface *which* node was dropped and why — a silent skip here
                 # is how a wrong api_key or an unreachable peer goes unnoticed.
-                print(f"  WARNING: skipped {tr.name}: {exc}", file=sys.stderr)
+                print(f"  WARNING: skipped {tr.name}: {outcome}", file=sys.stderr)
                 self._mark_unhealthy(tr)
                 continue
-            if not await self._check_member_identity(tr):
+            if outcome is None:  # identity-pin mismatch (already marked + warned)
                 continue
             self._mark_healthy(tr)
-            self._descriptors[tr.name] = descriptor
-            for cap in descriptor.get("capabilities", []):
+            descriptors[tr.name] = outcome
+            for cap in outcome.get("capabilities", []):
                 cid = cap.get("id")
                 if not cid:
                     continue
-                owners = self._routes.setdefault(cid, [])
+                owners = routes.setdefault(cid, [])
                 if tr not in owners:
                     owners.append(tr)
+        # Swap whole dicts (atomic ref assignment) — handler threads read a
+        # consistent snapshot; never mutate the live tables in place.
+        self._routes = routes
+        self._descriptors = descriptors
         self._last_discover = time.monotonic()
         return self
+
+    async def _discover_all(self) -> list[tuple[Transport, JSON | None | BaseException]]:
+        """Parallel discover + identity-pin check over every transport, each
+        bounded by ``CHP_ROUTER_DISCOVER_TIMEOUT`` (default 5s — deliberately
+        shorter than the transport's invoke timeout: discovery is cheap and
+        recurring). Order matches ``self._transports`` (priority order).
+        Outcome per transport: descriptor | None (pin mismatch) | exception."""
+        probe_timeout = float(os.environ.get("CHP_ROUTER_DISCOVER_TIMEOUT", "5"))
+
+        async def _one(tr: Transport) -> JSON | None:
+            descriptor = await asyncio.wait_for(tr.discover(), timeout=probe_timeout)
+            if not await asyncio.wait_for(
+                    self._check_member_identity(tr), timeout=probe_timeout):
+                return None
+            return descriptor
+
+        gathered: list[JSON | None | BaseException] = await asyncio.gather(
+            *(_one(tr) for tr in self._transports), return_exceptions=True)
+        return list(zip(self._transports, gathered))
 
     async def _check_member_identity(self, tr: Transport) -> bool:
         """Key-pin check ON THE DATA PATH (spec §3.2): at (re)connect, verify the
@@ -180,31 +208,27 @@ class MultiHostRouter:
             return False
         return True
 
-    async def _maybe_refresh_catalog(self) -> None:
-        """Re-discover hosts' catalogs when the cached routing table is older than
-        ``_CATALOG_TTL``, so a node restart/upgrade (new capabilities or changed
-        input schemas — e.g. mlx.chat gaining ``tools``) propagates automatically
-        instead of needing a manual gateway reload. Best-effort: a host that's
-        momentarily unreachable keeps its last-known catalog (we don't drop routes).
-        Preserves transport (priority) order by iterating ``self._transports``."""
-        if _CATALOG_TTL <= 0:
-            return
-        now = time.monotonic()
-        if now - self._last_discover < _CATALOG_TTL:
-            return
-        self._last_discover = now  # set first so concurrent invokes don't all refresh
+    async def _refresh_catalog(self) -> None:
+        """Re-discover every host's catalog (parallel, per-probe timeout) so a
+        node restart/upgrade (new capabilities or changed input schemas — e.g.
+        mlx.chat gaining ``tools``) propagates automatically. Best-effort: a
+        host that's momentarily unreachable keeps its last-known catalog (we
+        don't drop routes); a total-failure refresh never blanks the table.
+        Preserves transport (priority) order."""
+        self._last_discover = time.monotonic()  # set first — no refresh stampede
+        results = await self._discover_all()
         routes: dict[str, list[Transport]] = {}
         descriptors: dict[str, JSON] = {}
-        for tr in self._transports:
-            try:
-                descriptor = await tr.discover()
-                if not await self._check_member_identity(tr):
-                    continue
-                self._mark_healthy(tr)
-            except Exception:  # noqa: BLE001 — keep last-known catalog on any failure
-                descriptor = self._descriptors.get(tr.name)
+        for tr, outcome in results:
+            if isinstance(outcome, BaseException):
+                descriptor = self._descriptors.get(tr.name)  # keep last-known
                 if not descriptor:
                     continue
+            elif outcome is None:  # identity-pin mismatch
+                continue
+            else:
+                descriptor = outcome
+                self._mark_healthy(tr)
             descriptors[tr.name] = descriptor
             for cap in descriptor.get("capabilities", []):
                 cid = cap.get("id")
@@ -213,6 +237,50 @@ class MultiHostRouter:
         if routes:  # never blank the table on a total-failure refresh
             self._routes = routes
             self._descriptors = descriptors
+
+    async def _maybe_refresh_catalog(self) -> None:
+        """TTL-gated inline refresh — OFF the common invoke path since the
+        hardening arc (a background refresher keeps the catalog fresh; see
+        ``start_catalog_refresher``). Still called inline for an UNKNOWN
+        capability so a just-registered capability routes without waiting a
+        full refresher tick. The non-blocking lock prevents a stampede of
+        concurrent unknown-capability requests all refreshing at once."""
+        if _CATALOG_TTL <= 0:
+            return
+        if time.monotonic() - self._last_discover < _CATALOG_TTL:
+            return
+        if not self._refresh_lock.acquire(blocking=False):
+            return  # another thread is already refreshing — proceed stale
+        try:
+            await self._refresh_catalog()
+        finally:
+            self._refresh_lock.release()
+
+    def start_catalog_refresher(self, interval_s: float | None = None):
+        """Background catalog refresher (the prober pattern): moves the
+        recurring discover fan-out OFF the invoke hot path — before this, the
+        first invoke after every catalog-TTL expiry paid a serial
+        discover-every-member round-trip (observed as ~30s gateway stalls
+        behind one hung member). Fresh event loop per tick, jittered sleep.
+        Returns a zero-arg stop callable."""
+        import random
+        import threading
+
+        interval = float(interval_s if interval_s is not None else _CATALOG_TTL)
+        if interval <= 0:
+            return lambda: None
+        stop = threading.Event()
+
+        def _refresh_loop() -> None:
+            while not stop.wait(interval + random.uniform(0, interval * 0.1)):
+                try:
+                    asyncio.run(self._refresh_catalog())
+                except Exception:  # noqa: BLE001 — a bad tick must not kill the loop
+                    pass
+
+        threading.Thread(target=_refresh_loop, daemon=True,
+                         name=f"chp-catalog-refresh-{self._host_id}").start()
+        return stop.set
 
     # ── invocation ─────────────────────────────────────────────────────────────
 
@@ -239,12 +307,15 @@ class MultiHostRouter:
         A matching owner is tried first; if it is down, routing still falls back
         to the other owners (soft pin — availability beats affinity).
         """
-        # Keep the catalog fresh so a restarted/upgraded node's new capabilities and
-        # schemas route without a manual gateway reload (TTL-gated; best-effort).
-        await self._maybe_refresh_catalog()
-
         corr = _normalize_correlation(correlation)
         owners = self._routes.get(capability_id)
+        if not owners:
+            # Unknown capability: one inline TTL-gated refresh (stale-while-
+            # revalidate) so a just-registered capability routes without
+            # waiting for the background refresher tick. Known capabilities
+            # never pay the discover fan-out on the invoke path.
+            await self._maybe_refresh_catalog()
+            owners = self._routes.get(capability_id)
         if not owners:
             # Unknown mesh-wide is a PROCESSED decision (spec §11), not a raise:
             # HTTP 200, outcome denied, evidence on the gateway's chain.

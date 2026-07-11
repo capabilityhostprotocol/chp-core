@@ -69,6 +69,21 @@ def load_issued(host_id: str) -> list[JSON]:
     return _load_json(witness_dir() / "issued" / f"{host_id}.json", [])
 
 
+def latest_issued_at() -> str | None:
+    """The newest witnessed_at across every issued record — the operator's
+    'is the witness loop alive?' signal (/metrics)."""
+    issued_dir = witness_dir() / "issued"
+    if not issued_dir.exists():
+        return None
+    newest: str | None = None
+    for path in issued_dir.glob("*.json"):
+        for stmt in _load_json(path, []):
+            at = stmt.get("witnessed_at")
+            if isinstance(at, str) and (newest is None or at > newest):
+                newest = at
+    return newest
+
+
 def compute_root(leaves: dict) -> str:
     """chp-store-head-v1 over a leaves mapping (correlation_id -> head hash)."""
     digest = hashlib.sha256()

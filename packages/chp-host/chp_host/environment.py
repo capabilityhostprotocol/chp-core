@@ -76,6 +76,11 @@ class GatewayConfig:
     # Mesh witnessing interval in seconds (spec §12). 0/absent = off. Each
     # tick this node countersigns every peer's store head.
     witness_interval_s: float = 0.0
+    # Scheduled retention (hardening arc). 0/absent = off. Each tick applies
+    # the policies in retention_config (the `chp retention apply` JSON format)
+    # to the gateway store, then rebuilds the correlation-heads cache.
+    retention_interval_s: float = 0.0
+    retention_config: str | None = None
 
 
 @dataclass
@@ -87,6 +92,8 @@ class EnvironmentRemoteEntry:
     api_key_env: str | None = None  # name of env var holding the auth key (never stored as value)
     api_key: str | None = None      # resolved value — populated by resolve_remotes(), never in JSON
     role: str | None = None         # node role (worker/inference/nas/...) — enables affinity routing
+    timeout_s: float | None = None  # per-member transport timeout (default 30)
+    retries: int = 0                # opt-in client retry (at-most-once NOT guaranteed on drops)
 
 
 @dataclass
@@ -126,6 +133,8 @@ class EnvironmentConfig:
                     optional=bool(r.get("optional", False)),
                     api_key_env=r.get("api_key_env") or None,
                     role=r.get("role") or None,
+                    timeout_s=float(r["timeout_s"]) if r.get("timeout_s") else None,
+                    retries=int(r.get("retries", 0) or 0),
                 ))
         gateway_raw = data.get("gateway")
         gateway = (
@@ -138,6 +147,9 @@ class EnvironmentConfig:
                        if gateway_raw.get("store") else None),
                 probe_interval_s=float(gateway_raw.get("probe_interval_s", 0) or 0),
                 witness_interval_s=float(gateway_raw.get("witness_interval_s", 0) or 0),
+                retention_interval_s=float(gateway_raw.get("retention_interval_s", 0) or 0),
+                retention_config=(str(Path(str(gateway_raw["retention_config"])).expanduser())
+                                  if gateway_raw.get("retention_config") else None),
             )
             if isinstance(gateway_raw, dict)
             else None
@@ -185,6 +197,8 @@ class EnvironmentConfig:
                 api_key_env=entry.api_key_env,
                 api_key=api_key,
                 role=entry.role,
+                timeout_s=entry.timeout_s,
+                retries=entry.retries,
             ))
         return resolved
 

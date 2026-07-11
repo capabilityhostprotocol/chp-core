@@ -8,6 +8,8 @@ import inspect
 import json
 import logging
 import os
+import threading
+import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
@@ -100,6 +102,60 @@ class CapabilityHostHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address: tuple[str, int], host: Any) -> None:
         super().__init__(server_address, CapabilityHostRequestHandler)
         self.chp_host = host
+        # Drain accounting: ThreadingHTTPServer's daemon_threads=True means
+        # server_close() does NOT join in-flight handlers — the SIGTERM drain
+        # polls this counter instead.
+        self._inflight = 0
+        self._inflight_lock = threading.Lock()
+
+    def track_request(self, delta: int) -> None:
+        with self._inflight_lock:
+            self._inflight += delta
+
+    @property
+    def inflight(self) -> int:
+        with self._inflight_lock:
+            return self._inflight
+
+
+# Servers created in this process — the SIGTERM drain acts on all of them.
+_LIVE_SERVERS: list[CapabilityHostHTTPServer] = []
+
+
+def install_sigterm_drain() -> bool:
+    """Install a SIGTERM handler that drains before exit: stop accepting,
+    wait for in-flight requests (bounded by ``CHP_DRAIN_TIMEOUT_S``, default
+    10 — long streams are CAPPED by this window, not waited out), then exit 0.
+
+    MUST be called from the MAIN thread (a ``signal.signal`` restriction);
+    server threads themselves may be workers — the chp-host CLI calls this
+    once before spawning them. Returns False when not on the main thread
+    (caller decides whether that is an error). SIGINT/KeyboardInterrupt
+    behavior is unchanged."""
+    import signal
+
+    if threading.current_thread() is not threading.main_thread():
+        return False
+
+    def _drain(_signum: int, _frame: Any) -> None:
+        deadline = time.monotonic() + float(os.environ.get("CHP_DRAIN_TIMEOUT_S", "10"))
+        for server in list(_LIVE_SERVERS):
+            threading.Thread(target=server.shutdown, daemon=True).start()
+        while time.monotonic() < deadline:
+            if all(s.inflight == 0 for s in _LIVE_SERVERS):
+                break
+            time.sleep(0.05)
+        for server in list(_LIVE_SERVERS):
+            try:
+                server.server_close()
+            except Exception:  # noqa: BLE001
+                pass
+        logger.info("SIGTERM drain complete (in-flight: %s)",
+                    sum(s.inflight for s in _LIVE_SERVERS))
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _drain)
+    return True
 
 
 class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
@@ -114,6 +170,15 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
 
     # Cap request bodies read into memory (DoS guard). Override via env.
     _MAX_BODY_BYTES = int(os.environ.get("CHP_HOST_MAX_BODY_BYTES", str(8 * 1024 * 1024)))
+
+    def handle(self) -> None:
+        # In-flight accounting for the SIGTERM drain (covers the whole
+        # keep-alive conversation, including streams).
+        self.server.track_request(1)
+        try:
+            super().handle()
+        finally:
+            self.server.track_request(-1)
 
     def _check_auth(self) -> bool:
         """Return True if the request is authorized (or auth is not configured).
@@ -168,6 +233,33 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         return host.discover()
 
     def do_GET(self) -> None:
+        try:
+            self._do_get()
+        except Exception:  # noqa: BLE001 — operator signal beats a silent drop
+            self._internal_error()
+
+    def do_POST(self) -> None:
+        try:
+            self._do_post()
+        except Exception:  # noqa: BLE001
+            self._internal_error()
+
+    def _internal_error(self) -> None:
+        """An unhandled exception was about to become a silently dropped
+        connection (ThreadingHTTPServer swallows handler-thread exceptions and
+        stdlib logging is quiet by default). Surface it: stderr log, counter,
+        and a structured 500 when the response has not committed yet."""
+        logger.exception("unhandled error serving %s %s",
+                         getattr(self, "command", "?"), getattr(self, "path", "?"))
+        from .metrics import record_internal_error
+        record_internal_error()
+        try:
+            self._write_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error",
+                              "internal error")
+        except Exception:  # noqa: BLE001 — headers already sent (e.g. mid-SSE)
+            pass
+
+    def _do_get(self) -> None:
         path = urlparse(self.path).path
         # /health is always public — required for mesh probes and load balancers
         if path == "/" or path == "/health":
@@ -349,14 +441,21 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         events = store.query(since=since)
         report = aggregate_session_metrics("live", events)
         token_report = aggregate_token_metrics(events)
-        from .metrics import format_integrity_prometheus
+        from .metrics import format_integrity_prometheus, format_internal_error_prometheus
         body = (
             format_prometheus(report).encode("utf-8")
             + b"\n"
             + format_token_prometheus(token_report).encode("utf-8")
             + b"\n"
             + format_integrity_prometheus().encode("utf-8")
+            + b"\n"
+            + format_internal_error_prometheus().encode("utf-8")
         )
+        if hasattr(store, "size_info"):
+            from .metrics import format_store_prometheus
+            body += b"\n" + format_store_prometheus(store.size_info()).encode("utf-8")
+        from .metrics import format_ops_prometheus
+        body += b"\n" + format_ops_prometheus().encode("utf-8")
         # Routing reliability (spec §11) — only a router has an _unhealthy map.
         unhealthy = getattr(host, "_unhealthy", None)
         if unhealthy is not None:
@@ -368,7 +467,7 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_POST(self) -> None:
+    def _do_post(self) -> None:
         if not self._check_auth():
             return
         path = urlparse(self.path).path
@@ -408,8 +507,13 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             self._write_error(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc))
 
-    def log_message(self, _format: str, *_args: Any) -> None:
-        return
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 — stdlib signature
+        # Quiet by default (evidence is the record); CHP_HTTP_LOG=1 turns on
+        # an operator access log via the module logger (stderr under
+        # launchd/systemd — the debugging channel for what never became
+        # evidence).
+        if os.environ.get("CHP_HTTP_LOG"):
+            logger.info("%s - %s", self.address_string(), format % args)
 
     def _receive_witness(self, body: JSON) -> None:
         """POST /witness (spec §12): accept a peer's countersignature over THIS
@@ -763,7 +867,18 @@ def create_http_server(
         from .spill import register_spill_capability
         register_spill_capability(host)
 
-    return CapabilityHostHTTPServer((bind, port), host)
+    # Production posture (opt-in): refuse to serve open when the operator has
+    # declared auth mandatory — a misconfigured unit fails at start, loudly,
+    # instead of running an open host.
+    if os.environ.get("CHP_HOST_REQUIRE_AUTH") == "1" and not (
+            os.environ.get("CHP_HOST_API_KEYS") or os.environ.get("CHP_HOST_API_KEY")):
+        raise RuntimeError(
+            "CHP_HOST_REQUIRE_AUTH=1 but no API keys configured "
+            "(set CHP_HOST_API_KEYS or CHP_HOST_API_KEY)")
+
+    server = CapabilityHostHTTPServer((bind, port), host)
+    _LIVE_SERVERS.append(server)
+    return server
 
 
 def serve_http(
@@ -780,6 +895,7 @@ def serve_http(
     """
 
     server = create_http_server(host, bind=bind, port=port)
+    install_sigterm_drain()  # no-op off the main thread (chp-host installs there)
     try:
         server.serve_forever()
     finally:
