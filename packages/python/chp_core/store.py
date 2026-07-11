@@ -25,8 +25,24 @@ class ChainVerificationResult:
     first_broken_sequence: int | None
 
 
+EVENT_HASH_V2 = "chp-event-hash-v2"
+
+
+def _payload_commitment(payload: JSON) -> str:
+    """`sha256(chp-stable-v1(payload))` — the commitment a chp-event-hash-v2
+    event binds in place of the inline payload (chp-v0.2.md §14). The empty
+    payload commits as the explicit object ``{}`` (pins the cross-impl
+    missing-payload divergence)."""
+    return hashlib.sha256(
+        json.dumps(payload if payload is not None else {}, sort_keys=True).encode()
+    ).hexdigest()
+
+
 def _compute_event_hash(event_dict: JSON, prev_hash: str | None) -> str:
-    """SHA256 of stable event fields + prev_hash link."""
+    """SHA256 of stable event fields + prev_hash link, under the event's
+    declared ``hash_scheme`` (chp-v0.2.md §2/§14). Absent scheme = v1 (inline
+    payload, byte-identical); ``chp-event-hash-v2`` commits to a
+    ``payload_commitment`` instead so the payload can be withheld."""
     correlation = event_dict.get("correlation") or {}
     stable: JSON = {
         "event_id": event_dict.get("event_id"),
@@ -37,9 +53,17 @@ def _compute_event_hash(event_dict: JSON, prev_hash: str | None) -> str:
         "correlation_id": correlation.get("correlation_id") if isinstance(correlation, dict) else None,
         "timestamp": event_dict.get("timestamp"),
         "outcome": event_dict.get("outcome"),
-        "payload": event_dict.get("payload"),
-        "prev_hash": prev_hash,
     }
+    if event_dict.get("hash_scheme") == EVENT_HASH_V2:
+        # v2: commit to the payload by hash. Prefer the stored commitment (a
+        # withheld event has no usable payload) and fall back to computing it.
+        commitment = event_dict.get("payload_commitment")
+        stable["payload_commitment"] = (
+            commitment if commitment else _payload_commitment(event_dict.get("payload"))
+        )
+    else:
+        stable["payload"] = event_dict.get("payload")
+    stable["prev_hash"] = prev_hash
     return hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()
 
 

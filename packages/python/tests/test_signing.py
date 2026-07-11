@@ -88,11 +88,14 @@ def test_tampered_event_payload_fails(tmp_path):
     bundle = signing.sign_bundle(
         signing.build_bundle("h", events, created_at="2026-07-03T00:00:00Z"), key
     )
-    # Mutate a payload but leave its content_hash — hash recompute must catch it.
+    # Mutate a payload but leave its content_hash. Emitted events are
+    # chp-event-hash-v2 (§14), so the content_hash binds the payload_commitment,
+    # not the raw payload: the chain still recomputes (event_hashes True) but the
+    # disclosed-payload bind catches the swap (payload_commitments False).
     bundle["events"][0]["payload"] = {"n": 999}
     v = signing.verify_bundle(bundle)
     assert not v.valid
-    assert v.checks["event_hashes"] is False
+    assert v.checks["payload_commitments"] is False
 
 
 def test_tampered_root_hash_fails(tmp_path):
