@@ -24,6 +24,31 @@ describe('published test vectors', () => {
     expect(v.checks.host_identity).toBe(true);
   });
 
+  // chp-jcs-v1 (§2, proposal 0015): the canonicalization dispatch seam — a
+  // Python-signed JCS bundle must verify through the TS SDK's header dispatch.
+  it('verifies the Python-signed chp-jcs-v1 bundle (dispatch seam)', () => {
+    const bundle = load('signed-bundle-jcs.json') as Record<string, JsonValue>;
+    expect(bundle.canonicalization).toBe('chp-jcs-v1');
+    const v = verifyBundle(bundle);
+    expect(v.valid).toBe(true);
+    expect(v.checks.signature).toBe(true);
+    expect(v.checks.host_identity).toBe(true);
+  });
+
+  it('rejects a chp-jcs-v1 bundle relabelled chp-stable-v1 (header bytes differ)', () => {
+    const bundle = load('signed-bundle-jcs.json') as Record<string, JsonValue>;
+    bundle.canonicalization = 'chp-stable-v1';
+    expect(verifyBundle(bundle).checks.signature).toBe(false);
+  });
+
+  it('fails an unknown canonicalization scheme without throwing', () => {
+    const bundle = load('signed-bundle-jcs.json') as Record<string, JsonValue>;
+    bundle.canonicalization = 'chp-bogus-v1';
+    const v = verifyBundle(bundle);
+    expect(v.valid).toBe(false);
+    expect(v.checks.signature).toBe(false);
+  });
+
   it('verifies the Python-signed GOVERNED bundle (string-encoded score)', () => {
     const bundle = load('governance-bundle.json') as Record<string, JsonValue>;
     expect(verifyBundle(bundle).valid).toBe(true);

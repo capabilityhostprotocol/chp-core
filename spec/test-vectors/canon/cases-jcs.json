@@ -1,0 +1,102 @@
+{
+  "canonicalization": "chp-jcs-v1",
+  "cases": [
+    {
+      "expected_canon": "\"hello\"",
+      "input": "hello",
+      "name": "ascii_string"
+    },
+    {
+      "expected_canon": "\"caf\u00e9\"",
+      "input": "caf\u00e9",
+      "name": "non_ascii_raw"
+    },
+    {
+      "expected_canon": "\"\ud83d\udd12\"",
+      "input": "\ud83d\udd12",
+      "name": "emoji_raw"
+    },
+    {
+      "expected_canon": "\"\\b\\t\\n\\f\\r\"",
+      "input": "\b\t\n\f\r",
+      "name": "control_chars"
+    },
+    {
+      "expected_canon": "\"\\u0001\"",
+      "input": "\u0001",
+      "name": "c0_control_u0001"
+    },
+    {
+      "expected_canon": "\"a\\\"b\\\\c\"",
+      "input": "a\"b\\c",
+      "name": "quote_and_backslash"
+    },
+    {
+      "expected_canon": "{\"a\":2,\"b\":3,\"c\":1}",
+      "input": {
+        "a": 2,
+        "b": 3,
+        "c": 1
+      },
+      "name": "key_sort_flat"
+    },
+    {
+      "expected_canon": "{\"a\":[3,2,1],\"z\":{\"a\":2,\"b\":1}}",
+      "input": {
+        "a": [
+          3,
+          2,
+          1
+        ],
+        "z": {
+          "a": 2,
+          "b": 1
+        }
+      },
+      "name": "key_sort_nested"
+    },
+    {
+      "expected_canon": "{\"f\":false,\"i\":42,\"n\":null,\"neg\":-7,\"t\":true}",
+      "input": {
+        "f": false,
+        "i": 42,
+        "n": null,
+        "neg": -7,
+        "t": true
+      },
+      "name": "compact_separators"
+    },
+    {
+      "expected_canon": "{\"a\":2,\"z\":3,\"\u00e9\":1}",
+      "input": {
+        "a": 2,
+        "z": 3,
+        "\u00e9": 1
+      },
+      "name": "unicode_key_sort"
+    },
+    {
+      "expected_canon": "{\"a\":3,\"\ud83d\udd12\":1,\"\ufb00\":2}",
+      "input": {
+        "a": 3,
+        "\ufb00": 2,
+        "\ud83d\udd12": 1
+      },
+      "name": "astral_key_code_unit_sort"
+    },
+    {
+      "expected_canon": "{\"event\":{\"ok\":true,\"payload\":{\"n\":1,\"note\":\"caf\u00e9 \ud83d\udd12\"}}}",
+      "input": {
+        "event": {
+          "ok": true,
+          "payload": {
+            "n": 1,
+            "note": "caf\u00e9 \ud83d\udd12"
+          }
+        }
+      },
+      "name": "nested_mixed"
+    }
+  ],
+  "note": "canon_jcs(value) = RFC 8785 JCS over CHP's float-free content: compact separators (,/:), raw UTF-8 strings (no \\uXXXX escaping), keys sorted by UTF-16 code unit. A conforming implementation MUST reproduce every expected_canon byte-for-byte. Non-integer numbers are forbidden (\u00a72 rule 6), so RFC 8785's ES number algorithm is unexercised."
+}

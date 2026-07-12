@@ -1475,6 +1475,39 @@ async def check_export_bundle(host: Any) -> None:
     assert v.assurance in ("hash-chain", "signed"), v.assurance
 
 
+async def check_jcs_canonicalization(host: Any) -> None:
+    """v0.4.0 §2 (proposal 0015): the `canonicalization` field is a real dispatch
+    seam. Take the events the host exports over the wire and sign them under BOTH
+    chp-stable-v1 and chp-jcs-v1 with one key: both bundles MUST verify, their
+    header-signature bytes MUST differ (JCS is compact + raw UTF-8), and the
+    same events yield the same root_hash (the hash_scheme axis is orthogonal).
+    An unknown scheme must fail verification, not crash."""
+    from chp_core import signing
+    if not signing.signing_available():
+        return  # signing is an optional tier
+    corr = f"{RUN}-conf-jcs-001"
+    await invoke_host(host, "conformance.echo", {"value": "café 🔒"},
+                      correlation={"correlation_id": corr})
+    exported = host.export_bundle(corr)
+    events, host_id = exported["events"], exported["host_id"]
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as d:
+        key = signing.generate_keypair(os.path.join(d, "k"))
+        common = dict(created_at="2026-01-01T00:00:00Z")
+        stable = signing.sign_bundle(signing.build_bundle(host_id, events,
+            canonicalization="chp-stable-v1", **common), key)
+        jcs = signing.sign_bundle(signing.build_bundle(host_id, events,
+            canonicalization="chp-jcs-v1", **common), key)
+    assert signing.verify_bundle(stable).valid, "chp-stable-v1 export must verify"
+    assert signing.verify_bundle(jcs).valid, "chp-jcs-v1 bundle must verify (dispatch seam)"
+    assert jcs["canonicalization"] == "chp-jcs-v1"
+    assert stable["root_hash"] == jcs["root_hash"], "same events → same root (orthogonal axis)"
+    assert stable["signature"]["signature"] != jcs["signature"]["signature"], \
+        "header signatures must differ across canonicalization schemes"
+    bogus = {**jcs, "canonicalization": "chp-bogus-v1"}
+    assert not signing.verify_bundle(bogus).valid, "unknown scheme must fail, not crash"
+
+
 async def check_identity_document(host: Any) -> None:
     """v0.2 (spec §3.1): the host serves its public identity document at
     /.well-known/chp-identity — unauthenticated, so a never-met verifier can
@@ -2358,6 +2391,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("selective disclosure (v0.2 §14, proposal 0011)", check_selective_disclosure),
     ("streaming completion (v0.2 §13.1, proposal 0012)", check_streaming_completion),
     ("witness quorum + anchoring (v0.2 §12, proposal 0013)", check_witness_quorum),
+    ("canonicalization dispatch / chp-jcs-v1 (v0.4.0 §2, proposal 0015)", check_jcs_canonicalization),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

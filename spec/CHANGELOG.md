@@ -5,6 +5,43 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.4.0] — second canonicalization over 0.3.3 — **draft**
+
+### Added
+- **chp-jcs-v1 — the second canonicalization** (chp-v0.2.md §2,
+  [proposals/0015](proposals/0015-chp-jcs.md)): the `canonicalization` field
+  becomes a real **dispatch seam**. A verifier selects the header-signature
+  serializer by the bundle's `canonicalization` value (absent/legacy →
+  `chp-stable-v1`). **`chp-jcs-v1`** is RFC 8785 JCS — compact separators
+  (`,`/`:`), raw-UTF-8 strings (no `\uXXXX`), keys sorted by UTF-16 code unit.
+  §2 rule 6 (no floats in hashed content) is retained across all schemes, so RFC
+  8785's number-formatting algorithm is never exercised (deferred). Governs the
+  bundle-header signature only (the per-event content-hash is the orthogonal
+  `hash_scheme` axis). `evidence-bundle` schema `canonicalization` enum widens to
+  `["chp-stable-v1", "chp-jcs-v1"]`.
+
+### Compatibility
+- **Additive, chp-stable-v1 byte-identical.** chp-stable-v1 is the default; a
+  bundle that omits `canonicalization` or names it is unchanged, and every
+  published vector + signed bundle is byte-identical. Statement schemas stay
+  `const chp-stable-v1` (statement-level JCS deferred). No new denial code or
+  evidence type; the `hash_scheme` axis is untouched. **Minor** bump (v0.4.0) —
+  a second canonicalization is the 1.0-readiness milestone, though no existing
+  bytes move.
+
+### Regression gate
+- New vectors `canon/cases-jcs.json` (JCS byte-exact over the §2 golden inputs)
+  + `signed-bundle-jcs.json` (a chp-jcs-v1-signed bundle); `git diff
+  spec/test-vectors/` shows only those. Guards `spec_defines_chp_jcs` +
+  `jcs_canon_cases_verify` + `jcs_bundle_verifies`. Three implementations
+  (Python `_canon_jcs`, TS `canonJcs`, stdlib `verify.mjs`) agree byte-for-byte;
+  both reference hosts verify a chp-jcs-v1 bundle.
+
+### Deferred
+- RFC 8785 ES double-to-shortest number canonicalization (unexercised — rule 6
+  retained); JCS event-content-hashes / a JCS-native store; statement-level JCS
+  dispatch (mandate/witness/anchor/provenance/task headers).
+
 ## [0.3.3] — additive over 0.3.2 — **released 2026-07-11**
 
 ### Added

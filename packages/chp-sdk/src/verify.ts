@@ -6,7 +6,7 @@
  */
 
 import { verify as edVerify } from 'node:crypto';
-import { canon, type JsonValue } from './canon.js';
+import { canon, canonFor, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
 import { attenuates, bundleHeader, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader } from './signing.js';
@@ -58,7 +58,22 @@ export function verifyBundle(
     if (opts.expectedKeyId !== undefined && sig.key_id !== opts.expectedKeyId) {
       return { valid: false, assurance, checks, reason: `signed by unexpected key ${sig.key_id}` };
     }
-    checks.signature = verifyCanon(pub, bundleHeader(bundle), sig.signature);
+    // Header-signature serializer dispatches on `canonicalization` (§2 seam,
+    // proposal 0015): chp-stable-v1 (absent/legacy) or chp-jcs-v1. An unknown
+    // scheme is a failed signature, never a throw. The attestation below stays
+    // chp-stable-v1 (signed at keygen time, independent of any bundle).
+    try {
+      const headerCanon = canonFor(bundle.canonicalization as string | null | undefined);
+      checks.signature = edVerify(
+        null,
+        Buffer.from(headerCanon(bundleHeader(bundle)), 'utf8'),
+        publicKeyFromB64(pub),
+        Buffer.from(sig.signature, 'base64'),
+      );
+    } catch {
+      return { valid: false, assurance, checks: { ...checks, signature: false },
+        reason: `unknown canonicalization scheme ${String(bundle.canonicalization)}` };
+    }
 
     const att = bundle.host_identity as Record<string, JsonValue> | undefined;
     if (att) {
