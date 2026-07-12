@@ -182,6 +182,12 @@ class SQLiteEvidenceStore:
                 "CREATE INDEX IF NOT EXISTS idx_evidence_outcome "
                 "ON evidence_events(outcome, sequence)"
             )
+            # audit.stats filters on the time window; without this a windowed
+            # stats call full-scans (the ~30s cold-scan). Indexed here.
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_evidence_timestamp "
+                "ON evidence_events(timestamp, sequence)"
+            )
             self._conn.execute(
                 """
                 INSERT OR IGNORE INTO evidence_sequence(sequence)
@@ -492,6 +498,38 @@ class SQLiteEvidenceStore:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_event(row) for row in rows]
+
+    def stats_projection(
+        self, *, since: str | None = None, until: str | None = None
+    ) -> list[dict]:
+        """Scalar-column projection for aggregation (audit.stats): SELECTs only the
+        four columns stats needs, never the (potentially large) event_json /
+        payload_json. `query()` parses the full event body for every row — over a
+        big store that materialize-and-parse was the ~30s cold-scan; this reads
+        indexed scalars only and returns lightweight dicts with the SAME keys the
+        aggregation reads, so semantics are unchanged."""
+        clauses: list[str] = []
+        params: list[str] = []
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("timestamp <= ?")
+            params.append(until)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        # No ORDER BY: stats aggregates into dicts (setdefault keeps the first
+        # execution_started per invocation, but capability_id is constant per
+        # invocation, so order can't change the result) — and dropping it avoids
+        # a temp B-tree sort on top of the timestamp index.
+        sql = (f"SELECT event_type, invocation_id, capability_id, outcome "
+               f"FROM evidence_events {where}").strip()
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [
+            {"event_type": r["event_type"], "invocation_id": r["invocation_id"],
+             "capability_id": r["capability_id"], "outcome": r["outcome"]}
+            for r in rows
+        ]
 
     def by_correlation_with_hashes(self, correlation_id: str) -> list[JSON]:
         """Like by_correlation but includes content_hash and prev_hash in each dict."""
