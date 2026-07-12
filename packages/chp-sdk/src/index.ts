@@ -53,8 +53,11 @@ export {
 } from './signing.js';
 export {
   merkleRoot, inclusionProof, verifyInclusion,
+  consistencyProof, verifyConsistency,
   storeHeadRoot, storeHeadInclusionProof, verifyStoreHeadInclusion, storeHeadSchemeMatching,
-  CHP_STORE_HEAD_V1, CHP_STORE_HEAD_V2, type StoreHeadInclusion,
+  storeHeadConsistencyProof, verifyStoreHeadConsistency,
+  CHP_STORE_HEAD_V1, CHP_STORE_HEAD_V2,
+  type StoreHeadInclusion, type StoreHeadConsistency,
 } from './merkle.js';
 export {
   bundleToStatement, dsseSign, bundleToAttestation, dsseStatement, attestationToBundle,

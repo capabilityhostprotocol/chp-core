@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -865,9 +865,26 @@ path, so a party holding only `{the signed/anchored root, one correlation's
 witness**. The **store-head-anchor** is the carrier (it already signs the opaque
 root; it gains an omit-when-absent `store_head_scheme` so a stranger can
 recompute), making non-omission (`chp-completeness-v1`) third-party-verifiable for
-an anchored correlation. Merkle *consistency* proofs (append-only between two
-roots), real Rekor/Sigstore submission + gossip, and log monitors are out of scope
-(named in proposal 0019).
+an anchored correlation.
+
+**Consistency proofs — append-only across two heads** ([proposal 0022](proposals/0022-merkle-consistency.md)).
+Inclusion proves a leaf is *in* one tree; it says nothing across time — a
+malicious operator could serve two valid signed heads where the later one has
+silently **dropped, altered, or reordered** an old correlation, and each head
+checked alone still verifies. An [RFC 6962 §2.1.2](https://www.rfc-editor.org/rfc/rfc6962#section-2.1.2)
+**consistency proof** closes this: a minimal set of subtree hashes from which a
+verifier recomputes **both** the earlier root (size `m`) and the later root
+(size `n ≥ m`), proving the later `chp-store-head-v2` tree contains the earlier
+as a prefix — every old leaf still present, unchanged, in place. The proof object
+(`store-head-consistency` — `{scheme, first_size, second_size, first_root,
+second_root, proof}`) carries both roots so a stranger checks them against two
+anchored heads; verification replays the SAME recursive split the prover used
+(not the `fn/sn` bit walk), the inclusion-proof discipline. So
+`{two store-head-anchors at sequences s₁ < s₂, a consistency proof}` gives a third
+party offline, witness-free proof that the operator's log **only grew** between
+the anchored heads — no new signed field, computed from roots the anchors already
+commit. Real Rekor/Sigstore submission + gossip, and log monitors, remain out of
+scope (named in proposals 0019 and 0022).
 
 **Cadence and posture.** Any authed peer MAY witness any peer; the reference
 gateway carries an opt-in witnessing loop (`gateway.witness_interval_s`,

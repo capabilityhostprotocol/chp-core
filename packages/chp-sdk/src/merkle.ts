@@ -61,6 +61,56 @@ export function verifyInclusion(
   return path.length === 0 && computed.equals(root);
 }
 
+// ── Consistency proofs (RFC 6962 §2.1.2, proposal 0022) ─────────────────────
+// Prove a later tree (size n) is an append-only extension of an earlier one
+// (size m ≤ n). Replay the prover's split so verify is the inverse of the build.
+
+export function consistencyProof(leaves: Buffer[], m: number): Buffer[] {
+  const n = leaves.length;
+  if (m < 0 || m > n) throw new RangeError(`consistency: need 0 <= m(${m}) <= n(${n})`);
+  if (m === 0 || m === n) return [];
+  return _subproof(m, leaves, true);
+}
+
+function _subproof(m: number, leaves: Buffer[], b: boolean): Buffer[] {
+  const n = leaves.length;
+  if (m === n) return b ? [] : [merkleRoot(leaves)];
+  const k = _split(n);
+  if (m <= k) return [..._subproof(m, leaves.slice(0, k), b), merkleRoot(leaves.slice(k))];
+  return [..._subproof(m - k, leaves.slice(k), false), merkleRoot(leaves.slice(0, k))];
+}
+
+// Returns [oldRoot@m, newRoot@n]; bind each shifted entry AFTER the recursion.
+function _consistencyWalk(
+  m: number, n: number, b: boolean, path: Buffer[], firstRoot: Buffer,
+): [Buffer, Buffer] {
+  if (m === n) {
+    if (b) return [firstRoot, firstRoot];
+    const h = path.shift() as Buffer;
+    return [h, h];
+  }
+  const k = _split(n);
+  if (m <= k) {
+    const [old, newLeft] = _consistencyWalk(m, k, b, path, firstRoot);
+    const right = path.shift() as Buffer;
+    return [old, _nodeHash(newLeft, right)];
+  }
+  const [oldRight, newRight] = _consistencyWalk(m - k, n - k, false, path, firstRoot);
+  const left = path.shift() as Buffer;
+  return [_nodeHash(left, oldRight), _nodeHash(left, newRight)];
+}
+
+export function verifyConsistency(
+  firstRoot: Buffer, secondRoot: Buffer, m: number, n: number, proof: Buffer[],
+): boolean {
+  if (m < 0 || m > n) return false;
+  if (m === 0) return proof.length === 0;
+  if (m === n) return proof.length === 0 && firstRoot.equals(secondRoot);
+  const path = [...proof];
+  const [old, next] = _consistencyWalk(m, n, true, path, firstRoot);
+  return path.length === 0 && old.equals(firstRoot) && next.equals(secondRoot);
+}
+
 // ── Store-head schemes (chp-v0.2.md §12) ────────────────────────────────────
 
 export type Leaves = Record<string, string | null>;
@@ -123,6 +173,44 @@ export function verifyStoreHeadInclusion(
     return verifyInclusion(
       Buffer.from(root, 'hex'), storeHeadLeaf(correlationId, headHash),
       proof.leaf_index, proof.tree_size, path);
+  } catch {
+    return false;
+  }
+}
+
+export interface StoreHeadConsistency {
+  scheme: string;
+  first_size: number;
+  second_size: number;
+  first_root: string;
+  second_root: string;
+  proof: string[];
+}
+
+export function storeHeadConsistencyProof(oldLeaves: Leaves, newLeaves: Leaves): StoreHeadConsistency {
+  const oldOrdered = Object.keys(oldLeaves).sort();
+  const newOrdered = Object.keys(newLeaves).sort();
+  const newBytes = newOrdered.map((cid) => storeHeadLeaf(cid, newLeaves[cid]));
+  return {
+    scheme: CHP_STORE_HEAD_V2,
+    first_size: oldOrdered.length,
+    second_size: newOrdered.length,
+    first_root: storeHeadRoot(CHP_STORE_HEAD_V2, oldLeaves),
+    second_root: merkleRoot(newBytes).toString('hex'),
+    proof: consistencyProof(newBytes, oldOrdered.length).map((h) => h.toString('hex')),
+  };
+}
+
+export function verifyStoreHeadConsistency(
+  oldRoot: string, newRoot: string, proof: StoreHeadConsistency,
+): boolean {
+  if (proof.scheme !== CHP_STORE_HEAD_V2) return false;
+  if (proof.first_root !== oldRoot || proof.second_root !== newRoot) return false;
+  try {
+    const path = (proof.proof ?? []).map((h) => Buffer.from(h, 'hex'));
+    return verifyConsistency(
+      Buffer.from(oldRoot, 'hex'), Buffer.from(newRoot, 'hex'),
+      proof.first_size, proof.second_size, path);
   } catch {
     return false;
   }

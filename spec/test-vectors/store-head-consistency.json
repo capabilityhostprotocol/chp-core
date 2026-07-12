@@ -1,0 +1,43 @@
+{
+  "first_anchor": {
+    "anchor": {
+      "countersignature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgKay64UG8yvCyLhqU000LxzYeUm\n0L/hLIl5S8kyKWbdcAAAAVY2hwLXN0b3JlLWhlYWQtYW5jaG9yAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQPGSHBEpQcAV5a3S+mFIdoHT7kpIVbBzeN+YK3tYWy\nIsk2FurjYR6G11ieA1WMRks6iNICr8/f5B25LKFXuuAAk=\n-----END SSH SIGNATURE-----\n",
+      "did": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2",
+      "type": "did"
+    },
+    "anchored_at": "2026-01-01T00:00:00Z",
+    "host_id": "vector-witnessed-host",
+    "kind": "store-head-anchor",
+    "sequence": 42,
+    "store_head": "cd1cf3f5ce585771b3dd8f8b2ab7bbb39f489866884a19ba79005bd4f563c018",
+    "store_head_scheme": "chp-store-head-v2"
+  },
+  "kind": "store-head-consistency",
+  "note": "Append-only: verify both anchors' SSHSIGs, check proof.first_root/second_root equal the two anchored store_heads, then recompute BOTH roots from proof.proof (RFC 6962 \u00a72.1.2) \u2014 no leaves, no witness. A later head that dropped/altered an old correlation fails.",
+  "proof": {
+    "first_root": "cd1cf3f5ce585771b3dd8f8b2ab7bbb39f489866884a19ba79005bd4f563c018",
+    "first_size": 5,
+    "proof": [
+      "9bd746821d487118aa9afa6b1dd44399a72b8cbf7876ad44513429da4851147b",
+      "4b358f5d1dbd0cac5ee86760a626f0ddb2978b0b5fd6200b554267e802df7f43",
+      "f4b5e1e09e9732490f52d42033e288e1f8799a1aec4d003d8be7500fd85cccfb",
+      "b72b51ccac395487a078e1ee806be8a6862379ad7f11e0cd998a15e97437786e"
+    ],
+    "scheme": "chp-store-head-v2",
+    "second_root": "a182d39363e855259a9aa20568f2cec1aae518f7f48714a6330852c0c74b428d",
+    "second_size": 7
+  },
+  "second_anchor": {
+    "anchor": {
+      "countersignature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgKay64UG8yvCyLhqU000LxzYeUm\n0L/hLIl5S8kyKWbdcAAAAVY2hwLXN0b3JlLWhlYWQtYW5jaG9yAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQNNsnhCB6DU0JpVgHVzuSWj9p/V4dGyRnLAzTc08sY\nGsxUjwenFkaY+lvyKI4aR8pVpu/jDG+FXN56EOSw388QU=\n-----END SSH SIGNATURE-----\n",
+      "did": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2",
+      "type": "did"
+    },
+    "anchored_at": "2026-01-01T00:00:00Z",
+    "host_id": "vector-witnessed-host",
+    "kind": "store-head-anchor",
+    "sequence": 43,
+    "store_head": "a182d39363e855259a9aa20568f2cec1aae518f7f48714a6330852c0c74b428d",
+    "store_head_scheme": "chp-store-head-v2"
+  }
+}

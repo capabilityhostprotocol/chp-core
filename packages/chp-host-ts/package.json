@@ -1,6 +1,6 @@
 {
   "name": "@capabilityhostprotocol/host",
-  "version": "0.1.0-alpha.20",
+  "version": "0.1.0-alpha.21",
   "description": "A conformance-grade Capability Host Protocol (CHP) host in TypeScript \u2014 governed invocation pipeline + HTTP binding.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -44,7 +44,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@capabilityhostprotocol/sdk": "0.1.0-alpha.20"
+    "@capabilityhostprotocol/sdk": "0.1.0-alpha.21"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

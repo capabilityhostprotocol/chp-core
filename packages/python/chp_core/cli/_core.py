@@ -1095,6 +1095,34 @@ def cmd_head_inclusion(args: argparse.Namespace) -> int:
     return 0 if anchor_ok and incl_ok else 1
 
 
+def cmd_head_consistency(args: argparse.Namespace) -> int:
+    """Third-party, witness-free append-only proof (§12, proposal 0022): given a
+    store-head-consistency file ({first_anchor, second_anchor, proof}), verify both
+    external anchors' SSHSIGs and recompute BOTH Merkle roots from the RFC 6962
+    §2.1.2 proof — proving the log only appended (no old correlation dropped,
+    altered, or reordered) between the two anchored heads. Exit 1 on any failure."""
+    from .. import signing
+    from ..merkle import verify_store_head_consistency
+
+    with open(args.file) as fh:
+        doc = json.load(fh)
+    fa, sa = doc.get("first_anchor") or {}, doc.get("second_anchor") or {}
+    proof = doc.get("proof") or {}
+    anchors_ok = signing.verify_store_head_anchor(fa).valid and signing.verify_store_head_anchor(sa).valid
+    cons_ok = verify_store_head_consistency(
+        str(fa.get("store_head", "")), str(sa.get("store_head", "")), proof)
+    result = {
+        "anchors_valid": anchors_ok,
+        "consistency_valid": cons_ok,
+        "first_root": fa.get("store_head"),
+        "second_root": sa.get("store_head"),
+        "grew": f"{proof.get('first_size')}→{proof.get('second_size')} leaves",
+        "verdict": "append-only" if (anchors_ok and cons_ok) else "invalid",
+    }
+    print(json.dumps(result, indent=2))
+    return 0 if anchors_ok and cons_ok else 1
+
+
 def cmd_bundle_minimize(args: argparse.Namespace) -> int:
     """Selective disclosure (§14, proposal 0011): write a disclosure-minimized
     copy of a signed bundle — chp-event-hash-v2 payloads matching the filter are

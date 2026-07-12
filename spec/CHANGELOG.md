@@ -5,6 +5,26 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.6.1] — Merkle consistency proofs over 0.6.0
+
+### Added
+- **Merkle consistency proofs** (chp-v0.2.md §12,
+  [proposals/0022](proposals/0022-merkle-consistency.md)): an RFC 6962 §2.1.2
+  consistency proof over the `chp-store-head-v2` tree proves a later store head
+  is an **append-only** extension of an earlier one — a third party holding two
+  anchored roots + the proof verifies, witness-free and offline, that no old
+  correlation was dropped, altered, or reordered between the heads. New
+  `store-head-consistency` object; completes the transparency log from 0019
+  (inclusion = a leaf is present; consistency = the tree only grew).
+
+### Compatibility
+- **Additive, no byte changes.** No leaf bytes, tree construction, head signing,
+  witness header, or anchor message change — a consistency proof is computed over
+  roots that already exist. `chp-store-head-v1` (the flat fold) stays the default
+  and has no consistency proof. Regression gate: the new `store-head-consistency`
+  test vector verifies byte-identically in Python, the TS SDK, and stdlib
+  `verify.mjs`; the byte gate shows only that new vector.
+
 ## [0.6.0] — in-toto / DSSE attestation bridge over 0.5.1
 
 ### Added

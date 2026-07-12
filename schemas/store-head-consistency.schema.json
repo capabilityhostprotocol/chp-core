@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/store-head-consistency.schema.json",
+  "title": "StoreHeadConsistency",
+  "description": "An RFC 6962 consistency proof that a later chp-store-head-v2 Merkle tree is an append-only extension of an earlier one (chp-v0.2.md section 12, proposal 0022). A party holding only the two signed/anchored roots and this proof verifies, with no leaves snapshot and no witness, that between the two heads the log only appended: recompute both the old root (first_size) and the new root (second_size) from the proof's subtree hashes and check they equal first_root and second_root. Any dropped, altered, or reordered old leaf makes the recomputed old root diverge and verification fails.",
+  "type": "object",
+  "required": [
+    "scheme",
+    "first_size",
+    "second_size",
+    "first_root",
+    "second_root",
+    "proof"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scheme": {
+      "const": "chp-store-head-v2",
+      "description": "The store-head scheme this proof is for (RFC 6962 Merkle)."
+    },
+    "first_size": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The number of leaves in the earlier tree (must be <= second_size)."
+    },
+    "second_size": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The number of leaves in the later tree."
+    },
+    "first_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "The earlier tree's Merkle root (must equal the earlier anchored head's store_head)."
+    },
+    "second_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "The later tree's Merkle root (must equal the later anchored head's store_head)."
+    },
+    "proof": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "description": "The RFC 6962 section 2.1.2 consistency proof: subtree node hashes from which both roots are recomputed. Empty when first_size == second_size and the roots match."
+    }
+  }
+}

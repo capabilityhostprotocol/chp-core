@@ -509,6 +509,36 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "inclusion_vector_verifies", False, {"error": str(exc)})
 
+    # Merkle consistency proofs (proposal 0022): the spec must define append-only
+    # consistency, and the consistency vector must verify third-party — both
+    # anchored roots recompute from the RFC 6962 §2.1.2 proof, and a truncated
+    # later root fails.
+    add_check(
+        checks,
+        "spec_defines_consistency_proof",
+        "consistency proof" in spec_v02_mk and "append-only" in spec_v02_mk
+        and "RFC 6962 §2.1.2" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §12 must define chp-store-head-v2 consistency proofs (append-only)"},
+    )
+    cons_vec = repo_root / "spec" / "test-vectors" / "store-head-consistency.json"
+    if cons_vec.exists():
+        try:
+            from .merkle import verify_store_head_consistency
+            from .signing import verify_store_head_anchor
+
+            cv = read_json(cons_vec)
+            fa, sa, proof = cv["first_anchor"], cv["second_anchor"], cv["proof"]
+            add_check(
+                checks,
+                "consistency_vector_verifies",
+                verify_store_head_anchor(fa).valid and verify_store_head_anchor(sa).valid
+                and verify_store_head_consistency(fa["store_head"], sa["store_head"], proof)
+                and not verify_store_head_consistency(fa["store_head"], "0" * 64, proof),
+                {"hint": "regenerate store-head-consistency.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "consistency_vector_verifies", False, {"error": str(exc)})
+
     # in-toto / DSSE attestation bridge (proposal 0021): the spec must define it,
     # and the attestation vector must verify — the DSSE PAE signature + the
     # embedded CHP bundle + the subject digest.
