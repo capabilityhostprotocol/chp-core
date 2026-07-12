@@ -7,7 +7,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead, PROTOCOL_VERSION } from '@capabilityhostprotocol/sdk';
+import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead, PROTOCOL_VERSION, CHP_STORE_HEAD_V2, storeHeadInclusionProof } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
 import type { InvocationEnvelope, JsonValue } from './types.js';
 
@@ -155,8 +155,20 @@ export function createHostServer(
     // the sequence discloses activity volume), and this host's received
     // countersignatures (statements only; receipts stay in memory here —
     // a conformance host does not persist).
+    if (method === 'GET' && path.startsWith('/head/inclusion/')) {
+      // Merkle inclusion (§12, proposal 0019): a chp-store-head-v2 inclusion
+      // proof for one correlation under the current head — third-party, no leaves.
+      const corr = decodeURIComponent(path.slice('/head/inclusion/'.length));
+      const head = host.store.getStoreHead(undefined, CHP_STORE_HEAD_V2);
+      if (!(corr in head.leaves)) return err(res, 404, 'not_found', `no correlation ${corr}`);
+      return sendJson(res, 200, {
+        sequence: head.sequence, store_head: head.store_head,
+        proof: storeHeadInclusionProof(head.leaves, corr) as unknown as JsonValue,
+      });
+    }
     if (method === 'GET' && path === '/head') {
-      const head = host.store.getStoreHead();
+      const scheme = url.searchParams.get('scheme') ?? undefined;
+      const head = host.store.getStoreHead(undefined, scheme);
       return sendJson(res, 200, {
         host_id: host.hostId, scheme: head.scheme, sequence: head.sequence,
         store_head: head.store_head,

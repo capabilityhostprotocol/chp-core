@@ -5,6 +5,40 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.5.0] — Merkle store head + inclusion proofs over 0.4.3
+
+### Added
+- **`chp-store-head-v2` — a transparency-log store head** (chp-v0.2.md §12,
+  [proposals/0019](proposals/0019-transparency-log.md)): the flat SHA-256 fold
+  becomes an **RFC 6962** (Certificate Transparency) Merkle tree over the same
+  sorted per-correlation leaves (domain-separated: leaf `SHA256(0x00‖…)`, node
+  `SHA256(0x01‖L‖R)`, split at the largest power of two). An **inclusion proof**
+  (`{leaf_index, tree_size, audit_path}`) lets a party holding only the signed/
+  anchored root + one correlation's `(id, head_hash)` verify inclusion **with no
+  leaves snapshot and no witness** — the third-party, witness-free verification
+  deferred in 0018/0013. A `store_head_root(scheme, leaves)` dispatcher (the §2
+  canonicalization pattern) folds v1 or builds the v2 root; `get_store_head`
+  defaults to v1. The store-head-anchor carries it (self-describing
+  `store_head_scheme`, omit-when-absent), and `audit_completeness` gains a
+  non-witness anchor+proof path. New schema `store-head-inclusion`.
+
+### Compatibility
+- **Additive, no bytes move.** `chp-store-head-v1` stays the default and
+  byte-identical; the chain-witness header, store-head-anchor, and quorum compare
+  sign/compare `store_head` **opaquely**, so a v2 root slots in with no signing
+  change — every existing head, receipt, anchor, and vector is byte-identical.
+  New optional `store_head_scheme` (omit-when-absent). **Minor** bump (v0.5.0) —
+  a second store-head scheme + third-party inclusion is a headline capability
+  (like `chp-event-hash-v2` = v0.3.0, `chp-jcs-v1` = v0.4.0), though no existing
+  bytes move.
+
+### Regression gate
+- The byte gate: every `spec/test-vectors/` fixture verifies unchanged; new
+  `store-head-v2.json` + `store-head-inclusion.json` are the only additions,
+  verified byte-identically by Python, the TS SDK, and the stdlib `verify.mjs`
+  (RFC 6962 pinned). `spec_defines_store_head_v2` + `store_head_v2_root_recomputes`
+  + `inclusion_vector_verifies` guards; a `check_store_head_inclusion` wire check.
+
 ## [0.4.3] — non-omission / completeness over 0.4.2
 
 ### Added
