@@ -40,11 +40,14 @@ For each gate: **Trigger** is the exact predicate; **Outcome** is the
 `InvocationResult.outcome`; **Code** is the reserved `DenialReason.code` (n/a for
 non-denials); **Events** are the evidence events emitted for that gate.
 
-**Before the pipeline.** One reserved code is emitted *before* gate 1 and never
-by a host's pipeline: `host_unreachable` — a **routing intermediary** could
+**Before the pipeline.** Two reserved codes are emitted *before* gate 1 and never
+by a host's pipeline. `host_unreachable` — a **routing intermediary** could
 reach no owner of the capability, so the invocation never arrived at any host
 (chp-v0.2.md §11, chp-http-binding.md §3). It is still a PROCESSED denial
 (HTTP 200, evidence at the intermediary), just not a pipeline gate.
+`version_unsupported` — the caller declared an explicit `X-CHP-Version` the host
+does not speak (chp-v0.2.md §1.1); this is a **transport-level** rejection before
+routing (HTTP `400`, no evidence — like an auth failure), not a processed denial.
 
 **Gate 0 — idempotent replay** (chp-v0.2.md §13, proposal 0008): before gate 1,
 a host that has already recorded this `invocation_id` returns the RECORDED

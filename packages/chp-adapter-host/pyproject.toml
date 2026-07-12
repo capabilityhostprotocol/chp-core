@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-host"
-version = "0.23.0"
+version = "0.24.0"
 description = "CHP capability adapter — report and update the host runtime on a node"
 readme = "README.md"
 requires-python = ">=3.10"

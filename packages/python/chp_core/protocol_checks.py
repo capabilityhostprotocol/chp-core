@@ -361,6 +361,34 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "jcs_bundle_verifies", False, {"error": str(exc)})
 
+    # Wire-version negotiation (spec §1.1, proposal 0016): the spec must define
+    # the mechanism, and the reference descriptor must actually declare
+    # supported_versions (else "declared" is a lie a client would trust).
+    spec_v02_neg = read_text(repo_root / "spec" / "chp-v0.2.md")
+    binding_text = read_text(repo_root / "spec" / "chp-http-binding.md")
+    add_check(
+        checks,
+        "spec_defines_version_negotiation",
+        "Version negotiation" in spec_v02_neg
+        and "supported_versions" in spec_v02_neg
+        and "X-CHP-Version" in binding_text,
+        {"hint": "chp-v0.2.md §1.1 + chp-http-binding.md §2 must define the negotiation seam"},
+    )
+    try:
+        from .types import HostDescriptor, negotiate_version
+
+        d = HostDescriptor(id="align", protocol_version="0.2").to_dict()
+        add_check(
+            checks,
+            "descriptor_declares_supported_versions",
+            d.get("supported_versions") == ["0.1", "0.2"]
+            and negotiate_version(["0.2"], d["supported_versions"]) == "0.2"
+            and negotiate_version(["9.9"], d["supported_versions"]) is None,
+            {"supported_versions": d.get("supported_versions")},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        add_check(checks, "descriptor_declares_supported_versions", False, {"error": str(exc)})
+
     # Anchors (spec §3.1): the anchored vector must still verify (guards the
     # omit-when-empty conditional in build/verify), and the spec must define
     # the anchor mechanism + the well-known route.

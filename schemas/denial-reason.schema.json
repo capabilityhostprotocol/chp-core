@@ -21,7 +21,8 @@
         "approval_required",
         "safety_blocked",
         "mandate_invalid",
-        "host_unreachable"
+        "host_unreachable",
+        "version_unsupported"
       ]
     },
     "message": {
