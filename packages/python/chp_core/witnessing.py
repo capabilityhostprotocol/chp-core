@@ -136,12 +136,12 @@ def latest_issued_at() -> str | None:
     return newest
 
 
-def compute_root(leaves: dict) -> str:
-    """chp-store-head-v1 over a leaves mapping (correlation_id -> head hash)."""
-    digest = hashlib.sha256()
-    for correlation_id in sorted(leaves):
-        digest.update(f"{correlation_id}\x00{leaves[correlation_id] or ''}\n".encode())
-    return digest.hexdigest()
+def compute_root(leaves: dict, scheme: str | None = None) -> str:
+    """A store-head root over a leaves mapping. Defaults to chp-store-head-v1
+    (byte-identical) — a v2 Merkle root is available via ``scheme``. Delegates to
+    the single dispatcher so every recompute site agrees."""
+    from .merkle import CHP_STORE_HEAD_V1, store_head_root  # noqa: PLC0415
+    return store_head_root(scheme or CHP_STORE_HEAD_V1, leaves)
 
 
 def audit_completeness(bundle: JSON, receipts: list[JSON]) -> JSON:
@@ -183,7 +183,10 @@ def audit_completeness(bundle: JSON, receipts: list[JSON]) -> JSON:
             continue
         if not verify_chain_witness(stmt).valid:
             continue  # only validly-witnessed heads count
-        if compute_root(leaves) != signed:
+        # Tamper check under whichever store-head scheme the signed root selects
+        # (v1 fold or v2 Merkle — self-validating, §12 proposal 0019).
+        from .merkle import store_head_scheme_matching  # noqa: PLC0415
+        if store_head_scheme_matching(leaves, signed) is None:
             snapshot_invalid.append(str(seq))
             continue
         if corr not in leaves:
@@ -208,6 +211,42 @@ def audit_completeness(bundle: JSON, receipts: list[JSON]) -> JSON:
             "head_hash": head_hash, "confirmed_at": confirmed_at,
             "advanced_at": advanced_at, "snapshot_invalid": snapshot_invalid,
             "witnessed_sequences": sorted(witnessed_seqs)}
+
+
+def audit_completeness_via_anchor(bundle: JSON, anchor: JSON, inclusion_proof: JSON) -> JSON:
+    """Third-party, witness-free non-omission (§12, proposal 0019). A relying
+    party holding only a bundle's completeness claim, an externally-anchored
+    chp-store-head-v2 root, and an RFC 6962 inclusion proof — NO leaves snapshot,
+    NO witness — proves the correlation's committed tail. The inclusion proof
+    binds the ACTUAL anchored tail: a host that truncated its bundle cannot
+    produce a proof for the truncated tail (it is not in the tree), so the
+    anchored tail differs → `incomplete`.
+    """
+    from .signing import verify_store_head_anchor  # noqa: PLC0415
+    from .merkle import verify_store_head_inclusion  # noqa: PLC0415
+
+    claim = bundle.get("completeness")
+    if not claim:
+        return {"verdict": "no_claim"}
+    corr = claim.get("correlation_id")
+    as_of = claim.get("as_of_sequence")
+    head_hash = claim.get("head_hash")
+
+    if not verify_store_head_anchor(anchor).valid:
+        return {"verdict": "anchor_invalid", "correlation_id": corr}
+    root = str(anchor.get("store_head"))
+    seq = anchor.get("sequence")
+    anchored_tail = inclusion_proof.get("head_hash")
+    # The proof must genuinely commit (corr, anchored_tail) under the anchored root.
+    if inclusion_proof.get("correlation_id") != corr \
+            or not verify_store_head_inclusion(root, corr, anchored_tail, inclusion_proof):
+        return {"verdict": "proof_invalid", "correlation_id": corr}
+    if seq is None or as_of is None or seq < as_of:
+        return {"verdict": "unwitnessed", "correlation_id": corr, "anchored_at_sequence": seq}
+    verdict = "complete" if anchored_tail == head_hash else "incomplete"
+    return {"verdict": verdict, "correlation_id": corr, "as_of_sequence": as_of,
+            "anchored_at_sequence": seq, "head_hash": head_hash,
+            "anchored_tail": anchored_tail}
 
 
 def verify_receipt_against_store(store, receipt: JSON) -> JSON:
@@ -239,9 +278,11 @@ def verify_receipt_against_store(store, receipt: JSON) -> JSON:
                        "reason": sv.reason})
         return result
 
-    # The snapshot must recompute to the SIGNED root — else the snapshot
-    # itself was doctored and per-leaf dispositions would be meaningless.
-    snapshot_valid = compute_root(snapshot) == statement.get("store_head")
+    # The snapshot must recompute to the SIGNED root under some known store-head
+    # scheme (v1 fold or v2 Merkle — self-validating, §12 proposal 0019) — else
+    # the snapshot itself was doctored and per-leaf dispositions are meaningless.
+    from .merkle import store_head_scheme_matching  # noqa: PLC0415
+    snapshot_valid = store_head_scheme_matching(snapshot, str(statement.get("store_head"))) is not None
     result["snapshot_valid"] = snapshot_valid
     if not snapshot_valid:
         result["verdict"] = "snapshot_invalid"
@@ -249,7 +290,7 @@ def verify_receipt_against_store(store, receipt: JSON) -> JSON:
 
     # AUDIT-GRADE recompute: never the maintained cache — a store editor
     # could have edited correlation_heads too. Raw events only.
-    current = store.get_store_head(at_sequence=int(sequence), fresh=True)["leaves"]
+    current = store.get_store_head(at_sequence=int(sequence or 0), fresh=True)["leaves"]
     dispositions = {"verified": 0, "purged": 0, "redacted": 0, "tampered": 0}
     tampered: list[str] = []
     for correlation_id, witnessed_hash in snapshot.items():

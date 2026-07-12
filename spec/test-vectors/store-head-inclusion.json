@@ -1,0 +1,29 @@
+{
+  "anchor": {
+    "anchor": {
+      "countersignature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgKay64UG8yvCyLhqU000LxzYeUm\n0L/hLIl5S8kyKWbdcAAAAVY2hwLXN0b3JlLWhlYWQtYW5jaG9yAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQPGSHBEpQcAV5a3S+mFIdoHT7kpIVbBzeN+YK3tYWy\nIsk2FurjYR6G11ieA1WMRks6iNICr8/f5B25LKFXuuAAk=\n-----END SSH SIGNATURE-----\n",
+      "did": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2",
+      "type": "did"
+    },
+    "anchored_at": "2026-01-01T00:00:00Z",
+    "host_id": "vector-witnessed-host",
+    "kind": "store-head-anchor",
+    "sequence": 42,
+    "store_head": "cd1cf3f5ce585771b3dd8f8b2ab7bbb39f489866884a19ba79005bd4f563c018",
+    "store_head_scheme": "chp-store-head-v2"
+  },
+  "kind": "store-head-inclusion",
+  "note": "Third-party non-omission: verify the anchor's SSHSIG, then recompute the Merkle root from proof.head_hash up proof.audit_path and check it equals anchor.store_head \u2014 no leaves, no witness.",
+  "proof": {
+    "audit_path": [
+      "d816c8709ee5490a772294266c644c6810d6216ab7e8e9c9ee4352251005304a",
+      "a7b61cedd35302d9922b205bbc99e010a170ff5acb2af230694057e1ddcab0a1",
+      "9bd746821d487118aa9afa6b1dd44399a72b8cbf7876ad44513429da4851147b"
+    ],
+    "correlation_id": "corr_2",
+    "head_hash": "d1100efe3cbf6976dfe9604db55c3d59fb408209eb7c8003515dfa87bb4201d4",
+    "leaf_index": 2,
+    "scheme": "chp-store-head-v2",
+    "tree_size": 5
+  }
+}

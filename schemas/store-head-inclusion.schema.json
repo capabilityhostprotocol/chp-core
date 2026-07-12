@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/store-head-inclusion.schema.json",
+  "title": "StoreHeadInclusion",
+  "description": "An RFC 6962 Merkle inclusion proof that a single correlation's leaf is committed under a chp-store-head-v2 root (chp-v0.2.md section 12, proposal 0019). A party holding only the signed/anchored root, the correlation's id and head_hash, and this proof verifies inclusion with no leaves snapshot and no witness: recompute the leaf hash from the correlation's leaf bytes up the audit_path and check it equals the root.",
+  "type": "object",
+  "required": [
+    "scheme",
+    "correlation_id",
+    "head_hash",
+    "leaf_index",
+    "tree_size",
+    "audit_path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scheme": {
+      "const": "chp-store-head-v2",
+      "description": "The store-head scheme this proof is for (RFC 6962 Merkle)."
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The correlation whose leaf inclusion is proven."
+    },
+    "head_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The correlation's tail content_hash (the committed leaf value; null for a redacted head, folded as empty string)."
+    },
+    "leaf_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The leaf's index among the sorted leaves."
+    },
+    "tree_size": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The number of leaves in the tree (correlations committed at the head's sequence)."
+    },
+    "audit_path": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "description": "The RFC 6962 audit path: sibling node hashes bottom-up from the leaf to the root."
+    }
+  }
+}

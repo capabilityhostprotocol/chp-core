@@ -1508,6 +1508,49 @@ async def check_jcs_canonicalization(host: Any) -> None:
     assert not signing.verify_bundle(bogus).valid, "unknown scheme must fail, not crash"
 
 
+async def check_store_head_inclusion(host: Any) -> None:
+    """v0.5.0 §12 (proposal 0019): the transparency-log store head. A host can
+    serve a chp-store-head-v2 (RFC 6962 Merkle) head and, for a correlation, an
+    inclusion proof that a third party verifies against the head's root — no
+    leaves snapshot, no witness. Reference feature (like witnessing); over the
+    wire only, and skipped against a host that does not opt into v2."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    from chp_core.merkle import verify_store_head_inclusion
+
+    base = getattr(host, "_base", None)
+    if not base:
+        return  # in-process sample host — the HTTP head/inclusion routes aren't exercised
+    api_key = getattr(host, "_api_key", None)
+
+    def _get(path: str):
+        req = urllib.request.Request(f"{base}{path}", method="GET")
+        if api_key:
+            req.add_header("X-CHP-Key", api_key)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, _json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, (_json.loads(e.read()) if e.headers.get("content-type", "").startswith("application/json") else {})
+
+    corr = f"{RUN}-conf-incl-001"
+    await invoke_host(host, "conformance.echo", {"value": "x"},
+                      correlation={"correlation_id": corr})
+    status, head = _get("/head?scheme=chp-store-head-v2")
+    if status != 200 or head.get("scheme") != "chp-store-head-v2":
+        return  # host doesn't opt into v2 — reference feature, skip
+    root = head["store_head"]
+    st2, incl = _get(f"/head/inclusion/{corr}")
+    assert st2 == 200 and incl.get("proof"), f"v2 host must serve an inclusion proof: {incl}"
+    proof = incl["proof"]
+    assert incl["store_head"] == root, "inclusion head root must match /head"
+    # Third-party verify: recompute the Merkle root from one leaf; forged tail fails.
+    assert verify_store_head_inclusion(root, corr, proof["head_hash"], proof), "inclusion must verify"
+    assert not verify_store_head_inclusion(root, corr, "f" * 64, proof), "forged tail must fail"
+
+
 async def check_completeness(host: Any) -> None:
     """v0.4.3 §12 (proposal 0018): non-omission. A host's exported bundle carries
     a `chp-completeness-v1` claim asserting it is the complete correlation as of a
@@ -2466,6 +2509,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("canonicalization dispatch / chp-jcs-v1 (v0.4.0 §2, proposal 0015)", check_jcs_canonicalization),
     ("wire-version negotiation (v0.4.1 §1.1, proposal 0016)", check_version_negotiation),
     ("non-omission / completeness (v0.4.3 §12, proposal 0018)", check_completeness),
+    ("Merkle store head + inclusion (v0.5.0 §12, proposal 0019)", check_store_head_inclusion),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

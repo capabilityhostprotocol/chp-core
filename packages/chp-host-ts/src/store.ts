@@ -42,7 +42,7 @@ export class InMemoryEvidenceStore {
 
   /** The witnessable store digest (chp-store-head-v1, spec §12): per-correlation
    * head content_hash at sequence ≤ N, digested over sorted leaves. */
-  getStoreHead(atSequence?: number): StoreHead {
+  getStoreHead(atSequence?: number, scheme?: string): StoreHead {
     const n = atSequence ?? this.seq;
     const leaves = new Map<string, string | null>();
     for (const e of this.events) {
@@ -50,6 +50,6 @@ export class InMemoryEvidenceStore {
         leaves.set(String(e.correlation?.correlation_id ?? ''), e.content_hash ?? null);
       }
     }
-    return computeStoreHead(leaves, n);
+    return computeStoreHead(leaves, n, scheme);
   }
 }

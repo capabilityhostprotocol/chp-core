@@ -91,6 +91,34 @@ function canonFor(scheme) {
 }
 const sha256hex = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
+// RFC 6962 Merkle verify for chp-store-head-v2 inclusion (§12, proposal 0019).
+// Domain-separated: leaf SHA256(0x00‖data), node SHA256(0x01‖L‖R). Recomputes by
+// replaying the split (largest power of two < size) — the inverse of the build.
+const _leafHash = (data) => createHash("sha256").update(Buffer.concat([Buffer.from([0]), data])).digest();
+const _nodeHash = (l, r) => createHash("sha256").update(Buffer.concat([Buffer.from([1]), l, r])).digest();
+function _splitN(n) { let k = 1; while (k * 2 < n) k *= 2; return k; }
+function _walk(size, index, path, leaf) {
+  if (size === 1) return leaf;
+  const k = _splitN(size);
+  // The recursion consumes deeper path entries FIRST; the sibling is shifted
+  // AFTER (bind it explicitly — do not rely on argument evaluation order).
+  if (index < k) {
+    const left = _walk(k, index, path, leaf);
+    return _nodeHash(left, path.shift());          // sibling on the right
+  }
+  const right = _walk(size - k, index - k, path, leaf);
+  return _nodeHash(path.shift(), right);           // sibling on the left
+}
+function verifyStoreHeadInclusion(rootHex, correlationId, headHash, proof) {
+  if (proof.scheme !== "chp-store-head-v2" || proof.correlation_id !== correlationId
+      || proof.head_hash !== headHash) return false;
+  if (!(proof.leaf_index >= 0 && proof.leaf_index < proof.tree_size)) return false;
+  const leafBytes = Buffer.from(`${correlationId}\x00${headHash ?? ""}\n`, "utf8");
+  const path = (proof.audit_path ?? []).map((h) => Buffer.from(h, "hex"));
+  const computed = _walk(proof.tree_size, proof.leaf_index, path, _leafHash(leafBytes));
+  return path.length === 0 && computed.toString("hex") === rootHex;
+}
+
 // chp-event-hash-v2 (14): sha256(chp-stable-v1(payload)). Empty payload = {}.
 const payloadCommitment = (payload) => sha256hex(canon(payload ?? {}));
 
@@ -419,6 +447,21 @@ if (input.kind === "adapter-provenance") {
   }
   console.log(ok
     ? `VALID (task-bundle, ${input.bundles.length} hosts, ${allEvents.length} events${aggNote})`
+    : "INVALID");
+} else if (input.kind === "store-head-inclusion") {
+  // Third-party non-omission (chp-v0.2.md §12, proposal 0019): recompute the RFC
+  // 6962 Merkle root from one correlation's leaf up the audit path and check it
+  // equals the anchored root — no leaves, no witness. (The anchor's external
+  // SSHSIG is verified by the Python/TS impls; this stdlib check proves the tree.)
+  const { anchor, proof } = input;
+  const root = anchor?.store_head;
+  ok = anchor?.store_head_scheme === "chp-store-head-v2"
+    && verifyStoreHeadInclusion(root, proof.correlation_id, proof.head_hash, proof);
+  // a forged tail must fail
+  const forgeFails = !verifyStoreHeadInclusion(root, proof.correlation_id, "f".repeat(64), proof);
+  ok = ok && forgeFails;
+  console.log(ok
+    ? `VALID (store-head-inclusion: ${proof.correlation_id} committed under anchored Merkle root ${String(root).slice(0, 16)}…)`
     : "INVALID");
 } else {
   ok = verifyOne(input);

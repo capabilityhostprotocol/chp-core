@@ -52,6 +52,11 @@ export {
   type StoreHead,
 } from './signing.js';
 export {
+  merkleRoot, inclusionProof, verifyInclusion,
+  storeHeadRoot, storeHeadInclusionProof, verifyStoreHeadInclusion, storeHeadSchemeMatching,
+  CHP_STORE_HEAD_V1, CHP_STORE_HEAD_V2, type StoreHeadInclusion,
+} from './merkle.js';
+export {
   verifyBundle,
   verifyBundleResolved,
   resolveHostIdentity,
@@ -68,6 +73,7 @@ export {
   verifyContinuity,
   verifyChainWitness,
   auditCompleteness,
+  auditCompletenessViaAnchor,
   type CompletenessAudit,
   verifyStoreHeadAnchor,
   storeHeadAnchorMessage,

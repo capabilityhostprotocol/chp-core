@@ -579,15 +579,25 @@ def store_head_anchor_message(host_id: str, sequence: int, store_head: str,
 
 
 def build_store_head_anchor(host_id: str, sequence: int, store_head: str, *,
-                            anchored_at: str, did: str, countersignature: str) -> dict:
+                            anchored_at: str, did: str, countersignature: str,
+                            store_head_scheme: str | None = None) -> dict:
     """Assemble a ``store-head-anchor`` statement (§12, proposal 0013) from an
     external DID key's SSHSIG ``countersignature`` over
     ``store_head_anchor_message(...)``. The countersignature is produced OUTSIDE
     the mesh (a notary / transparency-log checkpoint key); this only assembles +
-    the verifier checks it offline."""
-    return {"kind": "store-head-anchor", "host_id": host_id, "sequence": sequence,
+    the verifier checks it offline.
+
+    ``store_head_scheme`` (proposal 0019) is included **omit-when-absent** — it is
+    advisory (the countersigned bytes do not include it; it is self-validated
+    because recomputing the root under it must equal the countersigned
+    ``store_head``), so a v1 anchor stays byte-identical. A v2 anchor names
+    ``chp-store-head-v2`` so a stranger can recompute + verify an inclusion proof."""
+    stmt = {"kind": "store-head-anchor", "host_id": host_id, "sequence": sequence,
             "store_head": store_head, "anchored_at": anchored_at,
             "anchor": {"type": "did", "did": did, "countersignature": countersignature}}
+    if store_head_scheme:
+        stmt["store_head_scheme"] = store_head_scheme
+    return stmt
 
 
 def verify_store_head_anchor(statement: dict) -> BundleVerification:

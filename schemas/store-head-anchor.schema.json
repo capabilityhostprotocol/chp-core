@@ -30,7 +30,15 @@
     "store_head": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "chp-store-head-v1 digest of the store at `sequence`."
+      "description": "Store-head root at `sequence`: chp-store-head-v1 flat digest, or the chp-store-head-v2 RFC 6962 Merkle root (proposal 0019). Countersigned opaquely, so the scheme does not change the anchor."
+    },
+    "store_head_scheme": {
+      "type": "string",
+      "enum": [
+        "chp-store-head-v1",
+        "chp-store-head-v2"
+      ],
+      "description": "Which store-head scheme produced `store_head` (proposal 0019). Absent → chp-store-head-v1. Advisory (self-validated: recomputing the root under it must equal the countersigned `store_head`), so it is NOT in the countersigned bytes; it lets a stranger recompute + verify an inclusion proof."
     },
     "anchored_at": {
       "type": "string",
