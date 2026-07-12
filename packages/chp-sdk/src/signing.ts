@@ -66,10 +66,36 @@ function signCanon(priv: KeyObject, obj: JsonValue): string {
 
 const HEADER_FIELDS = ['host_id', 'protocol_version', 'created_at', 'canonicalization', 'root_hash'] as const;
 
+export const COMPLETENESS_SCHEME = 'chp-completeness-v1';
+
 export function bundleHeader(bundle: Record<string, JsonValue>): JsonValue {
   const h: Record<string, JsonValue> = {};
   for (const f of HEADER_FIELDS) h[f] = bundle[f] ?? null;
+  // completeness (§12, proposal 0018) rides in the signed header omit-when-absent,
+  // so a bundle without it is byte-identical (mirror the anchors/revocation_head rule).
+  if (bundle.completeness) h.completeness = bundle.completeness;
   return h;
+}
+
+/**
+ * A chp-completeness-v1 non-omission claim (§12, proposal 0018): the bundle
+ * asserts it is the COMPLETE correlation — genesis to the tail's content_hash —
+ * as of global store `asOfSequence`. Audited against a witnessed store head.
+ */
+export function buildCompleteness(
+  correlationId: string,
+  events: EvidenceEvent[],
+  asOfSequence: number,
+): Record<string, JsonValue> {
+  const tail = events[events.length - 1] as unknown as Record<string, JsonValue> | undefined;
+  const headHash = tail?.content_hash;
+  if (!headHash) throw new Error('completeness requires at least one hashed event');
+  return {
+    scheme: COMPLETENESS_SCHEME,
+    correlation_id: correlationId,
+    as_of_sequence: asOfSequence,
+    head_hash: headHash,
+  };
 }
 
 export function buildAttestation(
@@ -100,9 +126,10 @@ export function buildBundle(
   createdAt: string,
   protocolVersion = '0.2',
   canonicalization: string = CANONICALIZATION,
+  completeness: Record<string, JsonValue> | null = null,
 ): Record<string, JsonValue> {
   canonFor(canonicalization); // validate the scheme name up front (throws on unknown)
-  return {
+  const bundle: Record<string, JsonValue> = {
     host_id: hostId,
     protocol_version: protocolVersion,
     created_at: createdAt,
@@ -111,6 +138,8 @@ export function buildBundle(
     events: events as unknown as JsonValue,
     root_hash: rootHash(events),
   };
+  if (completeness) bundle.completeness = completeness; // omit-when-absent
+  return bundle;
 }
 
 export function signBundle(

@@ -332,9 +332,38 @@ def _canon_for(scheme: str | None):
 _HEADER_FIELDS = ("host_id", "protocol_version", "created_at", "canonicalization", "root_hash")
 
 
+COMPLETENESS_SCHEME = "chp-completeness-v1"
+
+
 def bundle_header(bundle: dict) -> dict:
-    """The signed header: the origin/time/scheme claims + root_hash."""
-    return {k: bundle.get(k) for k in _HEADER_FIELDS}
+    """The signed header: the origin/time/scheme claims + root_hash, plus the
+    non-omission `completeness` claim when present. `completeness` participates in
+    the signed bytes ONLY when set (omit-when-absent, §12 / proposal 0018) — a
+    bundle without it is byte-identical and a pre-0018 signature still verifies,
+    exactly like `revocation_head` in the chain-witness header."""
+    header = {k: bundle.get(k) for k in _HEADER_FIELDS}
+    if bundle.get("completeness"):
+        header["completeness"] = bundle["completeness"]
+    return header
+
+
+def build_completeness(correlation_id: str, events: list[dict], as_of_sequence: int) -> dict:
+    """A `chp-completeness-v1` non-omission claim (§12, proposal 0018): the bundle
+    asserts it is the COMPLETE correlation — genesis to the tail event's
+    `content_hash` — as of global store `sequence` (no events for this correlation
+    exist through `as_of_sequence`). Audited against a witnessed store head whose
+    `leaves[correlation_id]` already commits the true tail."""
+    if not events:
+        raise ValueError("completeness requires at least one event")
+    tail = events[-1].get("content_hash")
+    if not tail:
+        raise ValueError("tail event is unhashed; cannot claim completeness")
+    return {
+        "scheme": COMPLETENESS_SCHEME,
+        "correlation_id": correlation_id,
+        "as_of_sequence": as_of_sequence,
+        "head_hash": tail,
+    }
 
 
 def build_attestation(host_id: str, host_key: HostKey, *, valid_from: str,
@@ -408,14 +437,17 @@ def build_bundle(
     created_at: str,
     protocol_version: str = "0.2",
     canonicalization: str = CANONICALIZATION,
+    completeness: dict | None = None,
 ) -> dict:
     """Build an unsigned (`hash-chain` tier) evidence bundle from exported events.
 
     ``canonicalization`` selects the header-signature serializer (§2, proposal
     0015): ``chp-stable-v1`` (default) or ``chp-jcs-v1`` (RFC 8785). Event
-    content-hashes are the orthogonal ``hash_scheme`` axis and are unaffected."""
+    content-hashes are the orthogonal ``hash_scheme`` axis and are unaffected.
+    ``completeness`` (proposal 0018) attaches a non-omission claim — omit-when-
+    absent, so a bundle without it is byte-identical."""
     _canon_for(canonicalization)  # validate the scheme name up front
-    return {
+    bundle: dict[str, Any] = {
         "host_id": host_id,
         "protocol_version": protocol_version,
         "created_at": created_at,
@@ -424,6 +456,9 @@ def build_bundle(
         "events": events,
         "root_hash": compute_root_hash(events),
     }
+    if completeness:
+        bundle["completeness"] = completeness
+    return bundle
 
 
 def sign_bundle(bundle: dict, host_key: HostKey, *, valid_until: str | None = None,
@@ -878,6 +913,27 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None,
 
     # 2. Root hash binds the ordered set.
     checks["root_hash"] = bundle.get("root_hash") == compute_root_hash(events)
+
+    # 2b. Completeness self-check (§12, proposal 0018): when the bundle claims to
+    # be the complete correlation, its head_hash MUST be the tail event's
+    # content_hash, the correlation_id must match the events, and as_of_sequence
+    # must be at least the tail's sequence. With genesis-contiguity (check 1: the
+    # first event's prev_hash is null) this proves a full genesis→tail chain AS
+    # CLAIMED — the teeth come from audit_completeness vs a witnessed head. The
+    # claim is signed (bundle_header), so it cannot be altered without breaking
+    # the signature.
+    claim = bundle.get("completeness")
+    if claim is not None:
+        tail = events[-1] if events else {}
+        tail_corr = (tail.get("correlation") or {}).get("correlation_id")
+        tail_seq = tail.get("sequence")
+        checks["completeness"] = (
+            claim.get("scheme") == COMPLETENESS_SCHEME
+            and bool(events)
+            and claim.get("head_hash") == tail.get("content_hash")
+            and (tail_corr is None or claim.get("correlation_id") == tail_corr)
+            and (tail_seq is None or claim.get("as_of_sequence", -1) >= tail_seq)
+        )
 
     assurance = bundle.get("assurance", "none")
     sig = bundle.get("signature")

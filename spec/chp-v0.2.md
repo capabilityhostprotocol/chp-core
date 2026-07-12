@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -817,6 +817,32 @@ mechanism applied to a store head instead of a key), verified fully offline. The
 anchor key is a designated notary or a transparency-log checkpoint key. Real
 transparency-log (Rekor/Sigstore) Merkle-inclusion proofs + gossip are out of
 scope (named in proposal 0013) — this is the signed-checkpoint form.
+
+**Non-omission — completeness** ([proposal 0018](proposals/0018-non-omission.md)).
+A bundle's `verify` already rejects a broken or non-genesis chain (leading,
+interior, and suffix drops fail), so the only surviving omissions are
+*tail-truncation* (ship a valid genesis→prefix, drop the tail) and
+*whole-correlation omission* — "the recorded tail is hidden." The witnessed head
+already commits each correlation's tail (`leaves[correlation_id]`), so
+**`chp-completeness-v1`** binds a claim on the *bundle* and audits it against that
+head — no new head digest. A signed bundle MAY carry a `completeness` block —
+`{scheme:"chp-completeness-v1", correlation_id, as_of_sequence, head_hash}`, where
+`head_hash` is the tail event's `content_hash` and `as_of_sequence` asserts *"no
+events for this correlation through global sequence N"* — bound into the signed
+bundle header **omit-when-absent** (a bundle without it is byte-identical). A
+verifier self-checks the claim against the bundle (`head_hash` = the tail, genesis
+contiguity already enforced), then audits it against witnessed store-head receipts
+(`chp completeness verify`): recompute `store_head` from a receipt's snapshot
+`leaves` to prove it is what a peer signed, then — because the per-correlation
+chain is **append-only** — a witnessed head at `sequence ≥ as_of_sequence` whose
+`leaves[correlation_id]` equals `head_hash` is **`complete`**; a *later* witnessed
+head whose leaf advanced past `head_hash` is **`incomplete`** — a provable dropped
+tail; a correlation present in a witnessed head but never exported is a whole
+omission; a correlation no witness saw is **`unwitnessed`**. The honest boundary:
+an unwitnessed tail-truncation is uncatchable — no protocol can force a host to
+record, or to have had the record witnessed (the same limit as denial of
+revocation). Third-party inclusion proofs over the signed `store_head` root alone
+(a Merkle-ized head) are out of scope (named in proposal 0018).
 
 **Cadence and posture.** Any authed peer MAY witness any peer; the reference
 gateway carries an opt-in witnessing loop (`gateway.witness_interval_s`,

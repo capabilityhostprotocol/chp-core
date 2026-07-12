@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, buildCompleteness, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import { StreamResult } from './types.js';
@@ -87,7 +87,12 @@ export class LocalCapabilityHost {
   /** Export a correlation as a bundle — signed when the host holds a key (M3). */
   exportBundle(correlationId: string): Record<string, JsonValue> {
     const events = this.store.byCorrelation(correlationId);
-    const bundle = buildBundle(this.hostId, events, nowIso());
+    // Non-omission (§12, proposal 0018): claim completeness as of the store's
+    // current global sequence, so a witness can later prove the tail intact.
+    const completeness = events.length > 0
+      ? buildCompleteness(correlationId, events, this.store.getStoreHead().sequence)
+      : null;
+    const bundle = buildBundle(this.hostId, events, nowIso(), undefined, undefined, completeness);
     if (!this.opts.signingKey) return bundle;
     return signBundle(bundle, this.opts.signingKey, {
       anchors: this.opts.domain ? [{ type: 'domain', domain: this.opts.domain }] : null,
