@@ -5,6 +5,42 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.4.1] — wire-version negotiation over 0.4.0
+
+### Added
+- **Wire-version negotiation** (chp-v0.2.md §1.1, chp-http-binding.md §2,
+  [proposals/0016](proposals/0016-wire-version-negotiation.md)): the path a
+  non-additive change would travel, specified before it is needed. A host
+  declares **`supported_versions`** on `/host` (the ordered wire lineage it
+  speaks; **absent → `[protocol_version]`**). A client selects the highest
+  mutually-supported version — `negotiate_version(client, host)`, `(major,minor)`
+  compare, `None` on disjoint — and MAY declare it via the optional
+  **`X-CHP-Version`** request header. A host receiving an explicit unsupported
+  version MUST reject with HTTP `400` + the new reserved denial code
+  **`version_unsupported`** rather than silently degrading (the tier-rejection
+  rule extended to the wire version). `host-descriptor` schema gains
+  `supported_versions`; the reserved denial-code registry gains
+  `version_unsupported`.
+
+### Compatibility
+- **Additive, no bytes move.** `supported_versions` defaults to
+  `[protocol_version]` when absent (existing descriptors unchanged);
+  `X-CHP-Version` absent → today's behavior; `version_unsupported` is a new
+  reserved code. No canonicalization/hashing/signing change — the bundle-header
+  `protocol_version` stays `"0.2"`, byte-identical to every vector. Also collapses
+  the three disconnected version literals onto `SUPPORTED_VERSIONS`/
+  `PROTOCOL_VERSION` and fixes the `/host` descriptor reporting `"0.1"` in-process
+  vs `"0.2"` over HTTP. **Patch** bump (v0.4.1) — adds a field, a header, and a
+  code; moves no existing bytes.
+
+### Regression gate
+- The byte gate: every `spec/test-vectors/` fixture verifies unchanged (no
+  signed object gained a field). Behavioral, exercised over the wire — the
+  conformance `wire` suite gains a version-negotiation check (declare → select →
+  reject) run against both reference hosts; a `protocol_checks` alignment guard
+  asserts the spec defines the mechanism and the descriptor declares
+  `supported_versions`.
+
 ## [0.4.0] — second canonicalization over 0.3.3
 
 ### Added

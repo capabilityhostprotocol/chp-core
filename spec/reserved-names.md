@@ -47,6 +47,7 @@ ordering are normative in [chp-invocation-pipeline.md](chp-invocation-pipeline.m
 - `policy_blocked`
 - `safety_blocked`
 - `unsupported_mode`
+- `version_unsupported`
 
 ## Anchor types (chp-v0.2.md §3.1)
 

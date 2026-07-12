@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Literal
@@ -600,6 +601,41 @@ class CapabilityDescriptor:
         return data
 
 
+# Wire-version lineage (spec chp-v0.2.md §1.1, proposal 0016). The single source
+# of truth for the protocol versions a host may speak; 0.2 is an additive
+# superset of 0.1 (the spec's minor feature versions 0.3.x/0.4.x still speak wire
+# "0.2"). PROTOCOL_VERSION is the preferred/highest.
+SUPPORTED_VERSIONS: tuple[str, ...] = ("0.1", "0.2")
+PROTOCOL_VERSION: str = SUPPORTED_VERSIONS[-1]
+
+
+def _ver_tuple(v: str) -> tuple[int, int]:
+    parts = v.split(".")
+    return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+
+
+def versions_upto(protocol_version: str) -> list[str]:
+    """The wire lineage a host advertising ``protocol_version`` speaks: every
+    version in SUPPORTED_VERSIONS up to and including it (an additive superset).
+    Falls back to ``[protocol_version]`` for a version outside the known lineage."""
+    if protocol_version in SUPPORTED_VERSIONS:
+        idx = SUPPORTED_VERSIONS.index(protocol_version)
+        return list(SUPPORTED_VERSIONS[: idx + 1])
+    return [protocol_version]
+
+
+def negotiate_version(
+    client_versions: Iterable[str], host_versions: Iterable[str]
+) -> str | None:
+    """The highest wire version present in BOTH sets (spec §1.1), compared as
+    (major, minor); ``None`` when they are disjoint. Deterministic and offline —
+    a client feeds its own set and the host's ``supported_versions``."""
+    common = set(client_versions) & set(host_versions)
+    if not common:
+        return None
+    return max(common, key=_ver_tuple)
+
+
 @dataclass(slots=True)
 class HostDescriptor:
     id: str
@@ -609,6 +645,8 @@ class HostDescriptor:
     capabilities: list[CapabilityDescriptor] = field(default_factory=list)
     evidence: JSON = field(default_factory=lambda: {"store": "sqlite", "append_only": True})
     metadata: JSON = field(default_factory=dict)
+    # Wire versions the host speaks (§1.1). None → derived from protocol_version.
+    supported_versions: list[str] | None = None
 
     def to_dict(self) -> JSON:
         return {
@@ -619,6 +657,7 @@ class HostDescriptor:
             "capabilities": [cap.to_dict() for cap in self.capabilities],
             "evidence": self.evidence,
             "metadata": self.metadata,
+            "supported_versions": self.supported_versions or versions_upto(self.protocol_version),
         }
 
 
@@ -646,6 +685,7 @@ class DenialReason:
         "safety_blocked",                 # a safety guardrail blocked the invocation
         "mandate_invalid",                # presented mandate failed verification (§10)
         "host_unreachable",               # routing intermediary reached no owner (§11; retryable)
+        "version_unsupported",            # explicit X-CHP-Version not in supported_versions (§1.1)
     })
 
     def to_dict(self) -> JSON:

@@ -27,6 +27,7 @@ from .types import (
     InvocationResult,
     JSON,
     ReplayQuery,
+    versions_upto,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,13 @@ def _host_version() -> str:
         except PackageNotFoundError:
             continue
     return "unknown"
+
+
+def _served_protocol_version(host_id: str | None = None) -> str:
+    """The preferred wire version this host serves (spec §1.1): a v0.2-surface
+    host (hash-chain/signed tier) advertises 0.2, a bare host 0.1. Single source
+    for /health `version`, /host `protocol_version`, and the X-CHP-Version guard."""
+    return "0.2" if _host_assurance(host_id).get("assurance") in ("hash-chain", "signed") else "0.1"
 
 
 def _scope_allows(scope: list[str], capability_id: str) -> bool:
@@ -260,6 +268,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             pass
 
     def _do_get(self) -> None:
+        if self._reject_unsupported_version():
+            return
         path = urlparse(self.path).path
         # /health is always public — required for mesh probes and load balancers
         if path == "/" or path == "/health":
@@ -271,7 +281,7 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 "host_id": host_desc.get("id") or host_desc.get("hosts", ["unknown"])[0],
                 "protocol": "chp",
                 # Same rule as /host: v0.2 surface (hash-chain/signed) → "0.2".
-                "version": "0.2" if _host_assurance().get("assurance") in ("hash-chain", "signed") else "0.1",
+                "version": _served_protocol_version(),
                 "host_version": _host_version(),
             })
             return
@@ -293,9 +303,10 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             for k, v in _host_assurance(host_id).items():
                 desc.setdefault(k, v)
             # v0.2 is an additive superset (spec/README.md): a host serving the
-            # v0.2 surface (hash-chain/signed tier) advertises 0.2.
-            if desc.get("assurance") in ("hash-chain", "signed"):
-                desc["protocol_version"] = "0.2"
+            # v0.2 surface (hash-chain/signed tier) advertises 0.2. supported_versions
+            # (§1.1) is the negotiable lineage up to that — always consistent.
+            desc["protocol_version"] = _served_protocol_version(host_id)
+            desc["supported_versions"] = versions_upto(desc["protocol_version"])
             self._write_json(desc)
             return
         if path == "/capabilities":
@@ -484,6 +495,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _do_post(self) -> None:
+        if self._reject_unsupported_version():
+            return
         if not self._check_auth():
             return
         path = urlparse(self.path).path
@@ -946,6 +959,33 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _reject_unsupported_version(self) -> bool:
+        """Version negotiation (spec §1.1, binding §2): an explicit `X-CHP-Version`
+        that is not in this host's supported set is a transport-level 400
+        `version_unsupported` — reject rather than silently process under a version
+        the caller did not ask for. Absent header → no negotiation, proceed."""
+        requested = self.headers.get("X-CHP-Version")
+        if not requested:
+            return False
+        supported = versions_upto(_served_protocol_version())
+        if requested in supported:
+            return False
+        self._write_json(
+            {
+                "error": {
+                    "code": "version_unsupported",
+                    "message": f"wire version {requested!r} not supported; host speaks {supported}",
+                },
+                "denial": {
+                    "code": "version_unsupported",
+                    "requested": requested,
+                    "supported": supported,
+                },
+            },
+            status=HTTPStatus.BAD_REQUEST,
+        )
+        return True
+
     def _write_error(self, status: HTTPStatus, code: str, message: str) -> None:
         self._write_json(
             {
@@ -1025,10 +1065,15 @@ class RemoteCapabilityHost:
     """
 
     def __init__(self, base_url: str, *, timeout: int = 30, api_key: str | None = None,
-                 retries: int = 0, retry_cap_s: float = 30.0) -> None:
+                 retries: int = 0, retry_cap_s: float = 30.0,
+                 wire_version: str | None = None) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
         self._api_key = api_key  # never emitted in evidence or logs
+        # Selected wire version (spec §1.1). When set it is declared on every
+        # request as X-CHP-Version; call negotiate() to select it from the host's
+        # supported_versions. None → no negotiation (host uses its default).
+        self._wire_version = wire_version
         # Opt-in retry (reference feature — the binding's stance stays
         # caller-retries; this is the battery-included caller). Retries
         # `host_unreachable` retryable denials (provably not executed; honors
@@ -1047,6 +1092,8 @@ class RemoteCapabilityHost:
         req = Request(f"{self._base}{path}", method="GET")
         if self._api_key:
             req.add_header("X-CHP-Key", self._api_key)
+        if self._wire_version:
+            req.add_header("X-CHP-Version", self._wire_version)
         return self._send(req)
 
     def _post(self, path: str, body: JSON) -> JSON:
@@ -1054,6 +1101,8 @@ class RemoteCapabilityHost:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["X-CHP-Key"] = self._api_key
+        if self._wire_version:
+            headers["X-CHP-Version"] = self._wire_version
         req = Request(
             f"{self._base}{path}",
             data=raw,
@@ -1061,6 +1110,25 @@ class RemoteCapabilityHost:
             method="POST",
         )
         return self._send(req)
+
+    def negotiate(self) -> str:
+        """Select the wire version to speak (spec §1.1): fetch the host's
+        ``supported_versions`` from /host and pick the highest also in this
+        client's SUPPORTED_VERSIONS. Stores it (declared as X-CHP-Version on
+        subsequent requests) and returns it. Raises ``RuntimeError`` coded
+        ``version_unsupported`` when the sets are disjoint — the client MUST NOT
+        invoke a host it shares no version with."""
+        from .types import SUPPORTED_VERSIONS, negotiate_version
+
+        desc = self.discover()
+        host_versions = desc.get("supported_versions") or [desc.get("protocol_version", "0.1")]
+        chosen = negotiate_version(SUPPORTED_VERSIONS, host_versions)
+        if chosen is None:
+            raise RuntimeError(
+                f"version_unsupported: client {list(SUPPORTED_VERSIONS)} shares no wire "
+                f"version with host {host_versions}")
+        self._wire_version = chosen
+        return chosen
 
     # Thread-local keep-alive connections, shared across instances and keyed
     # by (scheme, netloc, timeout). Thread-local because handler threads and
