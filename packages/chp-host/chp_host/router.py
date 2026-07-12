@@ -314,6 +314,7 @@ class MultiHostRouter:
         metadata: JSON | None = None,
         prefer: str | None = None,
         mandate: JSON | None = None,
+        invocation_id: str | None = None,
     ) -> InvocationResult:
         """Route an invocation to a host that owns *capability_id*.
 
@@ -326,6 +327,20 @@ class MultiHostRouter:
         to the other owners (soft pin — availability beats affinity).
         """
         corr = _normalize_correlation(correlation)
+
+        # Gate 0 — gateway exactly-once (spec §13.2, proposal 0014): a client
+        # invocation_id this gateway has already served replays from its
+        # cross-owner cache — NO owner executes, no failover re-runs. Spans
+        # owners AND gateway restarts (the store is persistent). Keyed on the
+        # CLIENT's id (forwarded below), so a retry dedupes wherever it would route.
+        if invocation_id and self.store is not None:
+            from chp_core.host import lookup_recorded_result
+            cached = lookup_recorded_result(self.store, invocation_id)
+            if cached is not None:
+                from chp_core.metrics import record_idempotent_replay
+                record_idempotent_replay()
+                return cached
+
         owners = self._routes.get(capability_id)
         if not owners:
             # Unknown capability: one inline TTL-gated refresh (stale-while-
@@ -376,6 +391,11 @@ class MultiHostRouter:
             correlation=corr,
             subject=subject or {"id": "router", "type": "system"},
             metadata=dict(metadata or {}),
+            # The CLIENT's invocation_id transits UNCHANGED (§13.2): one id
+            # client → gateway → owner, so the gateway cache above and the owner's
+            # own §13 gate 0 key on the same id. Absent → the envelope mints ONE
+            # (reused across failover; per-call, un-cacheable — matching per-host §13).
+            **({"invocation_id": invocation_id} if invocation_id else {}),
             # Forwarding rule (§10, proposal 0004): a presented mandate
             # transits UNCHANGED — the executing host's gate 5 verifies it
             # and rebinds the subject; authority survives the hop even
@@ -396,6 +416,16 @@ class MultiHostRouter:
                 record_routing_failover()
                 continue
             self._mark_healthy(tr, correlation=corr)
+            # Gateway exactly-once (§13.2): cache the owner's DEFINITIVE result
+            # under the client id so any future retry replays without re-routing.
+            # Only owner-returned outcomes are cached here — the gateway's own
+            # routing denials (capability_not_found / retryable host_unreachable
+            # below) are NOT, so a transient unreachable stays retryable.
+            if invocation_id and self.store is not None and not result.replayed:
+                try:
+                    self.store.record_result(invocation_id, result.to_dict())
+                except Exception:  # noqa: BLE001 — recording must never fail an invoke
+                    pass
             return result
 
         # No owner reachable: the mesh could not place the work — a PROCESSED
@@ -559,6 +589,9 @@ class MultiHostRouter:
             mode=envelope.mode,
             metadata=envelope.metadata,
             mandate=envelope.mandate,
+            # Gateway exactly-once (§13.2): the client's id (from_mapping guarantees
+            # one at ingress) drives the cross-owner gate 0.
+            invocation_id=envelope.invocation_id,
         )
 
     def replay_result(self, query: str | ReplayQuery | JSON) -> ReplayResult:

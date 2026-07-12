@@ -5,6 +5,38 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.3.3] — additive over 0.3.2 — **released 2026-07-11**
+
+### Added
+- **Gateway exactly-once** (chp-v0.2.md **§13.2**,
+  [proposals/0014](proposals/0014-gateway-exactly-once.md)): idempotent replay
+  (§13) extended across a routing gateway's owner set. A gateway maintains a
+  **result cache keyed by the client's `invocation_id`** — it preserves the id
+  end-to-end (client → gateway → owner), checks the cache **before routing**
+  (a hit returns `"replayed": true` and routes to no owner), and records a
+  **definitive** processed outcome (a retryable `host_unreachable` is NOT
+  cached). Spanning owners AND gateway restarts, this makes a client retry
+  exactly-once across owner selection, failover, and restart — closing the
+  cross-owner double-execution the per-host §13 cache could not.
+
+### Compatibility
+- **Behavioral, no byte changes.** The gateway result cache is serving state
+  (never chained); the `replayed:true` marker already exists. No new canonical
+  object, denial code, evidence type, schema, or test vector — every published
+  vector is byte-identical. Python-gateway-only (the TS host is a mesh member,
+  not a gateway). A gateway with no store skips the cache (best-effort).
+
+### Regression gate
+- Guard `spec_defines_gateway_exactly_once`. New mesh conformance check
+  `check_mesh_exactly_once` (a retried client `invocation_id` replays at the
+  gateway with no owner re-execution; it STILL replays after the serving owner
+  is killed). `git diff spec/test-vectors/` is empty.
+
+### Deferred
+- The lost-response-before-gateway residual (owner executed, gateway never saw
+  the result → cross-owner failover still double-executes); owner-pinned /
+  shared caches; multi-gateway distributed dedupe + cache replication.
+
 ## [0.3.2] — additive over 0.3.1 — **released 2026-07-11**
 
 ### Added
