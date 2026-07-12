@@ -1,0 +1,32 @@
+{
+  "canonicalization": "chp-stable-v1",
+  "created_at": "2026-07-12T19:28:24.362392Z",
+  "kind": "adapter-provenance",
+  "package": "chp-adapter-delegation",
+  "publisher": {
+    "host_id": "chp-release",
+    "host_identity": {
+      "anchors": [
+        {
+          "countersignature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg5qHZxtZ8HVlzspvd/WxFfXKRm6\ngyof2xXFalgUb/bHMAAAAPY2hwLWhvc3QtYW5jaG9yAAAAAAAAAAZzaGE1MTIAAABTAAAA\nC3NzaC1lZDI1NTE5AAAAQE5WEoiFMzOzfYAjeNVgWnjWh0BZkhX5ZU23jEgvZVO5/wk0bd\n/x9S7lds1MJ5ceUKgIcnLAejTfdVmYbpIJQQw=\n-----END SSH SIGNATURE-----\n",
+          "did": "did:key:z6MkuyYxVQL4aRVpAKPbG4tc15FJ9E1ryZSSHjFyqsBBuxAn",
+          "type": "did"
+        }
+      ],
+      "host_id": "chp-release",
+      "key_id": "d20d8b42b94c3375",
+      "public_key": "3iXoZQbvRVRl2rCRDpb6BYwLETaTpjtvJuvfA9EN7bU=",
+      "signature": "jQ27EeOZgkbQLFeSgXuuG8rXxwHWT83GkkOOum6DpsPJ9jIz4GPJA7Icy0UMCcB2CwRglxPuaKXnx11q4IuXBA==",
+      "valid_from": "2026-07-12T19:28:24.362392Z",
+      "valid_until": null
+    },
+    "public_key": "3iXoZQbvRVRl2rCRDpb6BYwLETaTpjtvJuvfA9EN7bU="
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "d20d8b42b94c3375",
+    "signature": "MxaXy24H6iX2AY+w+b8yYzP/kwnTnZtTh5QZMdkbBAgx/4SRbWwnyrioUGFpFGsdabea4GHxJr8jZsX+lDyOCQ=="
+  },
+  "version": "0.31.0",
+  "wheel_sha256": "279fa9e192eb469604c587cc96463c5d0042b5814a2df1ffa8e56af6dd2c0249"
+}
