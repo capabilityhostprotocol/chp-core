@@ -79,7 +79,7 @@ def test_reference_gateway_passes_mesh_suite(tmp_path):
     failures = [(r.name, r.detail) for r in results if not r.ok]
     assert not failures, (
         f"mesh suite failures: {failures}\n--- gateway output ---\n{out[-3000:]}")
-    assert len(results) == 8
+    assert len(results) == 9
 
 
 def test_mesh_suite_requires_gateway_url(capsys):

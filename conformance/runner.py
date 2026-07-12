@@ -2627,6 +2627,53 @@ async def check_mesh_export_refuses_partial(h: "MeshHarness") -> None:
     raise AssertionError("partial /export must refuse with 503, not return a bundle")
 
 
+async def check_mesh_exactly_once(h: "MeshHarness") -> None:
+    """DESTRUCTIVE (last): gateway exactly-once across owners (§13.2, proposal
+    0014). member-a is already down. Serve mesh.echo under a pinned CLIENT
+    invocation_id via member-b, retry it (the gateway replays — served_by
+    unchanged, no re-execution), then kill member-b too: the cached id STILL
+    replays from the gateway's cross-owner cache while a FRESH id is
+    host_unreachable — proving the gateway served the work exactly once."""
+    import json as _json
+    import urllib.request
+
+    base = getattr(h.gateway, "_base", "")
+    api_key = getattr(h.gateway, "_api_key", None)
+
+    def _invoke(inv_id: str, corr: str):
+        body = {"capability_id": "mesh.echo", "payload": {},
+                "correlation": {"correlation_id": corr}, "invocation_id": inv_id,
+                "subject": {"id": "client", "type": "user"}, "metadata": {}}
+        req = urllib.request.Request(
+            f"{base}/invoke", data=_json.dumps(body).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"X-CHP-Key": api_key} if api_key else {})}, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return _json.loads(resp.read().decode())
+
+    inv = f"{RUN}-x1once"
+    corr = f"{RUN}-mesh-x1"
+    r1 = _invoke(inv, corr)
+    assert r1.get("outcome") == "success", f"first invoke must succeed via member-b: {r1}"
+    served = (r1.get("data") or {}).get("served_by")
+    assert served == "mesh-member-b", f"member-b should serve (A down): {served}"
+    assert not r1.get("replayed"), "first invoke is a fresh execution"
+
+    r2 = _invoke(inv, corr)
+    assert r2.get("replayed") is True, "a retried client id MUST replay at the gateway"
+    assert (r2.get("data") or {}).get("served_by") == served, "replayed result is the same"
+
+    # Kill the serving owner too. A NON-cached invoke would now be host_unreachable;
+    # the cached id must STILL replay from the gateway's cross-owner cache.
+    h.stop_member("member-b")
+    r3 = _invoke(inv, corr)
+    assert r3.get("replayed") is True, (
+        "the cached id must replay even with every owner down (exactly-once)")
+    fresh = _invoke(f"{inv}-fresh", f"{corr}-fresh")
+    assert fresh.get("outcome") == "denied" and (fresh.get("denial") or {}).get("code") == "host_unreachable", (
+        f"a FRESH id with all owners down must be host_unreachable: {fresh}")
+
+
 MESH_CHECKS: list[tuple[str, Check]] = [
     # ORDERED + STATEFUL — never reorder (destructive checks last; later
     # checks read state earlier checks recorded).
@@ -2638,6 +2685,7 @@ MESH_CHECKS: list[tuple[str, Check]] = [
     ("host_unreachable is a processed denial (§11)", check_mesh_host_unreachable),
     ("partial replay disclosed + gateway chain merged", check_mesh_replay_disclosure),
     ("export refuses partial with 503", check_mesh_export_refuses_partial),
+    ("gateway exactly-once across owners (§13.2, proposal 0014)", check_mesh_exactly_once),
 ]
 
 

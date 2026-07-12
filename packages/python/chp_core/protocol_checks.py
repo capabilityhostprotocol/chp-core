@@ -441,6 +441,16 @@ def check_alignment(repo_root: Path) -> JSON:
             and "chp-store-head-anchor-v1" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Gateway exactly-once (§13.2, proposal 0014).
+        add_check(
+            checks,
+            "spec_defines_gateway_exactly_once",
+            "Gateway exactly-once" in spec_v02
+            and "keyed by the client's" in spec_v02
+            and "spans its owners" in spec_v02
+            and "routes to no owner" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.
