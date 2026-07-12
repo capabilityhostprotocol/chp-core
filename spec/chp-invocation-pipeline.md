@@ -60,7 +60,7 @@ replay never bypasses it. Streaming mode is excluded.
 | # | Gate | Trigger (exact predicate) | Outcome | Code | `retryable` | Events emitted |
 |---|------|---------------------------|---------|------|-------------|----------------|
 | 1 | Non-empty id | `capability_id` is missing, empty, or whitespace-only | `denied` | `capability_not_found` | false | `execution_denied` |
-| 2 | Resolution | No registered capability matches `(capability_id, version)`. If `version` is null and exactly one version is registered, it resolves; an ambiguous unversioned match does **not** resolve | `denied` | `capability_not_found` | false | `execution_denied` |
+| 2 | Resolution | No registered capability matches `(capability_id, version)`. If `version` is null and exactly one version is registered, it resolves; an ambiguous unversioned match does **not** resolve. When the envelope carries `requested_capability_version` (a semver range, proposal 0028): the id resolves but **no registered version satisfies the range** → `capability_version_unsupported` (the capability exists — distinct from `capability_not_found`); `details` carry `requested` + `available` | `denied` | `capability_not_found` **or** `capability_version_unsupported` | false | `execution_denied` |
 | 3 | Enabled | The resolved capability is registered but **disabled** | **`skipped`** | `capability_disabled` | n/a | `execution_skipped` |
 | 4 | Mode | `envelope.mode` ∉ `descriptor.modes` | `denied` | `unsupported_mode` | false | `execution_denied` |
 | 5 | Mandate | The envelope presents a `mandate` (see §3) | `denied` when it fails | `mandate_invalid`, `mandate_exhausted`, **or** `policy_blocked` | false | `execution_denied`; a VALID in-scope mandate denies nothing — it rebinds the subject |

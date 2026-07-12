@@ -1,0 +1,81 @@
+{
+  "cases": [
+    {
+      "satisfies": true,
+      "spec": "1.2.3",
+      "version": "1.2.3"
+    },
+    {
+      "satisfies": false,
+      "spec": "1.2.3",
+      "version": "1.2.4"
+    },
+    {
+      "satisfies": true,
+      "spec": "^1.2.0",
+      "version": "1.5.0"
+    },
+    {
+      "satisfies": false,
+      "spec": "^1.2.0",
+      "version": "2.0.0"
+    },
+    {
+      "satisfies": true,
+      "spec": "~1.2.3",
+      "version": "1.2.9"
+    },
+    {
+      "satisfies": false,
+      "spec": "~1.2.3",
+      "version": "1.3.0"
+    },
+    {
+      "satisfies": true,
+      "spec": ">=1.0 <2",
+      "version": "1.7.0"
+    },
+    {
+      "satisfies": false,
+      "spec": ">=1.0 <2",
+      "version": "2.0.0"
+    },
+    {
+      "satisfies": true,
+      "spec": "1.x",
+      "version": "1.9.9"
+    },
+    {
+      "satisfies": false,
+      "spec": "1.x",
+      "version": "2.0.0"
+    },
+    {
+      "satisfies": true,
+      "spec": "1.2.x",
+      "version": "1.2.9"
+    },
+    {
+      "satisfies": false,
+      "spec": "1.2.x",
+      "version": "1.3.0"
+    },
+    {
+      "satisfies": true,
+      "spec": "*",
+      "version": "3.1.4"
+    },
+    {
+      "satisfies": true,
+      "spec": "^0.2.0",
+      "version": "0.2.5"
+    },
+    {
+      "satisfies": false,
+      "spec": "^0.2.0",
+      "version": "0.3.0"
+    }
+  ],
+  "kind": "version-negotiation",
+  "note": "chp-v0.2.md \u00a71.1 (proposal 0028): version_satisfies(version, spec) over the semver subset {exact, ^, ~, >=/>/<=/<, x-ranges, space=AND}."
+}

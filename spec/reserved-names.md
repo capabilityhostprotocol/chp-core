@@ -40,6 +40,7 @@ ordering are normative in [chp-invocation-pipeline.md](chp-invocation-pipeline.m
 - `budget_exceeded`
 - `capability_disabled`
 - `capability_not_found`
+- `capability_version_unsupported`
 - `host_unreachable`
 - `input_schema_validation_failed`
 - `invariant_failed`
