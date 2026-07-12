@@ -462,6 +462,53 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "completeness_vector_verifies", False, {"error": str(exc)})
 
+    # Merkle store head + inclusion (proposal 0019): the spec must define
+    # chp-store-head-v2, the v2 vector's root must recompute, and the inclusion
+    # vector must verify third-party (recompute the Merkle root from one leaf up
+    # the audit path == the anchored root) with a valid external anchor.
+    spec_v02_mk = read_text(repo_root / "spec" / "chp-v0.2.md")
+    add_check(
+        checks,
+        "spec_defines_store_head_v2",
+        "chp-store-head-v2" in spec_v02_mk and "RFC 6962" in spec_v02_mk
+        and "inclusion proof" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §12 must register chp-store-head-v2 (RFC 6962 Merkle) + inclusion proofs"},
+    )
+    v2_vec = repo_root / "spec" / "test-vectors" / "store-head-v2.json"
+    if v2_vec.exists():
+        try:
+            from .merkle import store_head_root
+
+            hv = read_json(v2_vec)
+            add_check(
+                checks,
+                "store_head_v2_root_recomputes",
+                store_head_root("chp-store-head-v2", hv["leaves"]) == hv["store_head"],
+                {"hint": "regenerate store-head-v2.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "store_head_v2_root_recomputes", False, {"error": str(exc)})
+    incl_vec = repo_root / "spec" / "test-vectors" / "store-head-inclusion.json"
+    if incl_vec.exists():
+        try:
+            from .merkle import verify_store_head_inclusion
+            from .signing import verify_store_head_anchor
+
+            iv = read_json(incl_vec)
+            anchor, proof = iv["anchor"], iv["proof"]
+            add_check(
+                checks,
+                "inclusion_vector_verifies",
+                verify_store_head_anchor(anchor).valid
+                and verify_store_head_inclusion(
+                    anchor["store_head"], proof["correlation_id"], proof["head_hash"], proof)
+                and not verify_store_head_inclusion(
+                    anchor["store_head"], proof["correlation_id"], "f" * 64, proof),
+                {"hint": "regenerate store-head-inclusion.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "inclusion_vector_verifies", False, {"error": str(exc)})
+
     # Anchors (spec §3.1): the anchored vector must still verify (guards the
     # omit-when-empty conditional in build/verify), and the spec must define
     # the anchor mechanism + the well-known route.

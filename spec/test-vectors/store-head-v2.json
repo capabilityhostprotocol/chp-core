@@ -1,0 +1,13 @@
+{
+  "leaves": {
+    "corr_0": "8a1a96301cb702959bacd166dc43e8fe4ff50d3ee859a36ed5f609b47601c14b",
+    "corr_1": "0e57267873d1a4e49053889179eea85b876f8b19a96bb17bc266e58ee35ee7de",
+    "corr_2": "d1100efe3cbf6976dfe9604db55c3d59fb408209eb7c8003515dfa87bb4201d4",
+    "corr_3": "af0ed1cbb38fffb77cbc52851ae7d99e24efaeb923cf2361295c796a46d0edf6",
+    "corr_4": "96c05a3d2b99a1eb3975129a0d73b398d5f9ed30b359850094a85cb274cd7ac1"
+  },
+  "note": "chp-store-head-v2 = RFC 6962 Merkle root over sorted correlation_id\\x00head_hash\\n leaves; leaf SHA256(0x00||d), node SHA256(0x01||L||R), split at the largest power of two.",
+  "scheme": "chp-store-head-v2",
+  "sequence": 42,
+  "store_head": "cd1cf3f5ce585771b3dd8f8b2ab7bbb39f489866884a19ba79005bd4f563c018"
+}

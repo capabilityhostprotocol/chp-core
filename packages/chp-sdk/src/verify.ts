@@ -10,6 +10,7 @@ import { canon, canonFor, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
 import { attenuates, bundleHeader, computeStoreHead, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader, COMPLETENESS_SCHEME } from './signing.js';
+import { verifyStoreHeadInclusion, type StoreHeadInclusion } from './merkle.js';
 import { didKeyToRaw, verifySshsig, STORE_HEAD_ANCHOR_NAMESPACE } from './sshsig.js';
 import { orderEvents } from './ordering.js';
 
@@ -506,6 +507,37 @@ export function auditCompleteness(
     : confirmedAt !== null ? 'complete'
     : 'unwitnessed';
   return { verdict, correlation_id: corr, as_of_sequence: asOf, confirmed_at: confirmedAt, advanced_at: advancedAt };
+}
+
+/**
+ * Third-party, witness-free non-omission (§12, proposal 0019). A relying party
+ * holding only a bundle's completeness claim, an externally-anchored
+ * chp-store-head-v2 root, and an RFC 6962 inclusion proof — no leaves, no
+ * witness — proves the correlation's committed tail. A truncated bundle cannot
+ * produce a proof for the truncated tail (it is not in the tree), so the
+ * anchored tail differs → `incomplete`. Byte-parity with Python
+ * `witnessing.audit_completeness_via_anchor`.
+ */
+export function auditCompletenessViaAnchor(
+  bundle: Record<string, JsonValue>,
+  anchor: Record<string, JsonValue>,
+  inclusionProof: StoreHeadInclusion,
+): { verdict: string; correlation_id?: string } {
+  const claim = bundle.completeness as Record<string, JsonValue> | undefined;
+  if (!claim) return { verdict: 'no_claim' };
+  const corr = String(claim.correlation_id);
+  const asOf = Number(claim.as_of_sequence);
+  const headHash = String(claim.head_hash);
+  if (!verifyStoreHeadAnchor(anchor).valid) return { verdict: 'anchor_invalid', correlation_id: corr };
+  const root = String(anchor.store_head);
+  const seq = anchor.sequence as number | undefined;
+  const anchoredTail = inclusionProof.head_hash;
+  if (inclusionProof.correlation_id !== corr
+      || !verifyStoreHeadInclusion(root, corr, anchoredTail, inclusionProof)) {
+    return { verdict: 'proof_invalid', correlation_id: corr };
+  }
+  if (seq == null || seq < asOf) return { verdict: 'unwitnessed', correlation_id: corr };
+  return { verdict: anchoredTail === headHash ? 'complete' : 'incomplete', correlation_id: corr };
 }
 
 // ── Mandates — delegated authority on the wire (chp-v0.2.md §10, proposal 0002)

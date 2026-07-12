@@ -1027,6 +1027,35 @@ def cmd_completeness_verify(args: argparse.Namespace) -> int:
     return 1 if audit["verdict"] in ("incomplete", "snapshot_invalid") else 0
 
 
+def cmd_head_inclusion(args: argparse.Namespace) -> int:
+    """Third-party, witness-free non-omission (§12, proposal 0019): given a
+    store-head-inclusion file ({anchor, proof}), verify the external anchor's
+    SSHSIG and recompute the RFC 6962 Merkle root from one correlation's leaf up
+    the audit path — with NO leaves snapshot and NO witness. Exit 1 if either
+    the anchor or the inclusion fails."""
+    import sys
+
+    from .. import signing
+    from ..merkle import verify_store_head_inclusion
+
+    with open(args.file) as fh:
+        doc = json.load(fh)
+    anchor, proof = doc.get("anchor") or {}, doc.get("proof") or {}
+    anchor_ok = signing.verify_store_head_anchor(anchor).valid
+    incl_ok = verify_store_head_inclusion(
+        str(anchor.get("store_head", "")), str(proof.get("correlation_id")),
+        proof.get("head_hash"), proof)
+    result = {
+        "anchor_valid": anchor_ok,
+        "inclusion_valid": incl_ok,
+        "correlation_id": proof.get("correlation_id"),
+        "anchored_root": anchor.get("store_head"),
+        "verdict": "included" if (anchor_ok and incl_ok) else "invalid",
+    }
+    print(json.dumps(result, indent=2))
+    return 0 if anchor_ok and incl_ok else 1
+
+
 def cmd_bundle_minimize(args: argparse.Namespace) -> int:
     """Selective disclosure (§14, proposal 0011): write a disclosure-minimized
     copy of a signed bundle — chp-event-hash-v2 payloads matching the filter are
