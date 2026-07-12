@@ -930,6 +930,38 @@ def cmd_witness_verify(args: argparse.Namespace) -> int:
     return 1 if tampered else 0
 
 
+def cmd_witness_quorum(args: argparse.Namespace) -> int:
+    """Witness quorum (§12, proposal 0013): count DISTINCT valid witnesses over a
+    head vs k → quorum_met / quorum_short. Input is a JSON list of chain-witness
+    statements (or a `/witnesses` response `{witnesses:[...]}`). Exit 1 when
+    short."""
+    from .. import witnessing
+
+    with open(args.statements) as fh:
+        doc = json.load(fh)
+    statements = doc.get("witnesses") if isinstance(doc, dict) else doc
+    witness_set = args.witness_set.split(",") if args.witness_set else None
+    q = witnessing.evaluate_witness_quorum(
+        statements, host_id=args.host_id, sequence=args.sequence,
+        store_head=args.store_head, k=args.k, witness_set=witness_set)
+    print(json.dumps(q, indent=2))
+    return 0 if q["verdict"] == "quorum_met" else 1
+
+
+def cmd_witness_anchor_verify(args: argparse.Namespace) -> int:
+    """Offline-verify a store-head-anchor (§12 External anchoring, proposal 0013):
+    the external did:key must have SSHSIG-countersigned this (host_id, sequence,
+    store_head, anchored_at). Exit 1 if invalid."""
+    from .. import signing
+
+    with open(args.file) as fh:
+        anchor = json.load(fh)
+    v = signing.verify_store_head_anchor(anchor)
+    print(json.dumps({"valid": v.valid, "checks": v.checks,
+                      "anchored_did": v.anchored_did, "reason": v.reason}, indent=2))
+    return 0 if v.valid else 1
+
+
 def cmd_revocation_verify(args: argparse.Namespace) -> int:
     """The freshness auditor act (§12, proposal 0010): recompute each witnessed
     receipt's revocation_head from its snapshot (tamper-evidence) and compare

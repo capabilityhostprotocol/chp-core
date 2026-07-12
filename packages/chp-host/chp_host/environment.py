@@ -76,6 +76,12 @@ class GatewayConfig:
     # Mesh witnessing interval in seconds (spec §12). 0/absent = off. Each
     # tick this node countersigns every peer's store head.
     witness_interval_s: float = 0.0
+    # Witness quorum policy (spec §12, proposal 0013). k = distinct witnesses
+    # required for a head to count as witnessed-at-quorum (0/absent = off, audit
+    # not enforced). witness_set (optional) = the allowed witness key_ids (the n);
+    # None = any valid witness. Audit-side only — the witness loop is unchanged.
+    witness_quorum_k: int = 0
+    witness_set: tuple[str, ...] = ()
     # Scheduled retention (hardening arc). 0/absent = off. Each tick applies
     # the policies in retention_config (the `chp retention apply` JSON format)
     # to the gateway store, then rebuilds the correlation-heads cache.
@@ -151,6 +157,8 @@ class EnvironmentConfig:
                        if gateway_raw.get("store") else None),
                 probe_interval_s=float(gateway_raw.get("probe_interval_s", 0) or 0),
                 witness_interval_s=float(gateway_raw.get("witness_interval_s", 0) or 0),
+                witness_quorum_k=int(gateway_raw.get("witness_quorum_k", 0) or 0),
+                witness_set=tuple(gateway_raw.get("witness_set", []) or []),
                 retention_interval_s=float(gateway_raw.get("retention_interval_s", 0) or 0),
                 retention_config=(str(Path(str(gateway_raw["retention_config"])).expanduser())
                                   if gateway_raw.get("retention_config") else None),

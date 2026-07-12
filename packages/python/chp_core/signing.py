@@ -391,6 +391,65 @@ def verify_did_anchor(anchor: dict, chp_public_key_b64: str, host_id: str) -> bo
     )
 
 
+def store_head_anchor_message(host_id: str, sequence: int, store_head: str,
+                              anchored_at: str) -> bytes:
+    """The exact bytes an external DID key countersigns to anchor a store head
+    (chp-v0.2.md §12 External anchoring, proposal 0013): chp-stable-v1 of
+    {kind, host_id, sequence, store_head, anchored_at}, SSHSIG namespace
+    ``chp-store-head-anchor``. Shared by the producer and the verifier."""
+    return _canon({"kind": "store-head-anchor", "host_id": host_id,
+                   "sequence": sequence, "store_head": store_head,
+                   "anchored_at": anchored_at})
+
+
+def build_store_head_anchor(host_id: str, sequence: int, store_head: str, *,
+                            anchored_at: str, did: str, countersignature: str) -> dict:
+    """Assemble a ``store-head-anchor`` statement (§12, proposal 0013) from an
+    external DID key's SSHSIG ``countersignature`` over
+    ``store_head_anchor_message(...)``. The countersignature is produced OUTSIDE
+    the mesh (a notary / transparency-log checkpoint key); this only assembles +
+    the verifier checks it offline."""
+    return {"kind": "store-head-anchor", "host_id": host_id, "sequence": sequence,
+            "store_head": store_head, "anchored_at": anchored_at,
+            "anchor": {"type": "did", "did": did, "countersignature": countersignature}}
+
+
+def verify_store_head_anchor(statement: dict) -> BundleVerification:
+    """Offline-verify a store-head anchor: the external did:key's ed25519 key
+    must have SSHSIG-countersigned THIS (host_id, sequence, store_head,
+    anchored_at) under namespace ``chp-store-head-anchor``. Independent of the
+    witnessing peer set — an anchored head survives even if every witness
+    colludes."""
+    from . import sshsig  # noqa: PLC0415
+
+    checks: dict[str, bool] = {}
+    checks["structure"] = (statement.get("kind") == "store-head-anchor"
+                           and bool(statement.get("host_id"))
+                           and isinstance(statement.get("sequence"), int)
+                           and bool(statement.get("store_head")))
+    anchor = statement.get("anchor") or {}
+    anchored_did: str | None = None
+    try:
+        raw_pub = sshsig.did_key_to_raw(str(anchor.get("did", "")))
+        checks["anchor"] = sshsig.verify_sshsig(
+            str(anchor.get("countersignature", "")),
+            store_head_anchor_message(str(statement.get("host_id")),
+                                      int(statement.get("sequence", 0)),
+                                      str(statement.get("store_head")),
+                                      str(statement.get("anchored_at", ""))),
+            namespace=sshsig.STORE_HEAD_ANCHOR_NAMESPACE,
+            expected_raw_pubkey=raw_pub)
+        if checks["anchor"]:
+            anchored_did = str(anchor.get("did"))
+    except sshsig.SshsigError:
+        checks["anchor"] = False
+
+    valid = all(checks.values())
+    reason = None if valid else "store-head-anchor checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason, anchored_did=anchored_did)
+
+
 # --------------------------------------------------------------------------
 # Key lifecycle: rotation with continuity, history, revocation (spec §3.2)
 # --------------------------------------------------------------------------
