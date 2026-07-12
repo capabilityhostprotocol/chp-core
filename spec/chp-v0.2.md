@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -580,10 +580,23 @@ connection, and every later pipeline gate still applies.
 **Principal trust.** The attestation verifies offline with no prior
 relationship; anchors (§3.1) upgrade *self-declared* to *externally rooted*.
 A verifier MAY additionally require the principal's key to match a mesh pin.
-`max_invocations` enforcement remains deliberately out of scope; expiry
-(`valid_until`) is the floor every host enforces, revocation (below) upgrades
+Expiry (`valid_until`) is the floor every host enforces, revocation (below) upgrades
 recovery, and sub-delegation (below) extends a mandate into an
 attenuation-only chain.
+
+**Use-count caps** ([proposal 0026](proposals/0026-max-invocations.md)). A mandate
+MAY carry an optional **`max_invocations`** — a signed-header field (omit-when-
+absent, so an uncapped mandate is byte-identical) that bounds *how many times* the
+delegate may invoke, not just *what* and *until when*. The mandate gate counts the
+**distinct `invocation_id`s** recorded under this `mandate_id` (the idempotent-
+replay key, so a replayed invocation never double-counts) and, once the count
+reaches the cap, denies **`mandate_exhausted`** (`retryable: false` — the grant is
+spent; `details` carries `used` + `max_invocations`); otherwise it records the use
+and proceeds. The count is per delegate host — a shared cross-host counter, rate-
+limit windows, and reclaiming a count on a failed execution are out of scope. A
+sub-mandate MAY only **lower** the cap (attenuation). The
+`delegation_created/accepted/completed/rejected` lifecycle events are recognized
+evidence types so a delegated hand-off is chainable, not adapter-local.
 
 **Revocation** ([proposal 0007](proposals/0007-revocation-distribution.md)).
 A principal MAY withdraw a mandate before its expiry with a

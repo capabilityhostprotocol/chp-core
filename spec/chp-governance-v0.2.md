@@ -47,6 +47,7 @@ accompanies a **`skipped`** outcome, not `denied` (pipeline gate 3).
 | `approval_required` | A human-approval gate is unsatisfied (§4.1). | true |
 | `safety_blocked` | A safety guardrail blocked the invocation (§4.2). | false |
 | `mandate_invalid` | A presented mandate failed verification — bad signature, principal attestation, validity window, or delegate binding (chp-v0.2.md §10). An expired mandate is NOT retryable: a new mandate is a new object. | false |
+| `mandate_exhausted` | A mandate's signed `max_invocations` cap was reached — the delegate has already used the grant its limit of distinct invocations (chp-v0.2.md §10, proposal 0026). NOT retryable: the grant is spent; a new mandate is a new object. `details` SHOULD carry `used` and `max_invocations`. | false |
 | `host_unreachable` | A **routing intermediary** could reach no owner of the capability (chp-v0.2.md §11). Emitted only by intermediaries — a single host never emits it. `details` SHOULD carry `attempted_hosts`, `last_error`, `retry_after_s`. | true |
 | `version_unsupported` | The caller declared an explicit wire version (the HTTP binding's `X-CHP-Version`) that is not in the host's `supported_versions` (chp-v0.2.md §1.1). A transport-level rejection before routing — HTTP `400`, not a `200` governance denial; `details` SHOULD carry `requested` and `supported`. | false |
 

@@ -287,6 +287,9 @@ export function mandateHeader(mandate: Record<string, JsonValue>): JsonValue {
     h.depth = mandate.depth ?? null;
     h.parent_id = mandate.parent_id ?? null;
   }
+  // Use-count cap (§10, proposal 0026): signed only when present, so an uncapped
+  // mandate's header is byte-identical to pre-0026.
+  if (mandate.max_invocations != null) h.max_invocations = mandate.max_invocations;
   return h;
 }
 

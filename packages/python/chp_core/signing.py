@@ -1436,6 +1436,10 @@ def mandate_header(mandate: dict) -> dict:
     if mandate.get("parent_id"):
         header["depth"] = mandate.get("depth")
         header["parent_id"] = mandate.get("parent_id")
+    if mandate.get("max_invocations") is not None:
+        # Use-count cap (§10, proposal 0026) is signed only when present, so an
+        # uncapped mandate's header is byte-identical to pre-0026.
+        header["max_invocations"] = mandate["max_invocations"]
     return header
 
 
@@ -1478,7 +1482,8 @@ def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
                   scope: list[str], valid_from: str, valid_until: str,
                   created_at: str, mandate_id: str | None = None,
                   anchors: list[dict] | None = None,
-                  key_history: list[dict] | None = None) -> dict:
+                  key_history: list[dict] | None = None,
+                  max_invocations: int | None = None) -> dict:
     """A principal's signed grant of BOUNDED authority to a delegate (proposal
     0002, chp-v0.2.md §10): "delegate D may invoke capabilities in SCOPE on my
     behalf until VALID_UNTIL."
@@ -1501,6 +1506,9 @@ def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
         "created_at": created_at,
         "canonicalization": CANONICALIZATION,
     }
+    if max_invocations is not None:
+        # Signed-header use-count cap (§10, proposal 0026), omit-when-absent.
+        mandate["max_invocations"] = max_invocations
     mandate["principal"] = {
         "host_id": principal_id,
         "public_key": host_key.public_key_b64,
