@@ -365,7 +365,8 @@ if (input.kind === "adapter-provenance") {
                      delegate_id: m.delegate_id, scope: m.scope,
                      valid_from: m.valid_from, valid_until: m.valid_until,
                      created_at: m.created_at, canonicalization: m.canonicalization,
-                     ...(m.parent_id ? { depth: m.depth, parent_id: m.parent_id } : {}) };
+                     ...(m.parent_id ? { depth: m.depth, parent_id: m.parent_id } : {}),
+                     ...(m.max_invocations != null ? { max_invocations: m.max_invocations } : {}) };
     let good = m.signature?.algorithm === "ed25519" && vC(header, m.signature.signature);
     const att = principal.host_identity;
     if (att) {

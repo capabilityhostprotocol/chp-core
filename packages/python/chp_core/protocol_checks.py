@@ -604,6 +604,34 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "sealed_vector_verifies", False, {"error": str(exc)})
 
+    # max_invocations enforcement (proposal 0026): the spec must define the cap, and
+    # a capped mandate must verify (the header signs max_invocations) while a raised
+    # cap breaks the signature.
+    add_check(
+        checks,
+        "spec_defines_max_invocations",
+        "max_invocations" in spec_v02_mk and "mandate_exhausted" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §10 must define max_invocations + mandate_exhausted"},
+    )
+    capped_vec = repo_root / "spec" / "test-vectors" / "mandate-capped.json"
+    if capped_vec.exists():
+        try:
+            from .signing import verify_mandate as _vm_cap
+
+            cap_m = read_json(capped_vec)
+            tampered_cap = dict(cap_m)
+            tampered_cap["max_invocations"] = (cap_m.get("max_invocations") or 0) + 100
+            add_check(
+                checks,
+                "capped_mandate_vector_verifies",
+                cap_m.get("max_invocations") is not None
+                and _vm_cap(cap_m, at_time=cap_m["valid_from"]).valid
+                and not _vm_cap(tampered_cap, at_time=cap_m["valid_from"]).valid,
+                {"hint": "regenerate mandate-capped.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "capped_mandate_vector_verifies", False, {"error": str(exc)})
+
     # Remote monitor (proposal 0024): the spec must define the no-store-copy monitor
     # and the /head/consistency serving endpoint.
     add_check(

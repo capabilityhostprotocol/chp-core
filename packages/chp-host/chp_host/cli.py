@@ -754,28 +754,69 @@ def _tailscale_ip() -> str:
     return ""
 
 
+def _secrets_file(key: str):
+    """Per-key secret file for the non-macOS fallback store — ``~/.chp/secrets/<key>``
+    (0600). macOS uses the login Keychain; Linux/WSL/Windows have no ``security``
+    binary, so a mode-restricted file is the portable store (an operator MAY instead
+    inject the value via env / a systemd EnvironmentFile — env always wins on read)."""
+    from pathlib import Path
+
+    safe = "".join(c for c in key if c.isalnum() or c in "._-")
+    return Path.home() / ".chp" / "secrets" / safe
+
+
 def _store_keychain(key: str, value: str) -> bool:
+    """Persist a secret. macOS → login Keychain; elsewhere → a 0600 file under
+    ~/.chp/secrets. Returns True on success."""
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(
+                ["security", "add-generic-password", "-a", key,
+                 "-s", "com.chp.secrets", "-w", value, "-U"],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                return True
+        except Exception:
+            pass
+    # File fallback (non-macOS, or macOS without a usable Keychain).
     try:
-        r = subprocess.run(
-            ["security", "add-generic-password", "-a", key,
-             "-s", "com.chp.secrets", "-w", value, "-U"],
-            capture_output=True, text=True,
-        )
-        return r.returncode == 0
+        path = _secrets_file(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value)
+        try:
+            path.chmod(0o600)
+        except OSError:  # pragma: no cover - non-POSIX
+            pass
+        return True
     except Exception:
         return False
 
 
 def _read_keychain(key: str) -> str | None:
-    """Return the value stored under *key* in the CHP keychain, or None."""
+    """Return a stored secret: env var → macOS Keychain → ~/.chp/secrets file.
+    Env always wins so a systemd EnvironmentFile / container env overrides any
+    on-disk value; the Keychain path is macOS-only."""
+    env = os.environ.get(key)
+    if env:
+        return env
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(
+                ["security", "find-generic-password", "-a", key,
+                 "-s", "com.chp.secrets", "-w"],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+        except Exception:
+            pass
     try:
-        r = subprocess.run(
-            ["security", "find-generic-password", "-a", key,
-             "-s", "com.chp.secrets", "-w"],
-            capture_output=True, text=True,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
+        path = _secrets_file(key)
+        if path.exists():
+            val = path.read_text().strip()
+            if val:
+                return val
     except Exception:
         pass
     return None

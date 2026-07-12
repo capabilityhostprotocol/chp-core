@@ -57,6 +57,11 @@
       "minimum": 1,
       "description": "Sub-delegation (chp-v0.2.md section 10, proposal 0009): chain depth, root omits it (depth 0), each attenuating link increments. Signed-header field, present only when parent_id is set."
     },
+    "max_invocations": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional use-count cap (chp-v0.2.md section 10, proposal 0026): the delegate may invoke under this mandate at most this many distinct invocations; the host counts distinct invocation_ids per mandate_id and denies mandate_exhausted past the cap. Signed-header field (covered by the signature), present only when set; absent means unlimited. A sub-mandate MAY only lower it (attenuation)."
+    },
     "parent_id": {
       "type": "string",
       "minLength": 1,
