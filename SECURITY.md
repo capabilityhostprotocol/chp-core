@@ -26,7 +26,8 @@ wire compatibility.
 
 ## Threat model & hardening
 
-- Threat model: [docs/security/threat-model-v0.1.md](docs/security/threat-model-v0.1.md)
+- Security model (normative, current): [spec/chp-security-model.md](spec/chp-security-model.md) — the guarantee × adversary × residual-risk matrix
+- Threat model (v0.1, superseded): [docs/security/threat-model-v0.1.md](docs/security/threat-model-v0.1.md)
 - Production hardening & operations: [docs/production-runbook.md](docs/production-runbook.md)
 - Key compromise recovery: rotation (spec §3.2) → key revocation → re-anchor
   → mandate revocation (spec §10) — the runbook has the step-by-step.
