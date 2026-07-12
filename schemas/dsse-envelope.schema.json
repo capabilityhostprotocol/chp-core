@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/dsse-envelope.schema.json",
+  "title": "DsseEnvelope",
+  "description": "A DSSE (Dead Simple Signing Envelope) wrapping an in-toto Statement (chp-v0.2.md section 15, proposal 0021). CHP exports a signed evidence bundle as this envelope for portability into the Sigstore/in-toto/SLSA ecosystem. The signature is ed25519 over the DSSE PAE: DSSEv1 SP LEN(payloadType) SP payloadType SP LEN(body) SP body, where body is the raw base64-decoded payload. Conforms to the upstream DSSE spec.",
+  "type": "object",
+  "required": [
+    "payload",
+    "payloadType",
+    "signatures"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "payload": {
+      "type": "string",
+      "description": "base64 of the in-toto Statement JSON bytes (the DSSE body)."
+    },
+    "payloadType": {
+      "const": "application/vnd.in-toto+json",
+      "description": "The DSSE payload type for an in-toto attestation."
+    },
+    "signatures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "keyid",
+          "sig"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "keyid": {
+            "type": "string",
+            "description": "The signing key id (CHP host key_id = sha256(pubkey)[:16])."
+          },
+          "sig": {
+            "type": "string",
+            "description": "base64 ed25519 signature over the DSSE PAE."
+          }
+        }
+      }
+    }
+  }
+}
