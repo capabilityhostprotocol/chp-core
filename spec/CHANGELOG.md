@@ -5,6 +5,31 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.7.0] — Sealed payloads / confidentiality over 0.6.3
+
+### Added
+- **Sealed payloads** (chp-v0.2.md §16,
+  [proposals/0025](proposals/0025-sealed-payloads.md)): the first confidentiality
+  feature. A payload is encrypted to a recipient's X25519 key (`chp-sealed-v1`:
+  ephemeral X25519 ECDH → HKDF-SHA256 → AEAD over `canon(plaintext)`) and the
+  inline payload replaced with a `{chp_sealed}` marker — the sibling of §14's
+  `{chp_withheld}`. Because `chp-event-hash-v2` binds `content_hash` to the
+  payload *commitment*, not the inline payload, the chain/root/signature verify
+  offline over the ciphertext: a third party audits the evidence WITHOUT
+  decrypting; only the recipient unseals and re-runs the commitment check. The
+  recipient's sealing key is a separate X25519 key published as an omit-when-empty
+  `enc_public_key` inside the signed host attestation. Zero new dependencies
+  (X25519 + AEAD are in `cryptography` and `node:crypto`).
+
+### Compatibility
+- **Additive, no hash/root/signature change.** Sealing reuses the v2 commitment
+  seam (the verifier gains a one-line `{chp_sealed}` skip alongside the existing
+  `{chp_withheld}` skip); `enc_public_key` is omit-when-empty so every existing
+  attestation/bundle/vector stays byte-identical. Regression gate: the
+  `sealed-bundle` vector verifies offline (integrity, no key) in Python, the TS
+  SDK, and stdlib `verify.mjs`; the recipient unseals to the committed plaintext
+  and a wrong key fails; the byte gate shows only the new vector.
+
 ## [0.6.3] — Remote log monitor over 0.6.2
 
 ### Added

@@ -26,6 +26,8 @@ from ._core import (
     cmd_replay,
     cmd_retention_apply,
     cmd_bundle_minimize,
+    cmd_bundle_seal,
+    cmd_bundle_unseal,
     cmd_bundle_verify,
     cmd_stream_verify,
     cmd_revocation_verify,
@@ -865,6 +867,27 @@ def build_parser() -> argparse.ArgumentParser:
     b_min.add_argument("--event", action="append", default=None,
                        help="Only withhold this event_id (repeatable).")
     b_min.set_defaults(func=cmd_bundle_minimize)
+    b_seal = bundle_sub.add_parser(
+        "seal",
+        help="Seal chp-event-hash-v2 payloads to a recipient X25519 key (root + signature "
+             "unchanged; verifies with no key; only the recipient unseals) (spec §16, proposal 0025).")
+    b_seal.add_argument("bundle", help="Path to a signed bundle JSON.")
+    b_seal.add_argument("--recipient", required=True, help="Recipient base64 X25519 public key.")
+    b_seal.add_argument("--out", default=None, help="Write the sealed bundle here (default stdout).")
+    b_seal.add_argument("--capability", action="append", default=None,
+                        help="Only seal events for this capability_id (repeatable). Default: all v2 events.")
+    b_seal.add_argument("--event", action="append", default=None,
+                        help="Only seal this event_id (repeatable).")
+    b_seal.set_defaults(func=cmd_bundle_seal)
+    b_unseal = bundle_sub.add_parser(
+        "unseal",
+        help="Decrypt a sealed bundle's {chp_sealed} payloads with this host's X25519 key + "
+             "confirm each commitment (spec §16, proposal 0025).")
+    b_unseal.add_argument("bundle", help="Path to a sealed bundle JSON.")
+    b_unseal.add_argument("--key-dir", default=None, help="Host key dir (default resolved from --host-id).")
+    b_unseal.add_argument("--host-id", default=None, help="Host id to resolve the key dir.")
+    b_unseal.add_argument("--out", default=None, help="Write the unsealed bundle here (default stdout).")
+    b_unseal.set_defaults(func=cmd_bundle_unseal)
     b_ver = bundle_sub.add_parser(
         "verify",
         help="Verify a bundle: per-scheme hash recompute, root, signature, and disclosed-payload commitment bind.")
