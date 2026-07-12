@@ -1,6 +1,6 @@
 {
   "name": "@capabilityhostprotocol/types",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "TypeScript types for the Capability Host Protocol (CHP).",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

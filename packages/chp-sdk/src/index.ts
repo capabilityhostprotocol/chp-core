@@ -9,7 +9,10 @@
  * @packageDocumentation
  */
 
-export { canon, encodeStr, type JsonValue } from './canon.js';
+export {
+  canon, encodeStr, canonJcs, encodeStrJcs, canonFor,
+  CANONICALIZATION_JCS, type JsonValue,
+} from './canon.js';
 export { contentHash, rootHash, payloadCommitment, chunkSeqDigest, EVENT_HASH_V2, type EvidenceEvent } from './hash.js';
 export { verifyChain, type ChainResult } from './chain.js';
 export { orderEvents } from './ordering.js';

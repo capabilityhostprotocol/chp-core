@@ -8,7 +8,7 @@
  */
 
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, type KeyObject } from 'node:crypto';
-import { canon, type JsonValue } from './canon.js';
+import { canon, canonFor, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, rootHash, type EvidenceEvent } from './hash.js';
 
 export const CANONICALIZATION = 'chp-stable-v1';
@@ -99,12 +99,14 @@ export function buildBundle(
   events: EvidenceEvent[],
   createdAt: string,
   protocolVersion = '0.2',
+  canonicalization: string = CANONICALIZATION,
 ): Record<string, JsonValue> {
+  canonFor(canonicalization); // validate the scheme name up front (throws on unknown)
   return {
     host_id: hostId,
     protocol_version: protocolVersion,
     created_at: createdAt,
-    canonicalization: CANONICALIZATION,
+    canonicalization,
     assurance: 'hash-chain',
     events: events as unknown as JsonValue,
     root_hash: rootHash(events),
@@ -125,10 +127,13 @@ export function signBundle(
     opts.validUntil ?? null,
     opts.anchors ?? null,
   );
+  // Header signature dispatches on the bundle's `canonicalization` (§2 seam,
+  // proposal 0015); the attestation above stays chp-stable-v1.
+  const headerCanon = canonFor(signed.canonicalization as string | null | undefined);
   signed.signature = {
     algorithm: SIGNATURE_ALGORITHM,
     key_id: key.keyId,
-    signature: signCanon(key.privateKey, bundleHeader(signed)),
+    signature: edSign(null, Buffer.from(headerCanon(bundleHeader(signed)), 'utf8'), key.privateKey).toString('base64'),
   };
   return signed;
 }

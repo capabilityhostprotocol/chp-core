@@ -315,6 +315,52 @@ def check_alignment(repo_root: Path) -> JSON:
             {"drifted": drifted, "hint": "regenerate spec/test-vectors/canon/cases.json"},
         )
 
+    # chp-jcs-v1 (proposal 0015): the second canonicalization must be defined in
+    # the spec, its golden set must recompute byte-for-byte, and a chp-jcs-v1
+    # signed bundle must verify through the dispatch seam — proving the
+    # `canonicalization` field actually selects the serializer.
+    spec_v02_text = read_text(repo_root / "spec" / "chp-v0.2.md")
+    add_check(
+        checks,
+        "spec_defines_chp_jcs",
+        "Second canonicalization (`chp-jcs-v1`)" in spec_v02_text
+        and "dispatch seam" in spec_v02_text,
+        {"hint": "spec/chp-v0.2.md §2 must register chp-jcs-v1 + the dispatch seam"},
+    )
+    jcs_cases = repo_root / "spec" / "test-vectors" / "canon" / "cases-jcs.json"
+    if jcs_cases.exists():
+        try:
+            from .signing import _canon_jcs
+
+            jc = read_json(jcs_cases)
+            jcs_drift = [
+                c["name"] for c in jc.get("cases", [])
+                if _canon_jcs(c["input"]).decode("utf-8") != c["expected_canon"]
+            ]
+            add_check(
+                checks,
+                "jcs_canon_cases_verify",
+                not jcs_drift,
+                {"drifted": jcs_drift, "hint": "regenerate spec/test-vectors/canon/cases-jcs.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "jcs_canon_cases_verify", False, {"error": str(exc)})
+    jcs_bundle = repo_root / "spec" / "test-vectors" / "signed-bundle-jcs.json"
+    if jcs_bundle.exists():
+        try:
+            from .signing import verify_bundle
+
+            jb = read_json(jcs_bundle)
+            v = verify_bundle(jb)
+            add_check(
+                checks,
+                "jcs_bundle_verifies",
+                v.valid and jb.get("canonicalization") == "chp-jcs-v1",
+                {"valid": v.valid, "hint": "regenerate signed-bundle-jcs.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "jcs_bundle_verifies", False, {"error": str(exc)})
+
     # Anchors (spec §3.1): the anchored vector must still verify (guards the
     # omit-when-empty conditional in build/verify), and the spec must define
     # the anchor mechanism + the well-known route.

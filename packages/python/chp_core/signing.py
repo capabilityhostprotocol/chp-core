@@ -193,6 +193,58 @@ def _canon(obj: Any) -> bytes:
     return json.dumps(obj, sort_keys=True).encode()
 
 
+def _reject_floats(obj: Any) -> None:
+    """§2 rule 6: no non-integer numbers in canonicalized content. Retained across
+    ALL schemes (bool is an int subclass and is fine; a float is not)."""
+    if isinstance(obj, float):
+        raise ValueError("chp-jcs-v1 forbids non-integer numbers (chp-v0.2.md §2 rule 6)")
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _reject_floats(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _reject_floats(v)
+
+
+def _jcs_sort(obj: Any) -> Any:
+    """Recursively order object keys by UTF-16 code unit (RFC 8785 §3.2.3).
+    `str.encode('utf-16-be')` compared as bytes == code-unit order, and matches
+    JS `.sort()` — so Python and TS agree byte-for-byte even on astral-plane
+    keys (Python's own `sort_keys` sorts by code point and would diverge there)."""
+    if isinstance(obj, dict):
+        return {k: _jcs_sort(obj[k]) for k in sorted(obj, key=lambda s: s.encode("utf-16-be"))}
+    if isinstance(obj, (list, tuple)):
+        return [_jcs_sort(v) for v in obj]
+    return obj
+
+
+def _canon_jcs(obj: Any) -> bytes:
+    """chp-jcs-v1 canonical bytes (RFC 8785 JCS, proposal 0015): compact
+    separators, raw UTF-8 (no \\uXXXX escaping), keys sorted by UTF-16 code
+    unit. Over CHP's float-free content this is `json.dumps` with
+    `ensure_ascii=False` + compact separators; rule 6 is retained (non-integer
+    numbers rejected) so RFC 8785's number-formatting algorithm is never
+    exercised."""
+    _reject_floats(obj)
+    return json.dumps(_jcs_sort(obj), ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+
+
+CANONICALIZATION_JCS = "chp-jcs-v1"
+
+
+def _canon_for(scheme: str | None):
+    """Dispatch the header-signature serializer by the `canonicalization` field
+    (chp-v0.2.md §2 — the evolution seam, proposal 0015). Absent/legacy →
+    chp-stable-v1; raises on an unknown scheme (a verifier turns that into a
+    failed signature check, never a crash)."""
+    if scheme == CANONICALIZATION_JCS:
+        return _canon_jcs
+    if scheme in (None, "", CANONICALIZATION):
+        return _canon
+    raise ValueError(f"unknown canonicalization scheme: {scheme!r}")
+
+
 # Fields covered by the header signature. Everything a stranger reads to decide
 # "who/when/how" must be inside the signature — not just root_hash (events are
 # already bound via root_hash). See spec/chp-v0.2.md §3.
@@ -274,13 +326,19 @@ def build_bundle(
     *,
     created_at: str,
     protocol_version: str = "0.2",
+    canonicalization: str = CANONICALIZATION,
 ) -> dict:
-    """Build an unsigned (`hash-chain` tier) evidence bundle from exported events."""
+    """Build an unsigned (`hash-chain` tier) evidence bundle from exported events.
+
+    ``canonicalization`` selects the header-signature serializer (§2, proposal
+    0015): ``chp-stable-v1`` (default) or ``chp-jcs-v1`` (RFC 8785). Event
+    content-hashes are the orthogonal ``hash_scheme`` axis and are unaffected."""
+    _canon_for(canonicalization)  # validate the scheme name up front
     return {
         "host_id": host_id,
         "protocol_version": protocol_version,
         "created_at": created_at,
-        "canonicalization": CANONICALIZATION,
+        "canonicalization": canonicalization,
         "assurance": "hash-chain",
         "events": events,
         "root_hash": compute_root_hash(events),
@@ -309,7 +367,9 @@ def sign_bundle(bundle: dict, host_key: HostKey, *, valid_until: str | None = No
     signed["signature"] = {
         "algorithm": SIGNATURE_ALGORITHM,
         "key_id": host_key.key_id,
-        "signature": _sign(host_key._private, _canon(bundle_header(signed))),
+        # Dispatch the header canon on the bundle's `canonicalization` (§2, 0015).
+        "signature": _sign(host_key._private,
+                           _canon_for(signed.get("canonicalization"))(bundle_header(signed))),
     }
     return signed
 
@@ -745,7 +805,17 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None,
                 False, assurance, checks,
                 f"signed by unexpected key {sig.get('key_id')!r} (expected {expected_key_id!r})",
             )
-        checks["signature"] = _verify_sig(pub, _canon(bundle_header(bundle)), sig["signature"])
+        # Dispatch the header-signature serializer on the bundle's declared
+        # `canonicalization` (§2 seam, proposal 0015): chp-stable-v1 (absent/
+        # legacy) or chp-jcs-v1. An unknown scheme is a failed signature, never
+        # a crash.
+        try:
+            header_canon = _canon_for(bundle.get("canonicalization"))
+        except ValueError:
+            return BundleVerification(
+                False, assurance, {**checks, "signature": False},
+                f"unknown canonicalization scheme {bundle.get('canonicalization')!r}")
+        checks["signature"] = _verify_sig(pub, header_canon(bundle_header(bundle)), sig["signature"])
 
         # Host-identity attestation: the public_key must self-assert this host_id,
         # so a relabelled host_id (with a matching re-signed header) is still caught
