@@ -55,6 +55,37 @@
       "description": "SHA256 over each event's content_hash in sequence order.",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "completeness": {
+      "type": "object",
+      "description": "Non-omission claim (chp-v0.2.md §12, proposal 0018): the bundle asserts it is the complete correlation as of a global sequence. Optional; when present it is bound into the signed bundle header. Audited against a witnessed store head's leaves.",
+      "required": [
+        "scheme",
+        "correlation_id",
+        "as_of_sequence",
+        "head_hash"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "const": "chp-completeness-v1"
+        },
+        "correlation_id": {
+          "type": "string",
+          "description": "The correlation this bundle claims to complete."
+        },
+        "as_of_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Host assertion: no events for this correlation exist through this global store sequence."
+        },
+        "head_hash": {
+          "type": "string",
+          "description": "content_hash of the tail (last) event — equals the correlation's leaf in a store head that witnessed completeness.",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
     "public_key": {
       "type": "string",
       "description": "Base64 ed25519 public key (present on signed bundles)."

@@ -1508,6 +1508,29 @@ async def check_jcs_canonicalization(host: Any) -> None:
     assert not signing.verify_bundle(bogus).valid, "unknown scheme must fail, not crash"
 
 
+async def check_completeness(host: Any) -> None:
+    """v0.4.3 §12 (proposal 0018): non-omission. A host's exported bundle carries
+    a `chp-completeness-v1` claim asserting it is the complete correlation as of a
+    global sequence; the claim rides in the signed header and `verify_bundle`
+    self-checks it (head_hash = the tail, correlation matches). The audit teeth
+    (vs a witnessed head) are exercised by the unit/vitest suites and the live
+    proof — here we assert the over-the-wire claim + self-check."""
+    from chp_core.signing import verify_bundle
+
+    corr = f"{RUN}-conf-complete-001"
+    await invoke_host(host, "conformance.echo", {"value": "x"},
+                      correlation={"correlation_id": corr})
+    bundle = host.export_bundle(corr)
+    claim = bundle.get("completeness")
+    assert claim, f"exported bundle MUST carry a completeness claim: {list(bundle)}"
+    assert claim.get("scheme") == "chp-completeness-v1", claim
+    assert claim.get("correlation_id") == corr, claim
+    assert claim.get("head_hash") == bundle["events"][-1]["content_hash"], "head_hash must be the tail"
+    v = verify_bundle(bundle)
+    assert v.valid, f"completeness bundle must verify: {v.reason}"
+    assert v.checks.get("completeness") is True, "completeness self-check must pass"
+
+
 async def check_version_negotiation(host: Any) -> None:
     """v0.4.1 §1.1 (proposal 0016): wire-version negotiation — declare, select,
     reject. The host's /host descriptor MUST declare supported_versions (⊇ the
@@ -2442,6 +2465,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("witness quorum + anchoring (v0.2 §12, proposal 0013)", check_witness_quorum),
     ("canonicalization dispatch / chp-jcs-v1 (v0.4.0 §2, proposal 0015)", check_jcs_canonicalization),
     ("wire-version negotiation (v0.4.1 §1.1, proposal 0016)", check_version_negotiation),
+    ("non-omission / completeness (v0.4.3 §12, proposal 0018)", check_completeness),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

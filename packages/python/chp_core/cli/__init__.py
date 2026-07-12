@@ -29,6 +29,7 @@ from ._core import (
     cmd_bundle_verify,
     cmd_stream_verify,
     cmd_revocation_verify,
+    cmd_completeness_verify,
     cmd_store_backup,
     cmd_serve_demo,
     cmd_validate_contract,
@@ -799,6 +800,20 @@ def build_parser() -> argparse.ArgumentParser:
     rev_verify.add_argument("--key-dir", default=None, dest="key_dir",
                             help="Also include this host's key revocations from key-dir.")
     rev_verify.set_defaults(func=cmd_revocation_verify)
+
+    # chp completeness — non-omission audit (spec §12, proposal 0018)
+    completeness_p = subcommands.add_parser(
+        "completeness",
+        help="Non-omission: audit a bundle's completeness claim against witnessed heads (spec §12, proposal 0018).")
+    completeness_sub = completeness_p.add_subparsers(dest="completeness_command", required=True)
+    comp_verify = completeness_sub.add_parser(
+        "verify",
+        help="Audit a bundle's chp-completeness-v1 claim vs witnessed store-head receipts: "
+             "complete / INCOMPLETE (dropped tail) / unwitnessed / snapshot_invalid.")
+    comp_verify.add_argument("--bundle", required=True, help="Signed bundle JSON with a completeness claim.")
+    comp_verify.add_argument("--receipts", default=None,
+                             help="Witness receipts JSON (default: ~/.chp/witnesses/received.json).")
+    comp_verify.set_defaults(func=cmd_completeness_verify)
 
     # chp bundle — selective disclosure (spec §14, proposal 0011)
     bundle_p = subcommands.add_parser(

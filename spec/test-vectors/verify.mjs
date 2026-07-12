@@ -150,12 +150,29 @@ if (bundle.assurance === "signed") {
   let headerCanon;
   try { headerCanon = canonFor(bundle.canonicalization); }
   catch (e) { console.error(e.message); return false; }
+  // completeness (§12, proposal 0018) rides INSIDE the signed header, omit-when-
+  // absent — so a pre-0018 bundle's header is byte-identical.
   const header = { host_id: bundle.host_id, protocol_version: bundle.protocol_version,
                    created_at: bundle.created_at, canonicalization: bundle.canonicalization,
-                   root_hash: bundle.root_hash };
+                   root_hash: bundle.root_hash,
+                   ...(bundle.completeness ? { completeness: bundle.completeness } : {}) };
   const headerSigOk = edVerify(null, Buffer.from(headerCanon(header), "utf8"),
                                pub, Buffer.from(bundle.signature.signature, "base64"));
   if (!headerSigOk) { console.error("signature INVALID"); ok = false; }
+
+  // Completeness self-check: the claim's head_hash MUST be the tail event's
+  // content_hash (with genesis-contiguity above, this is a full genesis→tail
+  // chain as claimed). The teeth — auditing vs a witnessed head — is a separate
+  // witness-side act (chp completeness verify); here we check self-consistency.
+  if (bundle.completeness) {
+    const c = bundle.completeness;
+    const tail = bundle.events[bundle.events.length - 1] || {};
+    const tailCorr = (tail.correlation || {}).correlation_id;
+    const selfOk = c.scheme === "chp-completeness-v1"
+      && c.head_hash === tail.content_hash
+      && (tailCorr == null || c.correlation_id === tailCorr);
+    if (!selfOk) { console.error("completeness self-check INVALID"); ok = false; }
+  }
 
   // Host-identity attestation: the key must self-assert this host_id + public_key.
   const att = bundle.host_identity;

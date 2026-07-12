@@ -5,6 +5,38 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.4.3] — non-omission / completeness over 0.4.2
+
+### Added
+- **Non-omission / completeness proofs** (chp-v0.2.md §12,
+  [proposals/0018](proposals/0018-non-omission.md)): the answer to *"what stops a
+  host hiding events?"* `verify` already rejects leading/interior/suffix drops
+  (genesis + link continuity), so **`chp-completeness-v1`** closes the last two —
+  tail-truncation and whole-correlation omission. A signed bundle MAY carry a
+  `completeness` block — `{scheme, correlation_id, as_of_sequence, head_hash}`,
+  bound into the signed bundle header **omit-when-absent**. A verifier self-checks
+  it against the bundle (head_hash = the tail, genesis contiguity already
+  enforced), then `audit_completeness` compares it to witnessed store-head receipts:
+  a witnessed `leaves[correlation_id]` that advanced past `head_hash` is a provable
+  dropped tail (**incomplete**); a matching leaf is **complete**; a correlation no
+  witness saw is **unwitnessed** (the honest boundary — recording can't be forced).
+  The store head already commits per-correlation tails, so no head/chain-witness
+  change. `evidence-bundle` schema gains an optional `completeness` block.
+
+### Compatibility
+- **Additive, no bytes move.** The `completeness` block is optional and
+  omit-when-absent — no canonicalization/hashing/signing change, every published
+  vector + signed bundle byte-identical. No new denial code or evidence type; the
+  `hash_scheme` axis is orthogonal. **Patch** bump (v0.4.3) — a new commitment +
+  a witness-side audit, no wire surface added (consistent with 0010's v0.2.9).
+
+### Regression gate
+- The byte gate: every `spec/test-vectors/` fixture verifies unchanged; the new
+  `signed-bundle-complete.json` is the only addition. A completeness bundle
+  verifies + audits `complete` against a matching witnessed head, and `incomplete`
+  against a fresher one; `spec_defines_completeness` + `completeness_vector_verifies`
+  guards; a `check_completeness` wire check runs against both reference hosts.
+
 ## [0.4.2] — key custody at rest over 0.4.1
 
 ### Added
