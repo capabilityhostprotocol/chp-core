@@ -1862,6 +1862,23 @@ async def check_mandate_gate(host: Any) -> None:
     assert _denial_code(tampered) == "mandate_invalid", (
         f"tampered mandate must be mandate_invalid, got {_denial_code(tampered)!r}")
 
+    # 5. Use-count cap (§10, proposal 0026): a max_invocations=2 mandate allows two
+    #    invocations and denies the third with mandate_exhausted (never retryable).
+    capped = signing.build_mandate(
+        "conformance-principal", key, delegate_id=delegate, scope=["conformance.echo"],
+        valid_from=_iso(now - timedelta(minutes=1)),
+        valid_until=_iso(now + timedelta(hours=1)), created_at=_iso(now),
+        max_invocations=2)
+    cap_results = []
+    for _ in range(3):
+        cap_results.append(await invoke_host(host, "conformance.echo", {"value": "cap"},
+                                             mandate=capped))
+    cap_outs = [result_value(r, "outcome") for r in cap_results]
+    assert cap_outs == ["success", "success", "denied"], (
+        f"max_invocations=2 must allow 2 and deny the 3rd, got {cap_outs}")
+    assert _denial_code(cap_results[2]) == "mandate_exhausted", (
+        f"the over-cap invocation must be mandate_exhausted, got {_denial_code(cap_results[2])!r}")
+
 
 async def check_sub_delegation(host: Any) -> None:
     """v0.2 §10 Sub-delegation (proposal 0009): attenuation-only mandate chains.

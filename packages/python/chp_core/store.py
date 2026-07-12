@@ -188,6 +188,19 @@ class SQLiteEvidenceStore:
                 "CREATE INDEX IF NOT EXISTS idx_evidence_timestamp "
                 "ON evidence_events(timestamp, sequence)"
             )
+            # Mandate use-count (§10, proposal 0026): distinct invocations recorded
+            # under each mandate_id. The composite PK makes re-recording the same
+            # use a no-op, so a replayed invocation never double-counts.
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mandate_usage (
+                  mandate_id TEXT NOT NULL,
+                  invocation_id TEXT NOT NULL,
+                  recorded_at TEXT,
+                  PRIMARY KEY (mandate_id, invocation_id)
+                )
+                """
+            )
             self._conn.execute(
                 """
                 INSERT OR IGNORE INTO evidence_sequence(sequence)
@@ -530,6 +543,34 @@ class SQLiteEvidenceStore:
              "capability_id": r["capability_id"], "outcome": r["outcome"]}
             for r in rows
         ]
+
+    def count_mandate_uses(self, mandate_id: str) -> int:
+        """Distinct invocations already recorded under ``mandate_id`` (§10, proposal
+        0026) — the authoritative used-count for a mandate's ``max_invocations`` cap."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM mandate_usage WHERE mandate_id = ?",
+                (mandate_id,)).fetchone()
+        return int(row["c"] or 0)
+
+    def mandate_use_recorded(self, mandate_id: str, invocation_id: str) -> bool:
+        """True if this exact (mandate_id, invocation_id) use is already recorded —
+        so a re-run of the gate for the same invocation does not consume a new use."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM mandate_usage WHERE mandate_id = ? AND invocation_id = ?",
+                (mandate_id, invocation_id)).fetchone()
+        return row is not None
+
+    def record_mandate_use(self, mandate_id: str, invocation_id: str,
+                           recorded_at: str | None = None) -> None:
+        """Record one invocation under a mandate (§10, proposal 0026). INSERT OR
+        IGNORE on the composite PK, so recording the same use twice is a no-op."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO mandate_usage (mandate_id, invocation_id, recorded_at) "
+                "VALUES (?, ?, ?)", (mandate_id, invocation_id, recorded_at))
+            self._conn.commit()
 
     def by_correlation_with_hashes(self, correlation_id: str) -> list[JSON]:
         """Like by_correlation but includes content_hash and prev_hash in each dict."""
