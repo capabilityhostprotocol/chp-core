@@ -1292,6 +1292,122 @@ def verify_chain_witness(statement: dict, *,
                               anchored_did=anchored_did)
 
 
+_STORE_HEAD_MONITOR_HEADER_FIELDS = ("kind", "host_id", "verified_through_sequence",
+                                     "anchor_count", "verdict", "monitored_at",
+                                     "canonicalization")
+
+
+def store_head_monitor_report_header(report: dict) -> dict:
+    """The monitor-signed header of a store-head-monitor-report (§12, proposal
+    0023). The ``divergence`` block is covered ONLY when present (a ``forked``
+    report), so a ``consistent`` report's header is byte-identical — the §10
+    omit-when-empty rule, as for chain-witness ``revocation_head``."""
+    header = {k: report.get(k) for k in _STORE_HEAD_MONITOR_HEADER_FIELDS}
+    if report.get("divergence"):
+        header["divergence"] = report["divergence"]
+    return header
+
+
+def build_store_head_monitor_report(host_id: str, *, verdict: str,
+                                    verified_through_sequence: int, anchor_count: int,
+                                    monitor_key: HostKey, monitor_id: str,
+                                    monitored_at: str,
+                                    divergence: dict | None = None,
+                                    anchors: list[dict] | None = None) -> dict:
+    """A monitor's signed finding over a host's anchor history (§12, proposal
+    0023). ``verdict`` ``consistent`` (every anchored root still reconstructs from
+    the live store, through ``verified_through_sequence``) or ``forked``
+    (``divergence`` names the sequence where the live store stopped reproducing the
+    anchored root — a rewrite). Signed by the MONITOR: the report lives with the
+    monitor, not the monitored host, so the operator cannot retract it."""
+    if not monitor_key.can_sign:
+        raise SigningUnavailable("monitor key has no private component; cannot sign")
+    report: dict = {
+        "kind": "store-head-monitor-report",
+        "host_id": host_id,
+        "verified_through_sequence": verified_through_sequence,
+        "anchor_count": anchor_count,
+        "verdict": verdict,
+        "monitored_at": monitored_at,
+        "canonicalization": CANONICALIZATION,
+    }
+    if divergence:
+        report["divergence"] = divergence
+    report["monitor"] = {
+        "host_id": monitor_id,
+        "public_key": monitor_key.public_key_b64,
+        "host_identity": build_attestation(
+            monitor_id, monitor_key, valid_from=monitored_at, anchors=anchors),
+    }
+    report["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": monitor_key.key_id,
+        "signature": _sign(monitor_key._private,
+                           _canon(store_head_monitor_report_header(report))),
+    }
+    return report
+
+
+def verify_store_head_monitor_report(
+        report: dict, *, expected_host_id: str | None = None,
+        expected_monitor_key: str | None = None) -> BundleVerification:
+    """Offline-verify a store-head-monitor-report: structure, header signature,
+    monitor attestation, DID anchor when present, and optional host/key pins. A
+    ``forked`` verdict must NAME a real divergence. Store-head RECONSTRUCTION is a
+    separate act the monitor already performed; a report verifier trusts the
+    signed verdict (re-running the reconstruction needs the store)."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = (report.get("kind") == "store-head-monitor-report"
+                           and bool(report.get("host_id"))
+                           and report.get("verdict") in ("consistent", "forked")
+                           and isinstance(report.get("verified_through_sequence"), int))
+    if report.get("verdict") == "forked":
+        div = report.get("divergence") or {}
+        checks["divergence_present"] = bool(
+            div.get("anchored_root") and div.get("reconstructed_root")
+            and div.get("anchored_root") != div.get("reconstructed_root"))
+    monitor = report.get("monitor") or {}
+    pub = str(monitor.get("public_key") or "")
+    sig = report.get("signature") or {}
+    anchored_domain: str | None = None
+    anchored_did: str | None = None
+
+    if expected_monitor_key is not None and sig.get("key_id") != expected_monitor_key:
+        return BundleVerification(
+            False, "signed", checks,
+            f"signed by unexpected monitor key {sig.get('key_id')!r} "
+            f"(expected {expected_monitor_key!r})")
+
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM
+                           and bool(pub)
+                           and _verify_sig(pub, _canon(store_head_monitor_report_header(report)),
+                                           str(sig.get("signature") or "")))
+
+    att = monitor.get("host_identity")
+    if att:
+        checks["monitor_identity"] = verify_attestation(
+            att, public_key=pub, expected_host_id=monitor.get("host_id"),
+            at_time=report.get("monitored_at"))
+        anchored_domain = _domain_anchor(att)
+        did_anchor = _did_anchor(att)
+        if did_anchor is not None:
+            checks["did_anchor"] = verify_did_anchor(
+                did_anchor, pub, str(monitor.get("host_id", "")))
+            if checks["did_anchor"]:
+                anchored_did = str(did_anchor.get("did"))
+    else:
+        checks["monitor_identity"] = False  # a report must say WHO monitored
+
+    if expected_host_id is not None:
+        checks["monitored_host"] = report.get("host_id") == expected_host_id
+
+    valid = all(checks.values())
+    reason = None if valid else "monitor-report checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason,
+                              anchored_domain=anchored_domain, anchored_did=anchored_did)
+
+
 _MANDATE_HEADER_FIELDS = ("kind", "mandate_id", "delegate_id", "scope",
                           "valid_from", "valid_until", "created_at",
                           "canonicalization")

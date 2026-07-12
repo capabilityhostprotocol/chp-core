@@ -540,6 +540,34 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "consistency_vector_verifies", False, {"error": str(exc)})
 
+    # Log monitor / fork detection (proposal 0023): the spec must define it, and
+    # the monitor-report vector must verify — the consistent report and the forked
+    # report (with a real divergence) both check their monitor signature.
+    add_check(
+        checks,
+        "spec_defines_log_monitor",
+        "log monitor" in spec_v02_mk and "store-head-monitor-report" in spec_v02_mk
+        and "rewrite" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §12 must define the log monitor (store-head-monitor-report, rewrite detection)"},
+    )
+    mon_vec = repo_root / "spec" / "test-vectors" / "store-head-monitor-report.json"
+    if mon_vec.exists():
+        try:
+            from .signing import verify_store_head_monitor_report
+
+            mon_doc = read_json(mon_vec)
+            consistent_v = verify_store_head_monitor_report(mon_doc["report"])
+            forked_v = verify_store_head_monitor_report(mon_doc["forked"])
+            add_check(
+                checks,
+                "monitor_report_vector_verifies",
+                consistent_v.valid and mon_doc["report"]["verdict"] == "consistent"
+                and forked_v.valid and forked_v.checks.get("divergence_present") is True,
+                {"hint": "regenerate store-head-monitor-report.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "monitor_report_vector_verifies", False, {"error": str(exc)})
+
     # in-toto / DSSE attestation bridge (proposal 0021): the spec must define it,
     # and the attestation vector must verify — the DSSE PAE signature + the
     # embedded CHP bundle + the subject digest.

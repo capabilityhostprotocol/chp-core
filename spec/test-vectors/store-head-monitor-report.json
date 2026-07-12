@@ -1,0 +1,61 @@
+{
+  "forked": {
+    "anchor_count": 4,
+    "canonicalization": "chp-stable-v1",
+    "divergence": {
+      "anchored_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reconstructed_root": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sequence": 96
+    },
+    "host_id": "vector-monitored-host",
+    "kind": "store-head-monitor-report",
+    "monitor": {
+      "host_id": "vector-monitor",
+      "host_identity": {
+        "host_id": "vector-monitor",
+        "key_id": "0e1b4e0d165bed85",
+        "public_key": "a3NKjv8kb+c0s41ARsFI7uXwT+h7OgpCOVWneVbeBms=",
+        "signature": "jKsMbEV3H2mSsFppA0BLD1/6Hn/p2Pbw8B3FoguB/Yk11CuwMCpu6pHh/ijG8Sx/CyxRc1CcRBY7VNXND28HBg==",
+        "valid_from": "2026-01-01T00:00:00Z",
+        "valid_until": null
+      },
+      "public_key": "a3NKjv8kb+c0s41ARsFI7uXwT+h7OgpCOVWneVbeBms="
+    },
+    "monitored_at": "2026-01-01T00:00:00Z",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "0e1b4e0d165bed85",
+      "signature": "i+YnDGKRaEFRRB4aOrotehpX7IKwUdhya1uiLXHxT2GPbwxsfVw2W0AjiOvhmVIxbkTHuMDuuV8hIQPWwwP1Bg=="
+    },
+    "verdict": "forked",
+    "verified_through_sequence": 64
+  },
+  "kind": "store-head-monitor-report",
+  "note": "A monitor reconstructs the head as-of each anchored sequence from the live store and checks it equals the immutable anchor; a mismatch is a rewrite. Verify the monitor's ed25519 signature over the canonical header (divergence covered only when forked).",
+  "report": {
+    "anchor_count": 4,
+    "canonicalization": "chp-stable-v1",
+    "host_id": "vector-monitored-host",
+    "kind": "store-head-monitor-report",
+    "monitor": {
+      "host_id": "vector-monitor",
+      "host_identity": {
+        "host_id": "vector-monitor",
+        "key_id": "0e1b4e0d165bed85",
+        "public_key": "a3NKjv8kb+c0s41ARsFI7uXwT+h7OgpCOVWneVbeBms=",
+        "signature": "jKsMbEV3H2mSsFppA0BLD1/6Hn/p2Pbw8B3FoguB/Yk11CuwMCpu6pHh/ijG8Sx/CyxRc1CcRBY7VNXND28HBg==",
+        "valid_from": "2026-01-01T00:00:00Z",
+        "valid_until": null
+      },
+      "public_key": "a3NKjv8kb+c0s41ARsFI7uXwT+h7OgpCOVWneVbeBms="
+    },
+    "monitored_at": "2026-01-01T00:00:00Z",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "0e1b4e0d165bed85",
+      "signature": "qkDdIkjKWpdMMrh0bmm3t+vxJgwAsTyQV6ks/qsql7tilqhY/cOLCQ3oYT+vmRw33fMGDdnfXnRSFCZ1uf/fAQ=="
+    },
+    "verdict": "consistent",
+    "verified_through_sequence": 128
+  }
+}
