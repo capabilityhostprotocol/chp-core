@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-planning"
-version = "0.25.0"
+version = "0.26.0"
 description = "CHP capability adapter — observable agent cognition (planning and reflection)"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -1003,6 +1003,30 @@ def cmd_revocation_verify(args: argparse.Namespace) -> int:
     return 1 if audit["verdict"] in ("dropped", "snapshot_invalid") else 0
 
 
+def cmd_completeness_verify(args: argparse.Namespace) -> int:
+    """The non-omission auditor act (§12, proposal 0018): audit a bundle's
+    completeness claim against witnessed store-head receipts. A witnessed leaf
+    at/after the claim that differs from the bundle's head_hash is a provable
+    dropped tail. Exit 1 on incomplete / snapshot_invalid."""
+    import sys
+
+    from .. import witnessing
+
+    with open(args.bundle) as fh:
+        bundle = json.load(fh)
+    if not bundle.get("completeness"):
+        print("bundle carries no completeness claim (chp-completeness-v1)", file=sys.stderr)
+        return 1
+    if args.receipts:
+        with open(args.receipts) as fh:
+            receipts = json.load(fh)
+    else:
+        receipts = witnessing.load_received()
+    audit = witnessing.audit_completeness(bundle, receipts)
+    print(json.dumps(audit, indent=2))
+    return 1 if audit["verdict"] in ("incomplete", "snapshot_invalid") else 0
+
+
 def cmd_bundle_minimize(args: argparse.Namespace) -> int:
     """Selective disclosure (§14, proposal 0011): write a disclosure-minimized
     copy of a signed bundle — chp-event-hash-v2 payloads matching the filter are

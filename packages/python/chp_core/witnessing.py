@@ -144,6 +144,72 @@ def compute_root(leaves: dict) -> str:
     return digest.hexdigest()
 
 
+def audit_completeness(bundle: JSON, receipts: list[JSON]) -> JSON:
+    """Non-omission audit (§12, proposal 0018): check a bundle's `completeness`
+    claim against witnessed store-head receipts. For each receipt carrying a
+    `leaves` snapshot, verify the witness statement, recompute `store_head` from
+    the snapshot and require it equals the peer-signed value (tamper-evidence).
+    Then, because the per-correlation chain is APPEND-ONLY:
+
+    - a witnessed head at ``sequence >= as_of_sequence`` whose ``leaves[X]``
+      equals ``head_hash`` → **complete** (a witness countersigned this exact tail
+      at/after the claimed point);
+    - a witnessed head at ``sequence >= as_of_sequence`` whose ``leaves[X]``
+      DIFFERS → **incomplete** (the witnessed tail at/after the claim is not the
+      one the bundle shows — a dropped tail; the per-correlation chain is
+      append-only, so the leaf only moves forward);
+    - no witnessed head covers X at/after the claim → **unwitnessed** (the honest
+      boundary: recording itself cannot be forced).
+    """
+    from .signing import verify_chain_witness  # noqa: PLC0415
+
+    claim = bundle.get("completeness")
+    if not claim:
+        return {"verdict": "no_claim"}
+    corr = claim.get("correlation_id")
+    as_of = claim.get("as_of_sequence")
+    head_hash = claim.get("head_hash")
+
+    confirmed_at: int | None = None   # highest witnessed sequence proving the tail
+    advanced_at: int | None = None    # lowest witnessed sequence past as_of that moved the leaf
+    snapshot_invalid: list[str] = []
+    witnessed_seqs: list[int] = []
+    for receipt in receipts:
+        leaves = receipt.get("leaves")
+        stmt = receipt.get("statement") or {}
+        signed = stmt.get("store_head")
+        seq = stmt.get("sequence")
+        if leaves is None or signed is None or seq is None:
+            continue
+        if not verify_chain_witness(stmt).valid:
+            continue  # only validly-witnessed heads count
+        if compute_root(leaves) != signed:
+            snapshot_invalid.append(str(seq))
+            continue
+        if corr not in leaves:
+            continue  # this head did not witness the correlation
+        witnessed_seqs.append(seq)
+        leaf = leaves[corr]
+        if seq >= as_of:
+            if leaf == head_hash:
+                confirmed_at = seq if confirmed_at is None else max(confirmed_at, seq)
+            else:  # a witnessed tail at/after the claim that isn't the claimed one
+                advanced_at = seq if advanced_at is None else min(advanced_at, seq)
+
+    if snapshot_invalid:
+        verdict = "snapshot_invalid"
+    elif advanced_at is not None:
+        verdict = "incomplete"
+    elif confirmed_at is not None:
+        verdict = "complete"
+    else:
+        verdict = "unwitnessed"
+    return {"verdict": verdict, "correlation_id": corr, "as_of_sequence": as_of,
+            "head_hash": head_hash, "confirmed_at": confirmed_at,
+            "advanced_at": advanced_at, "snapshot_invalid": snapshot_invalid,
+            "witnessed_sequences": sorted(witnessed_seqs)}
+
+
 def verify_receipt_against_store(store, receipt: JSON) -> JSON:
     """The auditor act (§12): recompute the store head as-of the witnessed
     sequence and judge every leaf. Lawful retention and tampering are

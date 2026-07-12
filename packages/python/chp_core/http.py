@@ -378,7 +378,19 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             from .types import utc_now
             events = self.server.chp_host.store.export_correlation(correlation_id)
             host_id = getattr(self.server.chp_host, "host_id", "unknown")
-            bundle = signing.build_bundle(host_id, events, created_at=utc_now())
+            # Non-omission (§12, proposal 0018): attach a completeness claim so a
+            # witness can later prove the tail was not truncated. as_of = the
+            # store's current global sequence (the export is complete as of now).
+            completeness = None
+            store = getattr(self.server.chp_host, "store", None)
+            if events and store is not None and hasattr(store, "get_store_head"):
+                try:
+                    completeness = signing.build_completeness(
+                        correlation_id, events, store.get_store_head()["sequence"])
+                except Exception:  # noqa: BLE001 — completeness is best-effort
+                    completeness = None
+            bundle = signing.build_bundle(host_id, events, created_at=utc_now(),
+                                          completeness=completeness)
             key_dir = signing.resolve_key_dir(host_id)
             key = signing.load_host_key(key_dir)
             if key is not None and key.can_sign:
