@@ -435,6 +435,33 @@ def check_alignment(repo_root: Path) -> JSON:
     except Exception as exc:  # pragma: no cover - defensive
         add_check(checks, "schema_ids_consistent", False, {"error": str(exc)})
 
+    # Non-omission / completeness (proposal 0018): the spec must define
+    # chp-completeness-v1, and the completeness vector must verify with its
+    # completeness self-check passing (the claim rides in the signed header).
+    spec_v02_comp = read_text(repo_root / "spec" / "chp-v0.2.md")
+    add_check(
+        checks,
+        "spec_defines_completeness",
+        "chp-completeness-v1" in spec_v02_comp and "Non-omission" in spec_v02_comp,
+        {"hint": "chp-v0.2.md §12 must register chp-completeness-v1"},
+    )
+    comp_vec = repo_root / "spec" / "test-vectors" / "signed-bundle-complete.json"
+    if comp_vec.exists():
+        try:
+            from .signing import verify_bundle
+
+            cb = read_json(comp_vec)
+            v = verify_bundle(cb)
+            add_check(
+                checks,
+                "completeness_vector_verifies",
+                v.valid and v.checks.get("completeness") is True
+                and (cb.get("completeness") or {}).get("scheme") == "chp-completeness-v1",
+                {"valid": v.valid, "hint": "regenerate signed-bundle-complete.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "completeness_vector_verifies", False, {"error": str(exc)})
+
     # Anchors (spec §3.1): the anchored vector must still verify (guards the
     # omit-when-empty conditional in build/verify), and the spec must define
     # the anchor mechanism + the well-known route.

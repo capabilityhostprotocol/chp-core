@@ -9,7 +9,7 @@ import { verify as edVerify } from 'node:crypto';
 import { canon, canonFor, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
-import { attenuates, bundleHeader, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader } from './signing.js';
+import { attenuates, bundleHeader, computeStoreHead, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader, COMPLETENESS_SCHEME } from './signing.js';
 import { didKeyToRaw, verifySshsig, STORE_HEAD_ANCHOR_NAMESPACE } from './sshsig.js';
 import { orderEvents } from './ordering.js';
 
@@ -47,6 +47,22 @@ export function verifyBundle(
     if (payload && payload.chp_withheld === true) return true;
     return payloadCommitment(ev.payload) === ev.payload_commitment;
   });
+
+  // Completeness self-check (§12, proposal 0018): when the bundle claims to be
+  // the complete correlation, head_hash MUST be the tail event's content_hash
+  // and correlation_id must match — with genesis-contiguity (verifyChain) this
+  // proves a full genesis→tail chain AS CLAIMED. The teeth (audit vs a witnessed
+  // head) is auditCompleteness. The claim is signed (bundleHeader).
+  const claim = bundle.completeness as Record<string, JsonValue> | undefined;
+  if (claim) {
+    const tail = (events[events.length - 1] ?? {}) as unknown as Record<string, JsonValue>;
+    const tailCorr = ((tail.correlation as Record<string, JsonValue>) ?? {}).correlation_id;
+    checks.completeness =
+      claim.scheme === COMPLETENESS_SCHEME &&
+      events.length > 0 &&
+      claim.head_hash === tail.content_hash &&
+      (tailCorr == null || claim.correlation_id === tailCorr);
+  }
 
   const assurance = (bundle.assurance as string) ?? 'none';
 
@@ -439,6 +455,57 @@ export function verifyChainWitness(
     reason: valid ? undefined : 'chain-witness checks failed: '
       + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
   };
+}
+
+// ── Non-omission / completeness audit (chp-v0.2.md §12, proposal 0018) ──────
+
+export interface CompletenessAudit {
+  verdict: 'complete' | 'incomplete' | 'unwitnessed' | 'snapshot_invalid' | 'no_claim';
+  correlation_id?: string;
+  as_of_sequence?: number;
+  confirmed_at: number | null;
+  advanced_at: number | null;
+}
+
+/**
+ * Audit a bundle's completeness claim against witnessed store-head receipts
+ * ({statement, leaves}). Byte-parity with Python `witnessing.audit_completeness`:
+ * verify each witness statement, recompute store_head from the leaves snapshot
+ * (tamper check), then a witnessed leaf at sequence >= as_of equal to head_hash
+ * is `complete`, a differing one is `incomplete` (dropped tail), none is
+ * `unwitnessed`.
+ */
+export function auditCompleteness(
+  bundle: Record<string, JsonValue>,
+  receipts: Array<Record<string, JsonValue>>,
+): CompletenessAudit {
+  const claim = bundle.completeness as Record<string, JsonValue> | undefined;
+  if (!claim) return { verdict: 'no_claim', confirmed_at: null, advanced_at: null };
+  const corr = String(claim.correlation_id);
+  const asOf = Number(claim.as_of_sequence);
+  const headHash = String(claim.head_hash);
+  let confirmedAt: number | null = null;
+  let advancedAt: number | null = null;
+  let snapshotInvalid = false;
+  for (const receipt of receipts) {
+    const leaves = receipt.leaves as Record<string, string | null> | undefined;
+    const stmt = (receipt.statement as Record<string, JsonValue> | undefined) ?? {};
+    const signed = stmt.store_head as string | undefined;
+    const seq = stmt.sequence as number | undefined;
+    if (!leaves || signed == null || seq == null) continue;
+    if (!verifyChainWitness(stmt).valid) continue;
+    if (computeStoreHead(leaves, seq).store_head !== signed) { snapshotInvalid = true; continue; }
+    if (!(corr in leaves)) continue;
+    if (seq >= asOf) {
+      if (leaves[corr] === headHash) confirmedAt = confirmedAt === null ? seq : Math.max(confirmedAt, seq);
+      else advancedAt = advancedAt === null ? seq : Math.min(advancedAt, seq);
+    }
+  }
+  const verdict = snapshotInvalid ? 'snapshot_invalid'
+    : advancedAt !== null ? 'incomplete'
+    : confirmedAt !== null ? 'complete'
+    : 'unwitnessed';
+  return { verdict, correlation_id: corr, as_of_sequence: asOf, confirmed_at: confirmedAt, advanced_at: advancedAt };
 }
 
 // ── Mandates — delegated authority on the wire (chp-v0.2.md §10, proposal 0002)
