@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -1044,3 +1044,36 @@ verdict, not a gate denial.
 Deferred (named in proposal 0011): per-field / sub-payload Merkle commitments,
 retroactive v1→v2, withholding non-payload fields, encrypting withheld payloads,
 and disclosure receipts.
+
+## 15. Interop — in-toto / DSSE Attestations (v0.6.0)
+
+A signed CHP bundle exports to a standard **in-toto attestation** wrapped in a
+**[DSSE](https://github.com/secure-systems-lab/dsse)** envelope (proposal 0021),
+so CHP evidence is portable into the supply-chain ecosystem (Sigstore, in-toto,
+SLSA, GUAC) without changing the bundle. The bundle is *wrapped, not modified* —
+every existing bundle and signature is byte-identical.
+
+The **Statement** (`in-toto Statement/v1`) has `subject:
+[{name: <correlation_id>, digest: {sha256: <root_hash>}}]` (the bundle's
+`root_hash` is already a SHA-256 hex — the correlation's signed evidence root),
+`predicateType: "https://chp.dev/attestation/evidence-bundle/v1"`, and
+`predicate` = the full signed bundle (lossless — the attestation round-trips back
+to a bundle). The **DSSE envelope** is `{payload: base64(Statement),
+payloadType: "application/vnd.in-toto+json", signatures: [{keyid, sig}]}`, where
+`sig` = `ed25519(PAE)` under the host's key — the same key that signed the bundle.
+The **PAE** (the signed bytes) is DSSE's Pre-Authentication Encoding:
+`"DSSEv1" SP LEN(payloadType) SP payloadType SP LEN(body) SP body` (`SP` = space,
+`LEN` = ASCII-decimal byte length, `body` = the raw Statement bytes). DSSE owns
+this serialization — the signer signs the PAE bytes directly, NOT via
+`chp-stable-v1`.
+
+Verification is two-level: (1) **any DSSE verifier** recomputes the PAE and
+checks `ed25519(PAE)` against the keyid's public key — CHP evidence is authentic
+to standard tooling; (2) a **CHP verifier** additionally decodes the Statement,
+checks `subject[0].digest.sha256 == root_hash`, and runs the full `verify_bundle`
+on the `predicate`. The public key is the embedded bundle's `public_key` (which
+its `host_identity` self-attests), so the attestation is self-contained. Like the
+OTel/PROV exports, the output format is governed by its upstream standard; CHP
+ships `dsse-envelope` + `in-toto-statement` schemas for CHP-side validation.
+Real Rekor/Sigstore submission + log inclusion, an SLSA predicate, and a PROV-O
+graph are out of scope (named in proposal 0021).

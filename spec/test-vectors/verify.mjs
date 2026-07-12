@@ -463,6 +463,33 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (store-head-inclusion: ${proof.correlation_id} committed under anchored Merkle root ${String(root).slice(0, 16)}…)`
     : "INVALID");
+} else if (input.kind === "dsse" || input.payloadType === "application/vnd.in-toto+json") {
+  // in-toto / DSSE attestation (chp-v0.2.md §15, proposal 0021). Level 1: any
+  // DSSE verifier recomputes the PAE = "DSSEv1 SP LEN(type) SP type SP LEN(body)
+  // SP body" (body = the raw base64-decoded payload) and checks ed25519(PAE).
+  // Level 2: the embedded CHP bundle (the predicate) verifies + subject digest.
+  const body = Buffer.from(input.payload, "base64");
+  const pt = Buffer.from(String(input.payloadType), "utf8");
+  const pae = Buffer.concat([
+    Buffer.from("DSSEv1 "), Buffer.from(String(pt.length)), Buffer.from(" "), pt,
+    Buffer.from(" "), Buffer.from(String(body.length)), Buffer.from(" "), body]);
+  const stmt = JSON.parse(body.toString("utf8"));
+  const bundle = stmt.predicate ?? {};
+  const raw = Buffer.from(bundle.public_key ?? "", "base64");
+  const spki = Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), raw]);
+  const pub = createPublicKey({ key: spki, format: "der", type: "spki" });
+  const sigOk = (input.signatures ?? []).some((s) =>
+    edVerify(null, pae, pub, Buffer.from(s.sig ?? "", "base64")));
+  const subjOk = stmt.subject?.[0]?.digest?.sha256 === bundle.root_hash;
+  const bundleOk = verifyOne(bundle);
+  ok = sigOk && subjOk && bundleOk
+    && stmt._type === "https://in-toto.io/Statement/v1"
+    && stmt.predicateType === "https://chp.dev/attestation/evidence-bundle/v1";
+  if (!sigOk) console.error("DSSE PAE signature INVALID");
+  if (!subjOk) console.error("subject digest ≠ bundle root_hash");
+  console.log(ok
+    ? `VALID (dsse in-toto attestation: ${stmt.subject?.[0]?.name} → bundle ${String(bundle.root_hash).slice(0, 16)}…)`
+    : "INVALID");
 } else {
   ok = verifyOne(input);
   console.log(ok ? `VALID (${input.assurance}, ${input.events.length} events)` : "INVALID");

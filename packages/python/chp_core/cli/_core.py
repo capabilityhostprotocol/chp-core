@@ -1027,6 +1027,45 @@ def cmd_completeness_verify(args: argparse.Namespace) -> int:
     return 1 if audit["verdict"] in ("incomplete", "snapshot_invalid") else 0
 
 
+def cmd_bundle_attest(args: argparse.Namespace) -> int:
+    """in-toto/DSSE bridge (§15, proposal 0021): wrap a signed CHP bundle as a
+    DSSE-enveloped in-toto attestation, signed by the host key. Writes to --out
+    (default stdout) an artifact any DSSE/Sigstore verifier can check."""
+    import sys
+
+    from .. import dsse, signing
+
+    with open(args.bundle) as fh:
+        bundle = json.load(fh)
+    key = signing.load_host_key(args.key_dir or signing.DEFAULT_KEY_DIR, prompt=True)
+    if key is None or not key.can_sign:
+        print("no signing key; run `chp keygen` first", file=sys.stderr)
+        return 2
+    envelope = dsse.bundle_to_attestation(bundle, key)
+    out = json.dumps(envelope, indent=2)
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(out + "\n")
+    else:
+        print(out)
+    return 0
+
+
+def cmd_attest_verify(args: argparse.Namespace) -> int:
+    """Verify a DSSE-enveloped in-toto attestation (§15, proposal 0021): the PAE
+    signature is authentic AND the subject digest matches AND the embedded CHP
+    bundle verifies. Exit 1 if invalid."""
+    import sys
+
+    from .. import dsse
+
+    with open(args.file) as fh:
+        envelope = json.load(fh)
+    v = dsse.verify_attestation(envelope)
+    print(json.dumps({"valid": v.valid, "checks": v.checks, "reason": v.reason}, indent=2))
+    return 0 if v.valid else 1
+
+
 def cmd_head_inclusion(args: argparse.Namespace) -> int:
     """Third-party, witness-free non-omission (§12, proposal 0019): given a
     store-head-inclusion file ({anchor, proof}), verify the external anchor's

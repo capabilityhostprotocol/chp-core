@@ -57,6 +57,12 @@ export {
   CHP_STORE_HEAD_V1, CHP_STORE_HEAD_V2, type StoreHeadInclusion,
 } from './merkle.js';
 export {
+  bundleToStatement, dsseSign, bundleToAttestation, dsseStatement, attestationToBundle,
+  verifyDsse, verifyAttestation,
+  IN_TOTO_STATEMENT_TYPE, IN_TOTO_PAYLOAD_TYPE, CHP_BUNDLE_PREDICATE_TYPE,
+  type DsseEnvelope, type AttestationVerification,
+} from './dsse.js';
+export {
   verifyBundle,
   verifyBundleResolved,
   resolveHostIdentity,

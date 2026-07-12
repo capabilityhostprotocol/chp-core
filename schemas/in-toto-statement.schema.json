@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/in-toto-statement.schema.json",
+  "title": "InTotoStatement",
+  "description": "An in-toto Statement/v1 carrying a CHP evidence bundle as its predicate (chp-v0.2.md section 15, proposal 0021). The subject is the correlation, digested by the bundle root_hash; the predicate is the full signed CHP bundle (lossless round-trip). This is the base64-decoded DSSE payload.",
+  "type": "object",
+  "required": [
+    "_type",
+    "subject",
+    "predicateType",
+    "predicate"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "_type": {
+      "const": "https://in-toto.io/Statement/v1"
+    },
+    "subject": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "digest"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The correlation_id (or a stable label for the evidence root)."
+          },
+          "digest": {
+            "type": "object",
+            "required": [
+              "sha256"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "The bundle root_hash — the correlation's signed evidence root."
+              }
+            }
+          }
+        }
+      }
+    },
+    "predicateType": {
+      "const": "https://chp.dev/attestation/evidence-bundle/v1"
+    },
+    "predicate": {
+      "type": "object",
+      "description": "The full signed CHP evidence bundle (evidence-bundle.schema.json).",
+      "additionalProperties": true
+    }
+  }
+}
