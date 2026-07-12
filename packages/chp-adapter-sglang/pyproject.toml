@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-sglang"
-version = "0.24.0"
+version = "0.25.0"
 description = "CHP capability adapter — SGLang inference server (CUDA/Linux primary, CPU fallback)"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -837,6 +837,8 @@ def build_parser() -> argparse.ArgumentParser:
     keygen_p = subcommands.add_parser("keygen", help="Generate a host ed25519 signing keypair.")
     keygen_p.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR")
     keygen_p.add_argument("--overwrite", action="store_true", help="Replace an existing key.")
+    keygen_p.add_argument("--encrypt", action="store_true",
+                          help="Encrypt the private key at rest (passphrase from $CHP_KEY_PASSPHRASE or a prompt).")
     keygen_p.set_defaults(func=cmd_keygen)
 
     anchor_did_p = subcommands.add_parser(
