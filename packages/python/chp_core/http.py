@@ -416,6 +416,13 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 "witnesses": [r.get("statement") for r in witnessing.load_received()],
             })
             return
+        if path == "/anchors":
+            # External store-head anchors over THIS host's head (§12 External
+            # anchoring, proposal 0013) — out-of-mesh attestations, verifiable
+            # offline; independent of the witnessing peer set.
+            from . import witnessing
+            self._write_json({"anchors": witnessing.load_anchors()})
+            return
         if path == "/revocations":
             # The revocation set this host holds (spec §10 Revocation): its own
             # §3.2 key revocations + received mandate revocations. The pull
@@ -508,6 +515,9 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             if path == "/revocations":
                 self._receive_revocation(body)
                 return
+            if path == "/anchors":
+                self._receive_anchor(body)
+                return
             self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
         except KeyError as exc:
             self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", f"Missing required field: {exc}")
@@ -576,6 +586,44 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         witnessing.record_received(body, head["leaves"], revocations=rev_snapshot)
         self._write_json({"accepted": True, "sequence": sequence,
                           "witness": (body.get("witness") or {}).get("host_id")})
+
+    def _receive_anchor(self, body: JSON) -> None:
+        """POST /anchors (spec §12 External anchoring, proposal 0013): accept an
+        external store-head anchor over THIS host's head. Verify the anchor
+        offline AND recompute-match the head at the anchored sequence before
+        persisting — never store an unverified or non-matching anchor."""
+        from . import witnessing
+        from .signing import verify_store_head_anchor
+
+        store = getattr(self.server.chp_host, "store", None)
+        if store is None or not hasattr(store, "get_store_head"):
+            self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
+            return
+        my_id = getattr(self.server.chp_host, "host_id",
+                        getattr(self.server.chp_host, "_host_id", "unknown"))
+        if body.get("host_id") != my_id:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_anchor",
+                              "anchor host_id does not match this host")
+            return
+        av = verify_store_head_anchor(body)
+        if not av.valid:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_anchor",
+                              av.reason or "anchor failed verification")
+            return
+        try:
+            sequence = int(body.get("sequence"))
+        except (TypeError, ValueError):
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_anchor", "bad sequence")
+            return
+        head = store.get_store_head(at_sequence=sequence)
+        if head["store_head"] != body.get("store_head"):
+            self._write_error(
+                HTTPStatus.CONFLICT, "head_mismatch",
+                "anchor head does not match this store at that sequence")
+            return
+        witnessing.record_anchor(body)
+        self._write_json({"accepted": True, "sequence": sequence,
+                          "anchor_did": (body.get("anchor") or {}).get("did")})
 
     def _own_key_revocations(self) -> list:
         from . import signing

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/store-head-anchor.schema.json",
+  "title": "StoreHeadAnchor",
+  "description": "An external, out-of-mesh attestation of a host's evidence-store head (chp-v0.2.md section 12 External anchoring, proposal 0013). An external did:key SSHSIG-countersigns chp-stable-v1({kind, host_id, sequence, store_head, anchored_at}) under SSHSIG namespace chp-store-head-anchor. Independent of the witnessing peer set: an anchored head survives even if every witness colludes. This is the signed-checkpoint form; real Rekor/Sigstore Merkle-inclusion proofs are a named deferral.",
+  "type": "object",
+  "required": [
+    "kind",
+    "host_id",
+    "sequence",
+    "store_head",
+    "anchored_at",
+    "anchor"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "store-head-anchor"
+    },
+    "host_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The anchored host."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The host's global store sequence at anchoring time."
+    },
+    "store_head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "chp-store-head-v1 digest of the store at `sequence`."
+    },
+    "anchored_at": {
+      "type": "string",
+      "description": "ISO-8601 anchoring time (part of the countersigned bytes)."
+    },
+    "anchor": {
+      "type": "object",
+      "required": [
+        "type",
+        "did",
+        "countersignature"
+      ],
+      "additionalProperties": false,
+      "description": "The external anchor. Mirrors the §3.1 identity DID anchor, applied to a store head.",
+      "properties": {
+        "type": {
+          "const": "did",
+          "description": "Anchor type. `did` = an external did:key SSHSIG countersignature. (Future: `rekor` transparency-log inclusion — deferred.)"
+        },
+        "did": {
+          "type": "string",
+          "pattern": "^did:key:",
+          "description": "The external anchor authority's did:key (ed25519). A notary or a transparency-log checkpoint key."
+        },
+        "countersignature": {
+          "type": "string",
+          "description": "Armored SSHSIG over chp-stable-v1({kind, host_id, sequence, store_head, anchored_at}), namespace chp-store-head-anchor."
+        }
+      }
+    }
+  }
+}

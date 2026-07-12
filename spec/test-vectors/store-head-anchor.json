@@ -1,0 +1,12 @@
+{
+  "anchor": {
+    "countersignature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgKay64UG8yvCyLhqU000LxzYeUm\n0L/hLIl5S8kyKWbdcAAAAVY2hwLXN0b3JlLWhlYWQtYW5jaG9yAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQAsC+y2J94gZSWyZD1KGG7ER9Wofrbmunzm3/uEzuH\n27N94N96PMBbAt/bNNhXVT5cLk1tb2duduc2lHAv6qkQQ=\n-----END SSH SIGNATURE-----\n",
+    "did": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2",
+    "type": "did"
+  },
+  "anchored_at": "2026-01-01T00:00:00Z",
+  "host_id": "vector-witnessed-host",
+  "kind": "store-head-anchor",
+  "sequence": 42,
+  "store_head": "3b0cc1fa06529112ead2292b581e8206dfff42aa4cbe55f9246163ad540ab2d1"
+}

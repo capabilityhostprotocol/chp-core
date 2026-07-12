@@ -13,6 +13,7 @@ import { createHash, verify as edVerify, createPublicKey } from 'node:crypto';
 
 export const SSHSIG_MAGIC = Buffer.from('SSHSIG');
 export const DID_ANCHOR_NAMESPACE = 'chp-host-anchor';
+export const STORE_HEAD_ANCHOR_NAMESPACE = 'chp-store-head-anchor'; // §12 External anchoring (0013)
 const ED25519_MULTICODEC = Buffer.from([0xed, 0x01]);
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
