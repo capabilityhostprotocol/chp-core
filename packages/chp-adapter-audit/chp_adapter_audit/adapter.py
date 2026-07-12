@@ -323,7 +323,11 @@ class AuditAdapter(BaseAdapter):
             "until": until,
         }, redacted=False)
 
-        events = self._store.query(since=since, until=until)
+        # A scalar-column projection (event_type/invocation_id/capability_id/
+        # outcome) — NOT full events. stats only aggregates these four fields, so
+        # parsing every event_json (the old query()) was pure waste: the ~30s
+        # cold-scan on a large store. Same keys, same aggregation below.
+        events = self._store.stats_projection(since=since, until=until)
 
         # Exclude the current audit invocation
         current_inv_id = ctx.envelope.invocation_id
