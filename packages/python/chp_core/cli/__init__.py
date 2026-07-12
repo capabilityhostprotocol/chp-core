@@ -31,6 +31,8 @@ from ._core import (
     cmd_revocation_verify,
     cmd_completeness_verify,
     cmd_head_inclusion,
+    cmd_bundle_attest,
+    cmd_attest_verify,
     cmd_store_backup,
     cmd_serve_demo,
     cmd_validate_contract,
@@ -850,6 +852,27 @@ def build_parser() -> argparse.ArgumentParser:
     b_ver.add_argument("--key-id", default=None, dest="key_id",
                        help="Pin the expected signer key_id.")
     b_ver.set_defaults(func=cmd_bundle_verify)
+
+    # chp bundle attest — in-toto/DSSE attestation bridge (spec §15, proposal 0021)
+    b_att = bundle_sub.add_parser(
+        "attest",
+        help="Wrap a signed bundle as a DSSE-enveloped in-toto attestation (portable to Sigstore/in-toto/SLSA).")
+    b_att.add_argument("bundle", help="Path to a signed bundle JSON.")
+    b_att.add_argument("--key-dir", default=None, dest="key_dir", metavar="DIR",
+                       help="Host key dir (default ~/.chp/keys).")
+    b_att.add_argument("--out", default=None, help="Write the DSSE envelope here (default stdout).")
+    b_att.set_defaults(func=cmd_bundle_attest)
+
+    # chp attest — verify a DSSE/in-toto attestation (spec §15, proposal 0021)
+    attest_p = subcommands.add_parser(
+        "attest",
+        help="in-toto/DSSE attestations: verify a DSSE-enveloped CHP evidence attestation (spec §15, proposal 0021).")
+    attest_sub = attest_p.add_subparsers(dest="attest_command", required=True)
+    a_ver = attest_sub.add_parser(
+        "verify",
+        help="Verify the DSSE PAE signature + the subject digest + the embedded CHP bundle.")
+    a_ver.add_argument("file", help="A DSSE envelope JSON.")
+    a_ver.set_defaults(func=cmd_attest_verify)
 
     # chp stream — streaming completion (spec §13.1, proposal 0012)
     stream_p = subcommands.add_parser(
