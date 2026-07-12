@@ -1152,6 +1152,79 @@ def cmd_head_monitor(args: argparse.Namespace) -> int:
     return 1 if (forked and getattr(args, "require_consistent", False)) else 0
 
 
+def cmd_bundle_seal(args: argparse.Namespace) -> int:
+    """Sealed payloads (§16, proposal 0025): write a copy of a signed bundle with
+    chp-event-hash-v2 payloads SEALED to a recipient's X25519 key ({chp_sealed})
+    while their commitment is kept — the root and signature are unchanged and the
+    bundle still verifies for a third party with NO key. Only the recipient
+    unseals. --recipient is the recipient's base64 X25519 public key."""
+    import sys
+
+    from .. import sealing, signing
+
+    with open(args.bundle) as fh:
+        bundle = json.load(fh)
+    caps, evids = set(args.capability or []), set(args.event or [])
+    predicate = None
+    if caps or evids:
+        def predicate(ev: dict) -> bool:  # noqa: F811
+            return ev.get("capability_id") in caps or ev.get("event_id") in evids
+    sealed = sealing.seal_payloads(bundle, args.recipient, predicate)
+    n = sum(1 for e in sealed.get("events", [])
+            if isinstance(e.get("payload"), dict) and "chp_sealed" in e["payload"])
+    rendered = json.dumps(sealed, indent=2)
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(rendered + "\n")
+        print(f"sealed {n} payload(s) -> {args.out}", file=sys.stderr)
+    else:
+        print(rendered)
+    v = signing.verify_bundle(sealed)
+    if not v.valid:  # a sealed bundle MUST still verify with no key — the point
+        print(f"WARNING: sealed bundle does not verify: {v.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_bundle_unseal(args: argparse.Namespace) -> int:
+    """Sealed payloads (§16, proposal 0025): decrypt a sealed bundle's {chp_sealed}
+    payloads back to plaintext with THIS host's X25519 sealing key (from --key-dir),
+    then confirm each recovered payload matches its committed hash. Exit 1 if the
+    key is missing or any commitment fails."""
+    import sys
+
+    from .. import sealing
+    from ..signing import resolve_key_dir
+    from ..store import _payload_commitment
+
+    with open(args.bundle) as fh:
+        bundle = json.load(fh)
+    key_dir = args.key_dir or resolve_key_dir(args.host_id)
+    enc_priv = sealing.load_enc_private_key(key_dir)
+    if enc_priv is None:
+        print(f"no X25519 sealing key in {key_dir} (run: chp host keygen --enc)", file=sys.stderr)
+        return 1
+    try:
+        opened = sealing.unseal_bundle(bundle, enc_priv)
+    except Exception as exc:
+        print(f"unseal failed (wrong key or tampered ciphertext): {exc}", file=sys.stderr)
+        return 1
+    bad = [e.get("event_id") for e in opened.get("events", [])
+           if e.get("hash_scheme") == "chp-event-hash-v2" and e.get("payload_commitment")
+           and _payload_commitment(e.get("payload")) != e["payload_commitment"]]
+    rendered = json.dumps(opened, indent=2)
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(rendered + "\n")
+        print(f"unsealed -> {args.out}", file=sys.stderr)
+    else:
+        print(rendered)
+    if bad:
+        print(f"WARNING: {len(bad)} unsealed payload(s) fail their commitment: {bad}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_bundle_minimize(args: argparse.Namespace) -> int:
     """Selective disclosure (§14, proposal 0011): write a disclosure-minimized
     copy of a signed bundle — chp-event-hash-v2 payloads matching the filter are

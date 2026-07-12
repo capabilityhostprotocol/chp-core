@@ -66,6 +66,10 @@ export {
   type DsseEnvelope, type AttestationVerification,
 } from './dsse.js';
 export {
+  sealPayloads, unsealPayload, unsealBundle, generateEncKeypair,
+  SEALED_SCHEME, type SealedEnvelope,
+} from './sealing.js';
+export {
   verifyBundle,
   verifyBundleResolved,
   resolveHostIdentity,

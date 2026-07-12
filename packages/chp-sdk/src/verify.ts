@@ -46,6 +46,9 @@ export function verifyBundle(
     if (ev.hash_scheme !== EVENT_HASH_V2) return true;
     const payload = ev.payload as Record<string, unknown> | undefined;
     if (payload && payload.chp_withheld === true) return true;
+    // Sealed (§16, proposal 0025): encrypted-but-present, skipped like withheld —
+    // the commitment alone secures the chain; only the recipient decrypts.
+    if (payload && payload.chp_sealed) return true;
     return payloadCommitment(ev.payload) === ev.payload_commitment;
   });
 
@@ -104,6 +107,7 @@ export function verifyBundle(
         valid_until: att.valid_until,
       };
       if ('anchors' in att) claim.anchors = att.anchors;
+      if ('enc_public_key' in att) claim.enc_public_key = att.enc_public_key; // §16
       const created = bundle.created_at as string | null;
       const vf = att.valid_from as string | null;
       const vu = att.valid_until as string | null;
@@ -349,6 +353,7 @@ export function verifyProvenanceStatement(
       valid_from: att.valid_from, valid_until: att.valid_until,
     };
     if ('anchors' in att) claim.anchors = att.anchors;
+    if ('enc_public_key' in att) claim.enc_public_key = att.enc_public_key; // §16
     const created = (stmt.created_at as string | null) ?? null;
     const vf = att.valid_from as string | null;
     const vu = att.valid_until as string | null;
@@ -847,6 +852,7 @@ function attestationOk(
     valid_until: att.valid_until,
   };
   if ('anchors' in att) claim.anchors = att.anchors;
+  if ('enc_public_key' in att) claim.enc_public_key = att.enc_public_key; // §16
   const vf = att.valid_from as string | null;
   const vu = att.valid_until as string | null;
   const temporalOk =

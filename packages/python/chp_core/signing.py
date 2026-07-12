@@ -368,7 +368,8 @@ def build_completeness(correlation_id: str, events: list[dict], as_of_sequence: 
 
 def build_attestation(host_id: str, host_key: HostKey, *, valid_from: str,
                       valid_until: str | None = None,
-                      anchors: list[dict] | None = None) -> dict:
+                      anchors: list[dict] | None = None,
+                      enc_public_key: str | None = None) -> dict:
     """Self-signed statement binding host_id <-> public_key.
 
     key_id = sha256(pubkey)[:16] only binds a key to itself; host_id is a free
@@ -393,6 +394,11 @@ def build_attestation(host_id: str, host_key: HostKey, *, valid_from: str,
     }
     if anchors:
         claim["anchors"] = anchors
+    if enc_public_key:
+        # The recipient's X25519 sealing key (§16, proposal 0025), bound to
+        # host_id by living inside the signed claim. Omit-when-empty like anchors —
+        # emitting it when unset would change canonical bytes.
+        claim["enc_public_key"] = enc_public_key
     return {**claim, "signature": _sign(host_key._private, _canon(claim))}
 
 
@@ -524,7 +530,7 @@ def verify_attestation(
     # no-anchor attestation byte-identical to the pre-anchor format.
     keys = ("host_id", "public_key", "key_id", "valid_from", "valid_until") + (
         ("anchors",) if "anchors" in attestation else ()
-    )
+    ) + (("enc_public_key",) if "enc_public_key" in attestation else ())
     claim = {k: attestation.get(k) for k in keys}
     return _verify_sig(att_pub, _canon(claim), attestation.get("signature", ""))
 
@@ -916,6 +922,9 @@ def verify_bundle(bundle: dict, *, expected_key_id: str | None = None,
         payload = ev.get("payload")
         if isinstance(payload, dict) and payload.get("chp_withheld") is True:
             continue  # withheld, not disclosed
+        if isinstance(payload, dict) and "chp_sealed" in payload:
+            continue  # sealed (§16, proposal 0025) — encrypted-but-present; the
+            # commitment alone secures the chain, exactly like a withheld payload.
         if _payload_commitment(payload) != ev.get("payload_commitment"):
             commit_ok = False
             break

@@ -1,0 +1,75 @@
+{
+  "bundle": {
+    "assurance": "signed",
+    "canonicalization": "chp-stable-v1",
+    "created_at": "2026-01-01T00:00:00Z",
+    "events": [
+      {
+        "capability_id": "demo.cap",
+        "content_hash": "d43fd1c2609e04c9c4b15179c0ee37b17a95b63e0d34d0b4316a42a9c23c96e1",
+        "correlation": {
+          "causation_id": null,
+          "correlation_id": "corr_test"
+        },
+        "event_id": "evt_test0002",
+        "event_type": "execution_started",
+        "hash_scheme": "chp-event-hash-v2",
+        "host_id": "vector-host",
+        "invocation_id": "inv_test0002",
+        "outcome": null,
+        "payload": {
+          "chp_sealed": {
+            "ct": "2QDqUbwYb3svm/yyTBSXIfW/aeu1car0KLunGsDhRJUG/XU+DA==",
+            "epk": "UEC0E7nbycvVrA3gSruId/CeTc9X5BXqP39r2s1edXE=",
+            "nonce": "AAECAwQFBgcICQoL",
+            "scheme": "chp-sealed-v1"
+          }
+        },
+        "payload_commitment": "4fccc2f736d4f0658f6620209643fa71be57f8b0caed76a1e8fbf1d531092943",
+        "prev_hash": null,
+        "timestamp": "2026-01-01T00:00:00Z"
+      },
+      {
+        "capability_id": "demo.cap",
+        "content_hash": "2a29be85126e9dae561bb476d2ce7bca2b63ad94f902298827831921d155ef3f",
+        "correlation": {
+          "causation_id": null,
+          "correlation_id": "corr_test"
+        },
+        "event_id": "evt_test0001",
+        "event_type": "execution_completed",
+        "hash_scheme": "chp-event-hash-v2",
+        "host_id": "vector-host",
+        "invocation_id": "inv_test0001",
+        "outcome": "success",
+        "payload": {
+          "note": "caf\u00e9"
+        },
+        "payload_commitment": "4fccc2f736d4f0658f6620209643fa71be57f8b0caed76a1e8fbf1d531092943",
+        "prev_hash": "d43fd1c2609e04c9c4b15179c0ee37b17a95b63e0d34d0b4316a42a9c23c96e1",
+        "timestamp": "2026-01-01T00:00:00Z"
+      }
+    ],
+    "host_id": "vector-host",
+    "host_identity": {
+      "host_id": "vector-host",
+      "key_id": "56475aa75463474c",
+      "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+      "signature": "Tfsj5Su5RD/IpDWm6LLAfZ5rNmP6gDf/V2efNZZcqYMeWJg7ZWHRBSmcBGyp0km9NajWcOTKAoSLdC3+gWpvBw==",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": null
+    },
+    "protocol_version": "0.2",
+    "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+    "root_hash": "2ded8c3ef937bfd8ab5f19dc461b515d63905df81fdb8fd9580440f4dbcf6153",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "56475aa75463474c",
+      "signature": "AHoGZT2QOU5+Gf99U/7HKUNlR9cqWPn7d2ywuY4YNvQMrDniH88r8eQ+WJ1wKpXSNexpCrYaTZCl9ZBtB/uQBA=="
+    }
+  },
+  "kind": "sealed-bundle",
+  "note": "chp-sealed-v1 (chp-v0.2.md \u00a716): event[0]'s payload is X25519-ECIES sealed. Verify the chain/root/signature with NO key (the {chp_sealed} marker is skipped like {chp_withheld}); the recipient X25519 key unseals to the committed plaintext. A wrong key fails.",
+  "recipient_enc_private": "ysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKyso=",
+  "recipient_enc_public": "/PxJ/H8KpPtdzqDifVgUyYnHMlZEPGDl3uZ24+lThQw="
+}
