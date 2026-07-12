@@ -463,6 +463,48 @@ export function verifyChainWitness(
   };
 }
 
+// ── Signed bearer tokens (chp-v0.2.md §5, proposal 0027) ────────────────────
+
+/**
+ * Verify an auth-token: the caller's ed25519 signature over the canonical header
+ * `{kind, sub, aud, iat, exp, canonicalization}`, the caller attestation
+ * (`host_id == sub`), the audience, `iat ≤ atTime < exp`, and — when given — the
+ * host's pin for `sub` (`expectedCallerKey`). Byte-parity with Python
+ * `verify_auth_token`. Any failure is a transport rejection.
+ */
+export function verifyAuthToken(
+  token: Record<string, JsonValue>,
+  opts: { aud: string; atTime: string; expectedCallerKey?: string },
+): BundleVerification {
+  const checks: Record<string, boolean> = {};
+  checks.structure = token.kind === 'auth-token' && !!token.sub && !!token.aud;
+  const caller = (token.caller as Record<string, JsonValue> | undefined) ?? {};
+  const pub = String(caller.public_key ?? '');
+  const sig = (token.signature as Record<string, JsonValue> | undefined) ?? {};
+  if (opts.expectedCallerKey !== undefined && pub !== opts.expectedCallerKey) {
+    return { valid: false, assurance: 'signed', checks, reason: `caller key not authorized for sub ${String(token.sub)}` };
+  }
+  const header: Record<string, JsonValue> = {
+    kind: token.kind, sub: token.sub, aud: token.aud, iat: token.iat,
+    exp: token.exp, canonicalization: token.canonicalization,
+  };
+  checks.signature = sig.algorithm === 'ed25519' && !!pub
+    && verifyCanon(pub, header, String(sig.signature ?? ''));
+  const att = caller.host_identity as Record<string, JsonValue> | undefined;
+  checks.caller_identity = !!att
+    && attestationOk(att, pub, String(token.sub ?? ''), opts.atTime);
+  checks.audience = token.aud === opts.aud;
+  const iat = token.iat as string | null;
+  const exp = token.exp as string | null;
+  checks.temporal = (iat == null || iat <= opts.atTime) && (exp == null || opts.atTime < exp);
+  const valid = Object.values(checks).every(Boolean);
+  return {
+    valid, assurance: 'signed', checks,
+    reason: valid ? undefined : 'auth-token checks failed: '
+      + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
+  };
+}
+
 // ── Log monitor / fork detection (chp-v0.2.md §12, proposal 0023) ───────────
 
 const STORE_HEAD_MONITOR_HEADER_FIELDS = [

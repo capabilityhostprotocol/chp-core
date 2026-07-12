@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/auth-token.schema.json",
+  "title": "AuthToken",
+  "description": "An ed25519-signed, short-lived, audience-bound bearer token a caller presents for transport authentication instead of (or beside) the static X-CHP-Key (chp-v0.2.md section 5, proposal 0027). The signature covers the canonical header {kind, sub, aud, iat, exp, canonicalization}; the caller block is the same self-attested host identity a mandate principal carries. A host verifies the token is internally valid (signature, attestation binds host_id==sub, iat<=now<exp, aud matches) AND authorizes the caller by pinning sub's public key. Any failure is a transport 401, never a governance denial.",
+  "type": "object",
+  "required": ["kind", "sub", "aud", "iat", "exp", "canonicalization", "caller", "signature"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "auth-token" },
+    "sub": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The caller's host_id (the authenticated subject a valid token binds)."
+    },
+    "aud": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The target host_id this token is valid for (audience binding — a token cannot be replayed to another host)."
+    },
+    "iat": {
+      "type": "string",
+      "description": "ISO-8601 issued-at time."
+    },
+    "exp": {
+      "type": "string",
+      "description": "ISO-8601 expiry — the token is invalid at or after this time. Short-lived by design (a captured token is useless after exp)."
+    },
+    "canonicalization": {
+      "type": "string",
+      "description": "The canonicalization scheme for the signed header (e.g. chp-stable-v1)."
+    },
+    "caller": {
+      "type": "object",
+      "required": ["host_id", "public_key"],
+      "description": "The caller's self-attested identity — the same block a mandate principal carries. The host verifies host_identity binds host_id==sub to public_key, then authorizes by pinning that public_key.",
+      "properties": {
+        "host_id": { "type": "string" },
+        "public_key": { "type": "string" },
+        "host_identity": { "type": "object" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["algorithm", "key_id", "signature"],
+      "properties": {
+        "algorithm": { "type": "string" },
+        "key_id": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    }
+  }
+}
