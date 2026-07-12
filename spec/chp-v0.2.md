@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -1132,3 +1132,33 @@ OTel/PROV exports, the output format is governed by its upstream standard; CHP
 ships `dsse-envelope` + `in-toto-statement` schemas for CHP-side validation.
 Real Rekor/Sigstore submission + log inclusion, an SLSA predicate, and a PROV-O
 graph are out of scope (named in proposal 0021).
+
+## 16. Confidentiality — Sealed Payloads
+
+CHP payloads are integrity-protected but, until this section, **plaintext** — a
+signed bundle discloses its payloads to anyone who holds it. **Sealing**
+([proposal 0025](proposals/0025-sealed-payloads.md)) adds payload confidentiality
+*without* touching the evidence chain, by reusing §14's mechanism: `chp-event-hash-v2`
+binds `content_hash` to `payload_commitment = sha256(canon(plaintext))`, not the
+inline `payload`, so — exactly as a withheld payload is replaced by
+`{chp_withheld}` — a **sealed** payload is replaced by a `{chp_sealed}` marker
+carrying an encrypted envelope. The commitment, `content_hash`, root, and
+signature are unchanged; a third party with **no key** verifies the full chain
+over the ciphertext, and the bundle verifier skips a `{chp_sealed}` payload just as
+it skips a withheld one.
+
+The **`chp-sealed-v1`** envelope is a standard hybrid ECIES to the recipient's
+X25519 key: an ephemeral X25519 keypair, `X25519(esk, recipient)` → HKDF-SHA256
+(`info = "chp-sealed-v1"`) → an AEAD (ChaCha20-Poly1305) over `canon(plaintext)`;
+the marker carries `{scheme, epk, nonce, ct}`. All primitives are in the standard
+crypto libraries — no new dependency. The recipient runs `unseal` — `X25519(sk,
+epk)` → HKDF → AEAD-open → plaintext — then re-runs the §14 commitment check, so a
+wrong key, a tampered ciphertext, or a swapped plaintext all fail.
+
+The recipient's sealing key is a **separate X25519 key** (ed25519 identity keys do
+not double as encryption keys) published as an omit-when-empty **`enc_public_key`**
+inside the signed `host_identity` attestation (§3) — bound to `host_id`, so a MITM
+cannot substitute a key it controls. Per-field sealing, multi-recipient envelopes,
+disclosure receipts, and forward-secrecy ratchets are out of scope (named in
+proposal 0025); in-transit confidentiality is the transport binding's concern (§5),
+not this.

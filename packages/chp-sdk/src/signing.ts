@@ -105,6 +105,7 @@ export function buildAttestation(
   validFrom: string,
   validUntil: string | null = null,
   anchors: JsonValue[] | null = null,
+  encPublicKey: string | null = null,
 ): JsonValue {
   if (!key.privateKey) throw new Error('host key has no private component; cannot attest');
   const claim: Record<string, JsonValue> = {
@@ -118,6 +119,9 @@ export function buildAttestation(
   // canonical bytes and break every published vector. Anchors live INSIDE the
   // signed claim so they can be neither stripped nor stapled on.
   if (anchors && anchors.length > 0) claim.anchors = anchors;
+  // The recipient X25519 sealing key (§16, proposal 0025), same omit-when-empty
+  // rule — bound to host_id inside the signed claim.
+  if (encPublicKey) claim.enc_public_key = encPublicKey;
   return { ...claim, signature: signCanon(key.privateKey, claim as JsonValue) } as JsonValue;
 }
 

@@ -568,6 +568,42 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "monitor_report_vector_verifies", False, {"error": str(exc)})
 
+    # Sealed payloads (proposal 0025): the spec must define confidentiality, and
+    # the sealed vector must verify offline with NO key AND unseal to the committed
+    # plaintext with the shipped recipient key (a wrong key fails).
+    add_check(
+        checks,
+        "spec_defines_sealed_payloads",
+        "chp-sealed-v1" in spec_v02_mk and "enc_public_key" in spec_v02_mk
+        and "Sealed Payloads" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §16 must define sealed payloads (chp-sealed-v1, enc_public_key)"},
+    )
+    sealed_vec = repo_root / "spec" / "test-vectors" / "sealed-bundle.json"
+    if sealed_vec.exists():
+        try:
+            import base64 as _b64
+
+            from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+            from . import sealing
+            from .signing import verify_bundle
+
+            sv = read_json(sealed_vec)
+            recipient = X25519PrivateKey.from_private_bytes(
+                _b64.b64decode(sv["recipient_enc_private"]))
+            opened = sealing.unseal_bundle(sv["bundle"], recipient)
+            add_check(
+                checks,
+                "sealed_vector_verifies",
+                verify_bundle(sv["bundle"]).valid          # integrity, no key
+                and verify_bundle(opened).valid            # unsealed still verifies
+                and any(isinstance(e.get("payload"), dict) and "chp_sealed" in e["payload"]
+                        for e in sv["bundle"]["events"]),  # actually sealed
+                {"hint": "regenerate sealed-bundle.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "sealed_vector_verifies", False, {"error": str(exc)})
+
     # Remote monitor (proposal 0024): the spec must define the no-store-copy monitor
     # and the /head/consistency serving endpoint.
     add_check(
