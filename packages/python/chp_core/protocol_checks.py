@@ -604,6 +604,31 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "sealed_vector_verifies", False, {"error": str(exc)})
 
+    # Transport auth (proposal 0027): §5 must be normative + define signed tokens,
+    # and the auth-token vector must verify (and reject a wrong audience).
+    add_check(
+        checks,
+        "spec_defines_transport_auth",
+        "auth-token" in spec_v02_mk and "X-CHP-Token" in spec_v02_mk
+        and "informative for v0.2" not in spec_v02_mk,
+        {"hint": "chp-v0.2.md §5 must be normative and define the auth-token bearer credential"},
+    )
+    token_vec = repo_root / "spec" / "test-vectors" / "auth-token.json"
+    if token_vec.exists():
+        try:
+            from .signing import verify_auth_token
+
+            tok_doc = read_json(token_vec)
+            add_check(
+                checks,
+                "auth_token_vector_verifies",
+                verify_auth_token(tok_doc, aud=tok_doc["aud"], at_time=tok_doc["iat"]).valid
+                and not verify_auth_token(tok_doc, aud="wrong-host", at_time=tok_doc["iat"]).valid,
+                {"hint": "regenerate auth-token.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "auth_token_vector_verifies", False, {"error": str(exc)})
+
     # max_invocations enforcement (proposal 0026): the spec must define the cap, and
     # a capped mandate must verify (the header signs max_invocations) while a raised
     # cap breaks the signature.

@@ -531,6 +531,36 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (store-head-consistency: log append-only ${oldRoot.slice(0, 12)}…→${newRoot.slice(0, 12)}…, ${proof.first_size}→${proof.second_size} leaves)`
     : "INVALID");
+} else if (input.kind === "auth-token") {
+  // Signed bearer token (chp-v0.2.md §5, proposal 0027): verify the caller's
+  // ed25519 signature over the canonical header, the caller attestation
+  // (host_id==sub), and iat<=now<exp (verify at now == this token's iat).
+  const caller = input.caller ?? {};
+  const cPub = createPublicKey({
+    key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                        Buffer.from(caller.public_key ?? "", "base64")]),
+    format: "der", type: "spki",
+  });
+  const vC = (obj, sigB64) =>
+    edVerify(null, Buffer.from(canon(obj), "utf8"), cPub, Buffer.from(sigB64, "base64"));
+  const header = { kind: input.kind, sub: input.sub, aud: input.aud,
+                   iat: input.iat, exp: input.exp, canonicalization: input.canonicalization };
+  let good = input.signature?.algorithm === "ed25519" && vC(header, input.signature.signature);
+  const att = caller.host_identity;
+  if (att) {
+    const claim = { host_id: att.host_id, public_key: att.public_key, key_id: att.key_id,
+                    valid_from: att.valid_from, valid_until: att.valid_until,
+                    ...("anchors" in att ? { anchors: att.anchors } : {}) };
+    if (!(att.host_id === input.sub && att.public_key === caller.public_key && vC(claim, att.signature))) good = false;
+  } else good = false;
+  const now = input.iat;                                  // iat <= now < exp holds
+  const temporalOk = (input.iat == null || input.iat <= now) && (input.exp == null || now < input.exp);
+  // a raised exp must break the header signature
+  const tamperFails = !vC({ ...header, exp: "2099-01-01T00:00:00Z" }, input.signature.signature);
+  ok = good && temporalOk && tamperFails;
+  console.log(ok
+    ? `VALID (auth-token: ${input.sub} → ${input.aud}, expires ${input.exp})`
+    : "INVALID");
 } else if (input.kind === "store-head-monitor-report") {
   // Log monitor / fork detection (chp-v0.2.md §12, proposal 0023): verify the
   // monitor's ed25519 signature over the canonical report header. The divergence

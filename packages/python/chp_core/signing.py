@@ -1417,6 +1417,79 @@ def verify_store_head_monitor_report(
                               anchored_domain=anchored_domain, anchored_did=anchored_did)
 
 
+# ── Signed bearer tokens (chp-v0.2.md §5, proposal 0027) ─────────────────────
+
+_AUTH_TOKEN_HEADER_FIELDS = ("kind", "sub", "aud", "iat", "exp", "canonicalization")
+
+
+def auth_token_header(token: dict) -> dict:
+    """The caller-signed header of an auth-token (§5, proposal 0027)."""
+    return {k: token.get(k) for k in _AUTH_TOKEN_HEADER_FIELDS}
+
+
+def build_auth_token(caller_key: HostKey, *, sub: str, aud: str, iat: str, exp: str,
+                     anchors: list[dict] | None = None) -> dict:
+    """A caller's ed25519-signed, short-lived, audience-bound bearer token (§5,
+    proposal 0027): "I am ``sub``, presenting to ``aud``, until ``exp``." The
+    signature covers the canonical header; the ``caller`` block is the same
+    self-attested identity a mandate principal carries. Presented over the wire as
+    ``X-CHP-Token`` / ``Authorization: Bearer``."""
+    if not caller_key.can_sign:
+        raise SigningUnavailable("caller key has no private component; cannot mint a token")
+    token: dict = {
+        "kind": "auth-token", "sub": sub, "aud": aud, "iat": iat, "exp": exp,
+        "canonicalization": CANONICALIZATION,
+    }
+    token["caller"] = {
+        "host_id": sub,
+        "public_key": caller_key.public_key_b64,
+        "host_identity": build_attestation(sub, caller_key, valid_from=iat, anchors=anchors),
+    }
+    token["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": caller_key.key_id,
+        "signature": _sign(caller_key._private, _canon(auth_token_header(token))),
+    }
+    return token
+
+
+def verify_auth_token(token: dict, *, aud: str, at_time: str,
+                      expected_caller_key: str | None = None) -> BundleVerification:
+    """Verify an auth-token is internally valid (§5, proposal 0027): structure,
+    header signature against the caller's self-attested key, the caller attestation
+    binds ``host_id == sub`` to that key, ``aud`` matches, and ``iat ≤ at_time <
+    exp``. When ``expected_caller_key`` is given (the host's pin for ``sub``), the
+    caller's public key MUST equal it — the authorization step. A failure is a
+    transport rejection, not a governance denial."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = (token.get("kind") == "auth-token"
+                           and bool(token.get("sub")) and bool(token.get("aud")))
+    caller = token.get("caller") or {}
+    pub = str(caller.get("public_key") or "")
+    sig = token.get("signature") or {}
+    if expected_caller_key is not None and pub != expected_caller_key:
+        return BundleVerification(
+            False, "signed", checks,
+            f"caller key not authorized for sub {token.get('sub')!r}")
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM and bool(pub)
+                           and _verify_sig(pub, _canon(auth_token_header(token)),
+                                           str(sig.get("signature") or "")))
+    att = caller.get("host_identity")
+    if att:
+        checks["caller_identity"] = verify_attestation(
+            att, public_key=pub, expected_host_id=token.get("sub"), at_time=at_time)
+    else:
+        checks["caller_identity"] = False  # a token must say WHO signs it
+    checks["audience"] = token.get("aud") == aud
+    iat, exp = token.get("iat"), token.get("exp")
+    checks["temporal"] = ((iat is None or str(iat) <= at_time)
+                          and (exp is None or at_time < str(exp)))
+    valid = all(checks.values())
+    reason = None if valid else "auth-token checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason)
+
+
 _MANDATE_HEADER_FIELDS = ("kind", "mandate_id", "delegate_id", "scope",
                           "valid_from", "valid_until", "created_at",
                           "canonicalization")
