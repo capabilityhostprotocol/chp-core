@@ -1,0 +1,26 @@
+{
+  "aud": "vector-target-host",
+  "caller": {
+    "host_id": "vector-caller",
+    "host_identity": {
+      "host_id": "vector-caller",
+      "key_id": "b41fd894f96ec8ad",
+      "public_key": "4v4qObcyZkKCfW2C1JdiLNbCl/54Jw6qQ2sB8Ia288s=",
+      "signature": "wuvMhXqoCUcgV5dQrWCwJf79RUJKIGcOBQnhjwjhbcWvQBr8eCYJvjKZ6nn5PMKL4uRpmZLrmDAvWQ0MuBazCw==",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": null
+    },
+    "public_key": "4v4qObcyZkKCfW2C1JdiLNbCl/54Jw6qQ2sB8Ia288s="
+  },
+  "canonicalization": "chp-stable-v1",
+  "exp": "2027-01-01T00:00:00Z",
+  "iat": "2026-01-01T00:00:00Z",
+  "kind": "auth-token",
+  "note": "chp-v0.2.md \u00a75: verify the caller's ed25519 signature over the canonical header {kind,sub,aud,iat,exp,canonicalization}, the caller attestation (host_id==sub), aud, and iat<=now<exp. Verify at at_time == this token's iat.",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "b41fd894f96ec8ad",
+    "signature": "hd2gXPIWW77JVBcHIwoyXjmq/f79T3orctk5+wrsPhCTU2k8o9uGXA5u9ag4VwFESdcaw61+BHeYj+e3KEPIBg=="
+  },
+  "sub": "vector-caller"
+}

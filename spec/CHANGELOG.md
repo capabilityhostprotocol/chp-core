@@ -5,6 +5,29 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.7.2] — Normative transport/auth + signed bearer tokens over 0.7.1
+
+### Added
+- **Normative §5 + signed bearer tokens** (chp-v0.2.md §5,
+  [proposals/0027](proposals/0027-transport-auth.md)): §5 is promoted from
+  "informative" to normative (TLS/equivalent confidentiality MUST, constant-time
+  compare MUST, caller→subject binding MUST), reconciled with the already-normative
+  chp-http-binding.md. A host MAY accept a new `auth-token`: an ed25519-signed,
+  short-lived, audience-bound bearer token `{sub, aud, iat, exp, caller,
+  signature}` a caller mints with its identity key and presents as `X-CHP-Token` /
+  `Authorization: Bearer`. The host verifies it internally (signature, attestation
+  binds host_id==sub, iat≤now<exp, aud) and authorizes by pinning sub's public key.
+  Beats the static shared key: asymmetric (host holds only the caller's public
+  key), expiring, and audience-bound (no cross-host replay).
+
+### Compatibility
+- **Additive, no byte changes, no new denial code.** The static `X-CHP-Key` path
+  is unchanged; tokens are opt-in. A bad/expired/wrong-audience token is a
+  transport 401 before the pipeline (like a bad key), not a governance denial.
+  Regression gate: the `auth-token` vector verifies in Python + the TS SDK +
+  `verify.mjs` and an expired/tampered/wrong-aud token is rejected; a conformance
+  wire check authenticates with a token and rejects an expired one.
+
 ## [0.7.1] — max_invocations enforcement + delegation-lifecycle events over 0.7.0
 
 ### Added

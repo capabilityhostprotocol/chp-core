@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hmac
 import inspect
 import json
@@ -227,10 +228,45 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                     return True
         if shared and hmac.compare_digest(presented, shared):
             return True  # anonymous authenticated (single shared key)
-        if not named and not shared:
+
+        # Signed bearer token (§5, proposal 0027): a caller mints an ed25519-signed,
+        # short-lived, audience-bound token; the host pins sub's public key via
+        # CHP_HOST_TOKEN_KEYS="sub:pubkey,...". A valid, authorized token binds a
+        # VERIFIED caller — asymmetric (no shared secret), expiring, aud-bound.
+        token_keys = os.environ.get("CHP_HOST_TOKEN_KEYS")
+        if token_keys:
+            raw = self.headers.get("X-CHP-Token") or ""
+            if not raw:
+                authz = self.headers.get("Authorization", "")
+                if authz.startswith("Bearer "):
+                    try:
+                        raw = base64.urlsafe_b64decode(authz[7:] + "==").decode()
+                    except Exception:
+                        raw = ""
+            if raw:
+                try:
+                    token = json.loads(raw)
+                    pins = dict(kv.split(":", 1) for kv in token_keys.split(",") if ":" in kv)
+                    sub = str(token.get("sub") or "")
+                    pin = pins.get(sub, "").strip()
+                    if pin:
+                        from .signing import verify_auth_token
+                        from .types import utc_now
+                        host_id = getattr(self.server.chp_host, "host_id",
+                                          getattr(self.server.chp_host, "_host_id", ""))
+                        v = verify_auth_token(token, aud=host_id, at_time=utc_now(),
+                                              expected_caller_key=pin)
+                        if v.valid:
+                            self._caller = sub
+                            return True
+                except Exception:
+                    pass
+
+        if not named and not shared and not token_keys:
             return True  # no auth configured — open
 
-        self._write_error(HTTPStatus.UNAUTHORIZED, "unauthorized", "Missing or invalid X-CHP-Key")
+        self._write_error(HTTPStatus.UNAUTHORIZED, "unauthorized",
+                          "Missing or invalid X-CHP-Key / X-CHP-Token")
         return False
 
     def _sync_discover(self) -> JSON:
