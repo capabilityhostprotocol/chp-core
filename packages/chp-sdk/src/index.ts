@@ -81,6 +81,7 @@ export {
   scopeAllows,
   verifyContinuity,
   verifyChainWitness,
+  verifyStoreHeadMonitorReport,
   auditCompleteness,
   auditCompletenessViaAnchor,
   type CompletenessAudit,

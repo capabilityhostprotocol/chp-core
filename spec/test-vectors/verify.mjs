@@ -510,6 +510,43 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (store-head-consistency: log append-only ${oldRoot.slice(0, 12)}…→${newRoot.slice(0, 12)}…, ${proof.first_size}→${proof.second_size} leaves)`
     : "INVALID");
+} else if (input.kind === "store-head-monitor-report") {
+  // Log monitor / fork detection (chp-v0.2.md §12, proposal 0023): verify the
+  // monitor's ed25519 signature over the canonical report header. The divergence
+  // block is covered ONLY on a forked report (omit-when-consistent). Store-head
+  // RECONSTRUCTION is the monitor's act; a report verifier trusts the signed
+  // verdict. Checks both the consistent report and the forked sibling, and that
+  // a flipped verdict breaks the signature.
+  const verifyReport = (r) => {
+    const mon = r.monitor ?? {};
+    const mPub = createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                          Buffer.from(mon.public_key ?? "", "base64")]),
+      format: "der", type: "spki",
+    });
+    const header = { kind: r.kind, host_id: r.host_id,
+                     verified_through_sequence: r.verified_through_sequence,
+                     anchor_count: r.anchor_count, verdict: r.verdict,
+                     monitored_at: r.monitored_at, canonicalization: r.canonicalization,
+                     ...(r.divergence ? { divergence: r.divergence } : {}) };
+    const sigOk = r.signature?.algorithm === "ed25519"
+      && edVerify(null, Buffer.from(canon(header), "utf8"), mPub,
+                  Buffer.from(r.signature.signature ?? "", "base64"));
+    if (r.verdict === "forked") {
+      const d = r.divergence ?? {};
+      return sigOk && !!d.anchored_root && d.anchored_root !== d.reconstructed_root;
+    }
+    return sigOk && r.verdict === "consistent";
+  };
+  const consistentOk = verifyReport(input.report);
+  const forkedOk = verifyReport(input.forked);
+  // a flipped verdict must break the header signature
+  const tampered = { ...input.report, verdict: "forked" };
+  const tamperFails = !verifyReport(tampered);
+  ok = consistentOk && forkedOk && tamperFails;
+  console.log(ok
+    ? `VALID (store-head-monitor-report: ${input.report.host_id} consistent through seq ${input.report.verified_through_sequence}; forked case names seq ${input.forked.divergence.sequence})`
+    : "INVALID");
 } else if (input.kind === "dsse" || input.payloadType === "application/vnd.in-toto+json") {
   // in-toto / DSSE attestation (chp-v0.2.md §15, proposal 0021). Level 1: any
   // DSSE verifier recomputes the PAE = "DSSEv1 SP LEN(type) SP type SP LEN(body)

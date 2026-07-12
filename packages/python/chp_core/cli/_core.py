@@ -1123,6 +1123,35 @@ def cmd_head_consistency(args: argparse.Namespace) -> int:
     return 0 if anchors_ok and cons_ok else 1
 
 
+def cmd_head_monitor(args: argparse.Namespace) -> int:
+    """Verify a signed store-head-monitor-report (§12, proposal 0023): check the
+    monitor's ed25519 signature over the canonical header and surface its verdict.
+    A `forked` report names the sequence where the live store stopped reproducing
+    the immutable external anchor — a provable rewrite. Exit 1 if the signature is
+    invalid or (with --require-consistent) the verdict is forked."""
+    from ..signing import verify_store_head_monitor_report
+
+    with open(args.file) as fh:
+        report = json.load(fh)
+    # Accept either a bare report or the {report, forked} vector wrapper.
+    if report.get("kind") == "store-head-monitor-report" and "report" in report:
+        report = report["report"]
+    v = verify_store_head_monitor_report(report)
+    result = {
+        "signature_valid": v.valid,
+        "host_id": report.get("host_id"),
+        "verdict": report.get("verdict"),
+        "verified_through_sequence": report.get("verified_through_sequence"),
+        "divergence": report.get("divergence"),
+        "monitor": (report.get("monitor") or {}).get("host_id"),
+    }
+    print(json.dumps(result, indent=2))
+    forked = report.get("verdict") == "forked"
+    if not v.valid:
+        return 1
+    return 1 if (forked and getattr(args, "require_consistent", False)) else 0
+
+
 def cmd_bundle_minimize(args: argparse.Namespace) -> int:
     """Selective disclosure (§14, proposal 0011): write a disclosure-minimized
     copy of a signed bundle — chp-event-hash-v2 payloads matching the filter are

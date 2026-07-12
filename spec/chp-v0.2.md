@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -883,8 +883,29 @@ anchored heads; verification replays the SAME recursive split the prover used
 `{two store-head-anchors at sequences s₁ < s₂, a consistency proof}` gives a third
 party offline, witness-free proof that the operator's log **only grew** between
 the anchored heads — no new signed field, computed from roots the anchors already
-commit. Real Rekor/Sigstore submission + gossip, and log monitors, remain out of
-scope (named in proposals 0019 and 0022).
+commit. Real Rekor/Sigstore submission + gossip remain out of scope.
+
+**Log monitor — fork/rewrite detection** ([proposal 0023](proposals/0023-log-monitor.md)).
+Inclusion and consistency proofs are computed *from the store*, so a rewritten
+store yields internally-consistent but false proofs; what catches a rewrite is the
+**immutable external reference** — the store-head-anchors (SSHSIG countersignatures
+over `(host_id, sequence, root)` that live outside the mesh). A **log monitor**
+holds a host's anchor history and read access to its store, and for each anchor
+`(N, R, scheme)` recomputes the head as-of N from the live events
+(`get_store_head(at_sequence=N, fresh=True)` — the audit path that never trusts the
+cache); if the reconstruction **≠** `R`, the store no longer reproduces a root it
+once externally committed — a **rewrite**, provably, at sequence N (an edited or
+dropped old event moves every root ≥ its sequence, but the anchor is immutable).
+The monitor emits a signed **`store-head-monitor-report`** — the same statement
+family as chain-witness/anchor — with `verdict` `consistent` (every anchored root
+still reconstructs, through `verified_through_sequence`) or `forked` (a
+`divergence:{sequence, anchored_root, reconstructed_root}` block, omit-when-
+consistent). The report is offline-verifiable and lives with the **monitor**, not
+the monitored host, so it is a portable accusation the operator cannot retract. No
+new denial code — a monitor finding is a signed statement, not a gate outcome. A
+**remote** monitor (anchors + host-served consistency proofs, no store copy),
+gossip between monitors, and real Rekor submission remain out of scope (named in
+proposals 0019, 0022, 0023).
 
 **Cadence and posture.** Any authed peer MAY witness any peer; the reference
 gateway carries an opt-in witnessing loop (`gateway.witness_interval_s`,
