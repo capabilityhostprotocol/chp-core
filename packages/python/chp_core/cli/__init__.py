@@ -32,6 +32,7 @@ from ._core import (
     cmd_completeness_verify,
     cmd_head_inclusion,
     cmd_head_consistency,
+    cmd_head_monitor,
     cmd_bundle_attest,
     cmd_attest_verify,
     cmd_store_backup,
@@ -838,6 +839,16 @@ def build_parser() -> argparse.ArgumentParser:
     head_cons.add_argument("--file", required=True,
                            help="A store-head-consistency JSON ({first_anchor, second_anchor, proof}).")
     head_cons.set_defaults(func=cmd_head_consistency)
+    head_mon = head_sub.add_parser(
+        "monitor",
+        help="Verify a signed store-head-monitor-report: the monitor's signature + its "
+             "verdict (consistent | forked, a forked report names the rewrite) "
+             "(spec §12, proposal 0023).")
+    head_mon.add_argument("--file", required=True,
+                          help="A store-head-monitor-report JSON (bare report or the vector wrapper).")
+    head_mon.add_argument("--require-consistent", action="store_true",
+                          help="Exit non-zero if the verdict is forked (not just on a bad signature).")
+    head_mon.set_defaults(func=cmd_head_monitor)
 
     # chp bundle — selective disclosure (spec §14, proposal 0011)
     bundle_p = subcommands.add_parser(

@@ -312,3 +312,43 @@ def verify_receipt_against_store(store, receipt: JSON) -> JSON:
     result["tampered_correlations"] = tampered
     result["verdict"] = "tampered" if tampered else "intact"
     return result
+
+
+def monitor_anchor_history(store, anchors: list[JSON], *, host_id: str,
+                           monitor_key, monitor_id: str, monitored_at: str,
+                           monitor_anchors: list[JSON] | None = None) -> JSON:
+    """Walk a host's store-head-anchor history in ``sequence`` order and check the
+    live store against each immutable external anchor (§12, proposal 0023). For
+    each anchor ``(N, R, scheme)`` reconstruct the head as-of N from the live
+    events — ``get_store_head(at_sequence=N, fresh=True, scheme=scheme)``, the
+    audit path that never trusts the cache — and compare to the anchored ``R``. The
+    first anchor whose reconstruction diverges is a provable REWRITE (an edited or
+    dropped old event moves every root ≥ its sequence, but the anchor is
+    immutable). Returns a signed ``store-head-monitor-report``: ``forked`` at that
+    sequence, else ``consistent`` through the highest sequence. ``monitor_anchors``
+    are the MONITOR's own identity anchors (for its attestation), distinct from the
+    monitored host's history being checked."""
+    from .merkle import CHP_STORE_HEAD_V1
+    from .signing import build_store_head_monitor_report
+
+    ordered = sorted(anchors, key=lambda a: int(a.get("sequence", 0)))
+    last_good = 0
+    for a in ordered:
+        seq = int(a.get("sequence", 0))
+        anchored_root = str(a.get("store_head", ""))
+        scheme = a.get("store_head_scheme") or CHP_STORE_HEAD_V1
+        reconstructed = store.get_store_head(
+            at_sequence=seq, fresh=True, scheme=scheme)["store_head"]
+        if reconstructed != anchored_root:
+            return build_store_head_monitor_report(
+                host_id, verdict="forked", verified_through_sequence=last_good,
+                anchor_count=len(ordered), monitor_key=monitor_key,
+                monitor_id=monitor_id, monitored_at=monitored_at,
+                anchors=monitor_anchors,
+                divergence={"sequence": seq, "anchored_root": anchored_root,
+                            "reconstructed_root": reconstructed})
+        last_good = seq
+    return build_store_head_monitor_report(
+        host_id, verdict="consistent", verified_through_sequence=last_good,
+        anchor_count=len(ordered), monitor_key=monitor_key, monitor_id=monitor_id,
+        monitored_at=monitored_at, anchors=monitor_anchors)

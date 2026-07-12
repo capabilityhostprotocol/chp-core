@@ -458,6 +458,76 @@ export function verifyChainWitness(
   };
 }
 
+// ── Log monitor / fork detection (chp-v0.2.md §12, proposal 0023) ───────────
+
+const STORE_HEAD_MONITOR_HEADER_FIELDS = [
+  'kind', 'host_id', 'verified_through_sequence', 'anchor_count', 'verdict',
+  'monitored_at', 'canonicalization',
+] as const;
+
+/**
+ * Offline-verify a `store-head-monitor-report`: structure, the monitor's ed25519
+ * signature over the canonical header (the `divergence` block covered only on a
+ * `forked` report — omit-when-consistent), monitor attestation + DID anchor, and
+ * optional host/key pins. Byte-parity with Python `verify_store_head_monitor_report`.
+ * Store-head RECONSTRUCTION was the monitor's act; a report verifier trusts the
+ * signed verdict.
+ */
+export function verifyStoreHeadMonitorReport(
+  report: Record<string, JsonValue>,
+  opts: { expectedHostId?: string; expectedMonitorKey?: string } = {},
+): BundleVerification {
+  const checks: Record<string, boolean> = {};
+  let anchoredDid: string | null = null;
+  checks.structure = report.kind === 'store-head-monitor-report'
+    && !!report.host_id
+    && (report.verdict === 'consistent' || report.verdict === 'forked')
+    && Number.isInteger(report.verified_through_sequence);
+  if (report.verdict === 'forked') {
+    const d = (report.divergence as Record<string, JsonValue> | undefined) ?? {};
+    checks.divergence_present = !!d.anchored_root && !!d.reconstructed_root
+      && d.anchored_root !== d.reconstructed_root;
+  }
+
+  const monitor = (report.monitor as Record<string, JsonValue> | undefined) ?? {};
+  const pubKey = String(monitor.public_key ?? '');
+  const sig = (report.signature as Record<string, JsonValue> | undefined) ?? {};
+  if (opts.expectedMonitorKey !== undefined && sig.key_id !== opts.expectedMonitorKey) {
+    return { valid: false, assurance: 'signed', checks, reason: `signed by unexpected monitor key ${String(sig.key_id)}` };
+  }
+
+  const header: Record<string, JsonValue> = {};
+  for (const f of STORE_HEAD_MONITOR_HEADER_FIELDS) header[f] = report[f] ?? null;
+  if (report.divergence) header.divergence = report.divergence;
+  checks.signature = sig.algorithm === 'ed25519' && !!pubKey
+    && verifyCanon(pubKey, header, String(sig.signature ?? ''));
+
+  const att = monitor.host_identity as Record<string, JsonValue> | undefined;
+  if (att) {
+    checks.monitor_identity = attestationOk(
+      att, pubKey, String(monitor.host_id ?? ''),
+      (report.monitored_at as string | null) ?? null);
+    const dAnchor = didAnchor(att);
+    if (dAnchor) {
+      checks.did_anchor = verifyDidAnchor(dAnchor, pubKey, String(monitor.host_id ?? ''));
+      if (checks.did_anchor) anchoredDid = dAnchor.did as string;
+    }
+  } else {
+    checks.monitor_identity = false; // a report must say WHO monitored
+  }
+
+  if (opts.expectedHostId !== undefined) {
+    checks.monitored_host = report.host_id === opts.expectedHostId;
+  }
+
+  const valid = Object.values(checks).every(Boolean);
+  return {
+    valid, assurance: 'signed', checks, anchoredDid,
+    reason: valid ? undefined : 'monitor-report checks failed: '
+      + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
+  };
+}
+
 // ── Non-omission / completeness audit (chp-v0.2.md §12, proposal 0018) ──────
 
 export interface CompletenessAudit {

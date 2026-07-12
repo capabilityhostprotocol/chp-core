@@ -5,6 +5,28 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.6.2] — Log monitor / fork detection over 0.6.1
+
+### Added
+- **Log monitor** (chp-v0.2.md §12,
+  [proposals/0023](proposals/0023-log-monitor.md)): a monitor walks a host's
+  external store-head-anchor history and, for each anchor `(sequence N, root R)`,
+  reconstructs the head as-of N from the live store (`get_store_head(fresh)`) and
+  checks it still equals R. A mismatch is a provable **rewrite** — an edited or
+  dropped old event moves every root ≥ its sequence while the external anchor is
+  immutable. The monitor emits a signed `store-head-monitor-report`
+  (`verdict: consistent | forked`, a `divergence` block when forked), offline-
+  verifiable and living with the monitor, not the monitored host. Operationalizes
+  the transparency log (0019 inclusion + 0022 consistency gave the math).
+
+### Compatibility
+- **Additive, no byte changes, no new denial code.** The monitor reads existing
+  anchors and reconstructs existing heads; the only new artifact is its own signed
+  report. Regression gate: the `store-head-monitor-report` vector verifies byte-
+  identically in Python, the TS SDK, and stdlib `verify.mjs` (a faithful history →
+  `consistent`; a rewritten one → `forked` at the right sequence); the byte gate
+  shows only that new vector.
+
 ## [0.6.1] — Merkle consistency proofs over 0.6.0
 
 ### Added
