@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme

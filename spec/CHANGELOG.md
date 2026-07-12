@@ -5,6 +5,32 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.5.1] — security model over 0.5.0
+
+### Added
+- **Security model** (spec/chp-security-model.md,
+  [proposals/0020](proposals/0020-security-model.md)): a new normative doc — a
+  **properties matrix** (guarantee × adversary × residual-risk) consolidating the
+  guarantee and honest-boundary language scattered across chp-v0.2.md §1–§14 and
+  every proposal. Adversary classes: honest-verifier, malicious host/operator,
+  network adversary, colluding peers, external relying-party. Each mechanism cell
+  states its guarantee and its residual risk in the spec's own words. Supersedes
+  the v0.1-only `docs/security/threat-model-v0.1.md`; linked from SECURITY.md and
+  indexed in spec/README.md. Three `protocol_checks` guards keep it in sync:
+  `spec_defines_security_model`, `security_model_names_denial_codes` (every
+  reserved denial code referenced), `security_model_names_schemes` (every scheme
+  referenced) — a new code/scheme cannot ship without appearing in the matrix.
+
+### Compatibility
+- **Non-wire, additive.** No schema, canonicalization, hashing, or signing change
+  — every `spec/test-vectors/` fixture verifies unchanged (byte gate trivially
+  clean). A consolidation doc + three alignment guards. **Patch** bump (v0.5.1).
+  No TypeScript change (SDK/host unaffected).
+
+### Regression gate
+- The three security-model guards (alignment 87 → 90); the byte gate is
+  trivially clean (no signed object touched).
+
 ## [0.5.0] — Merkle store head + inclusion proofs over 0.4.3
 
 ### Added
