@@ -7,7 +7,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead, PROTOCOL_VERSION, CHP_STORE_HEAD_V2, storeHeadInclusionProof } from '@capabilityhostprotocol/sdk';
+import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead, PROTOCOL_VERSION, CHP_STORE_HEAD_V2, storeHeadInclusionProof, storeHeadConsistencyProof } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
 import type { InvocationEnvelope, JsonValue } from './types.js';
 
@@ -165,6 +165,20 @@ export function createHostServer(
         sequence: head.sequence, store_head: head.store_head,
         proof: storeHeadInclusionProof(head.leaves, corr) as unknown as JsonValue,
       });
+    }
+    if (method === 'GET' && path === '/head/consistency') {
+      // Remote monitor (§12, proposal 0024): a consistency proof between two
+      // reconstructed heads so a monitor holding only the anchors verifies
+      // append-only with no store copy.
+      const first = Number(url.searchParams.get('first'));
+      const second = Number(url.searchParams.get('second'));
+      if (!Number.isInteger(first) || !Number.isInteger(second) || first > second) {
+        return err(res, 400, 'bad_request', 'first and second must be integer sequences, first <= second');
+      }
+      const oldHead = host.store.getStoreHead(first, CHP_STORE_HEAD_V2);
+      const newHead = host.store.getStoreHead(second, CHP_STORE_HEAD_V2);
+      return sendJson(res, 200,
+        storeHeadConsistencyProof(oldHead.leaves, newHead.leaves) as unknown as JsonValue);
     }
     if (method === 'GET' && path === '/head') {
       const scheme = url.searchParams.get('scheme') ?? undefined;

@@ -422,6 +422,34 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 "proof": store_head_inclusion_proof(head["leaves"], corr),
             })
             return
+        if path == "/head/consistency":
+            # Remote monitor (§12, proposal 0024): a consistency proof between two
+            # reconstructed heads, so a monitor holding ONLY the anchors verifies
+            # append-only with no store copy. AUTHED (sequences disclose activity
+            # volume — mesh-count privacy). Leaves stay local; the proof carries
+            # only subtree hashes.
+            store = getattr(self.server.chp_host, "store", None)
+            if store is None or not hasattr(store, "get_store_head"):
+                self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
+                return
+            from urllib.parse import parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                first = int((q.get("first") or [""])[0])
+                second = int((q.get("second") or [""])[0])
+            except ValueError:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request",
+                                  "first and second must be integer sequences")
+                return
+            if first > second:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request",
+                                  "first must be <= second")
+                return
+            from .merkle import CHP_STORE_HEAD_V2, store_head_consistency_proof
+            old = store.get_store_head(at_sequence=first, fresh=True, scheme=CHP_STORE_HEAD_V2)
+            new = store.get_store_head(at_sequence=second, fresh=True, scheme=CHP_STORE_HEAD_V2)
+            self._write_json(store_head_consistency_proof(old["leaves"], new["leaves"]))
+            return
         if path == "/head":
             # Witnessing (spec §12): the store head a peer countersigns. AUTHED
             # (the sequence discloses activity volume — mesh-count privacy).

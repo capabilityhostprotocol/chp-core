@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -903,9 +903,26 @@ still reconstructs, through `verified_through_sequence`) or `forked` (a
 consistent). The report is offline-verifiable and lives with the **monitor**, not
 the monitored host, so it is a portable accusation the operator cannot retract. No
 new denial code — a monitor finding is a signed statement, not a gate outcome. A
-**remote** monitor (anchors + host-served consistency proofs, no store copy),
-gossip between monitors, and real Rekor submission remain out of scope (named in
-proposals 0019, 0022, 0023).
+gossip between monitors and real Rekor submission remain out of scope.
+
+**Remote monitor — no store copy** ([proposal 0024](proposals/0024-remote-monitor.md)).
+0023's monitor must hold the store; that does not scale to independent oversight
+(a regulator cannot replicate every operator's evidence store). A **remote
+monitor** holds only the compact immutable anchor history and, for each
+consecutive pair `(sᵢ, Rᵢ)→(sᵢ₊₁, Rᵢ₊₁)`, asks the host to **serve** a consistency
+proof — `GET /head/consistency?first=<seq>&second=<seq>` (authed; the host
+reconstructs the head at both sequences via `get_store_head(fresh)` and returns
+`store_head_consistency_proof`). The monitor runs `verify_store_head_consistency`
+against the **anchored** roots, never its own reconstruction. The soundness: the
+proof's `first_root` must equal the immutable `Rᵢ`; a host that rewrote history
+reconstructs a different head at sᵢ, so every proof it can compute carries
+`first_root ≠ Rᵢ` and is rejected — the operator cannot forge a proof whose roots
+match anchors it no longer reproduces. So a rewrite is caught **with no store
+copy**; the monitor emits the same `store-head-monitor-report` (`forked` naming the
+pair, else `consistent`). A remote monitor cannot force an offline host to answer —
+an unreachable host is `host_unreachable` (§11), not `forked`. Gossip between
+monitors and real Rekor submission remain out of scope (named in proposals 0019,
+0022, 0023, 0024).
 
 **Cadence and posture.** Any authed peer MAY witness any peer; the reference
 gateway carries an opt-in witnessing loop (`gateway.witness_interval_s`,

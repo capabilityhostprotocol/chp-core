@@ -82,6 +82,8 @@ export {
   verifyContinuity,
   verifyChainWitness,
   verifyStoreHeadMonitorReport,
+  monitorAnchorHistoryRemote,
+  type RemoteMonitorVerdict,
   auditCompleteness,
   auditCompletenessViaAnchor,
   type CompletenessAudit,

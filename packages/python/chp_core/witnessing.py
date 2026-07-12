@@ -352,3 +352,61 @@ def monitor_anchor_history(store, anchors: list[JSON], *, host_id: str,
         host_id, verdict="consistent", verified_through_sequence=last_good,
         anchor_count=len(ordered), monitor_key=monitor_key, monitor_id=monitor_id,
         monitored_at=monitored_at, anchors=monitor_anchors)
+
+
+def monitor_anchor_history_remote(anchors: list[JSON], fetch_proof, *, host_id: str,
+                                  monitor_key, monitor_id: str, monitored_at: str,
+                                  monitor_anchors: list[JSON] | None = None) -> JSON:
+    """Monitor a host's anchor history WITHOUT a store copy (§12, proposal 0024).
+    For each consecutive anchored pair ``(s1,R1)→(s2,R2)`` the monitor calls
+    ``fetch_proof(s1, s2)`` — the host serves a ``store-head-consistency`` object —
+    and checks it against the IMMUTABLE anchored roots via
+    ``verify_store_head_consistency(R1, R2, proof)``. A host that rewrote history
+    reconstructs a different head at s1, so its served proof carries
+    ``first_root ≠ R1`` and is rejected. ``fetch_proof`` returning ``None`` (an
+    unreachable/refusing host) is also unprovable. Returns a signed
+    ``store-head-monitor-report``: ``forked`` at the first pair that fails to prove
+    append-only against the anchors, else ``consistent``."""
+    from .merkle import CHP_STORE_HEAD_V2, verify_store_head_consistency
+    from .signing import build_store_head_monitor_report
+
+    # Consistency proofs are a chp-store-head-v2 feature (proposal 0022); a v1
+    # (flat-fold) anchor has no consistency proof. Remote monitoring therefore
+    # REQUIRES v2 anchors — refuse rather than emit a false 'forked' accusation
+    # against a host whose anchors we simply cannot check this way.
+    for a in anchors:
+        if (a.get("store_head_scheme") or "") != CHP_STORE_HEAD_V2:
+            raise ValueError(
+                "remote monitoring requires chp-store-head-v2 anchors "
+                f"(anchor at sequence {a.get('sequence')} is "
+                f"{a.get('store_head_scheme') or 'chp-store-head-v1'})")
+
+    ordered = sorted(anchors, key=lambda a: int(a.get("sequence", 0)))
+    # The earliest anchor is the trust root — nothing precedes it to prove against.
+    last_good = int(ordered[0].get("sequence", 0)) if ordered else 0
+    for prev, cur in zip(ordered, ordered[1:]):
+        s1, r1 = int(prev.get("sequence", 0)), str(prev.get("store_head", ""))
+        s2, r2 = int(cur.get("sequence", 0)), str(cur.get("store_head", ""))
+        proof = fetch_proof(s1, s2)
+        if proof is not None and verify_store_head_consistency(r1, r2, proof):
+            last_good = s2
+            continue
+        # Locate the mismatch for the divergence block: the served first_root ≠ the
+        # anchored R1 is the rewrite signature; else the served second_root ≠ R2;
+        # else the proof math failed or the host would not answer (unprovable).
+        served_first = str((proof or {}).get("first_root", ""))
+        served_second = str((proof or {}).get("second_root", ""))
+        if len(served_first) == 64 and served_first != r1:
+            div = {"sequence": s1, "anchored_root": r1, "reconstructed_root": served_first}
+        elif len(served_second) == 64 and served_second != r2:
+            div = {"sequence": s2, "anchored_root": r2, "reconstructed_root": served_second}
+        else:
+            div = {"sequence": s2, "anchored_root": r2, "reconstructed_root": "0" * 64}
+        return build_store_head_monitor_report(
+            host_id, verdict="forked", verified_through_sequence=last_good,
+            anchor_count=len(ordered), monitor_key=monitor_key, monitor_id=monitor_id,
+            monitored_at=monitored_at, anchors=monitor_anchors, divergence=div)
+    return build_store_head_monitor_report(
+        host_id, verdict="consistent", verified_through_sequence=last_good,
+        anchor_count=len(ordered), monitor_key=monitor_key, monitor_id=monitor_id,
+        monitored_at=monitored_at, anchors=monitor_anchors)

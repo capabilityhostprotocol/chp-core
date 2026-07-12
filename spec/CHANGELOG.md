@@ -5,6 +5,28 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.6.3] — Remote log monitor over 0.6.2
+
+### Added
+- **Remote log monitor** (chp-v0.2.md §12,
+  [proposals/0024](proposals/0024-remote-monitor.md)): a monitor holding only a
+  host's immutable anchor history (no store copy) asks the host to serve a
+  consistency proof between each anchored pair — `GET /head/consistency?first=&
+  second=` (authed; reconstructs both heads via `get_store_head(fresh)` +
+  `store_head_consistency_proof`) — and verifies it against the anchored roots. A
+  host that rewrote history reconstructs a different head, so its proof carries
+  `first_root ≠` the immutable anchor and is rejected: a rewrite is caught with no
+  store copy. Emits the 0023 `store-head-monitor-report`. Scales independent
+  oversight — an auditor tracks many hosts holding only kilobytes of anchors.
+
+### Compatibility
+- **Additive, no byte changes, no new schema/denial code.** The endpoint serves a
+  `store-head-consistency` object (0022); the finding is a
+  `store-head-monitor-report` (0023). Regression gate: a conformance wire check —
+  a chp-store-head-v2 host serves `/head/consistency` between two sequences and a
+  remote monitor verifies it against the anchors — passes against both reference
+  hosts.
+
 ## [0.6.2] — Log monitor / fork detection over 0.6.1
 
 ### Added

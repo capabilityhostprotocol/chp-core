@@ -103,6 +103,18 @@ export class RemoteCapabilityHost {
     return this.req('/host', { headers: this.headers() }) as Promise<Record<string, JsonValue>>;
   }
 
+  /**
+   * Fetch a consistency proof between two store-head sequences (§12, proposal
+   * 0024) — the serving side of remote monitoring. Authed (the sequence discloses
+   * activity volume). The returned `store-head-consistency` object is checked by a
+   * remote monitor against the two IMMUTABLE anchored roots via
+   * `verifyStoreHeadConsistency`.
+   */
+  async fetchConsistencyProof(first: number, second: number): Promise<Record<string, JsonValue>> {
+    return this.req(`/head/consistency?first=${first}&second=${second}`,
+      { headers: this.headers() }) as Promise<Record<string, JsonValue>>;
+  }
+
   async capabilities(): Promise<JsonValue[]> {
     const r = (await this.req('/capabilities', { headers: this.headers() })) as { capabilities?: JsonValue[] };
     return r.capabilities ?? [];
