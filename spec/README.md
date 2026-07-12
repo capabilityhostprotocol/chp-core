@@ -40,6 +40,8 @@ other half of the compatibility decision.
 
 ## Known issues
 
-- Schema `$id` URLs use the placeholder base `https://chp.dev/schemas/…` which
-  does not resolve; schemas resolve locally by path. Standing up the domain (or
-  re-pointing `$id`s) is tracked, not yet done.
+- Schema `$id`s are now uniform on the canonical `https://chp.dev/schemas/v0.X/…`
+  base (v0.4.2, [proposals/0017] — the two off-domain `$id`s were normalized and a
+  `schema_ids_consistent` guard prevents drift). They still **resolve locally by
+  path**, not over the network; standing up `chp.dev/schemas/` to serve them is an
+  out-of-repo hosting task, tracked separately.

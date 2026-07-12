@@ -333,9 +333,22 @@ def cmd_keygen(args: argparse.Namespace) -> int:
     import sys
     from .. import signing
 
+    passphrase = None
+    if getattr(args, "encrypt", False):
+        # Encrypt at rest (proposal 0017): $CHP_KEY_PASSPHRASE, else prompt+confirm.
+        try:
+            pw = signing._resolve_key_passphrase(None, prompt=True, confirm=True)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if pw is None:
+            print("--encrypt requires a passphrase (set $CHP_KEY_PASSPHRASE or enter one)", file=sys.stderr)
+            return 1
+        passphrase = pw.decode("utf-8")
     try:
         key = signing.generate_keypair(
-            args.key_dir or signing.DEFAULT_KEY_DIR, overwrite=args.overwrite
+            args.key_dir or signing.DEFAULT_KEY_DIR, overwrite=args.overwrite,
+            passphrase=passphrase,
         )
     except signing.SigningUnavailable as exc:
         print(str(exc), file=sys.stderr)
@@ -347,6 +360,7 @@ def cmd_keygen(args: argparse.Namespace) -> int:
         "key_id": key.key_id,
         "public_key": key.public_key_b64,
         "key_dir": str(args.key_dir or signing.DEFAULT_KEY_DIR),
+        "encrypted": passphrase is not None,
     }, indent=2))
     return 0
 

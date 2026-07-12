@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -188,6 +188,16 @@ attestation's `[valid_from, valid_until]` window (the key had expired when it
 signed) — enforced offline against `created_at`, so no wall clock is required.
 `null` bounds are unbounded. Chained rotation and revocation are specified in
 §3.2.
+
+**Key custody at rest (v0.4.2).** A signed host holds a private ed25519 key; a
+copied key file is a copied identity. A host SHOULD protect the key at rest — at
+minimum restrictive file permissions, and a host MAY hold it **passphrase-
+encrypted** (proposal 0017: PKCS#8 under an at-rest passphrase, unlocked from the
+environment, an OS keychain, or a prompt at load). Encryption is a *custody*
+concern only: the unlocked key produces byte-identical signatures and
+attestations, so an encrypted-at-rest key changes nothing a verifier sees. This
+is a SHOULD, not a MUST — the local-first default keeps working with an
+unencrypted key.
 
 ### 3.1 Anchors — cross-org trust
 
