@@ -186,6 +186,30 @@ if (input.kind === "adapter-provenance") {
     ? `VALID (chain-witness: ${w.host_id} countersigned ${input.host_id}@seq ${input.sequence}, head ${String(input.store_head).slice(0, 16)}…`
       + `${input.revocation_head ? `, revocation_head ${String(input.revocation_head).slice(0, 16)}…` : ""})`
     : "INVALID");
+} else if (input.kind === "witness-quorum") {
+  // chp-witness-quorum-v1 (§12, proposal 0013): verify EACH chain-witness over
+  // the same head independently, dedupe by signature.key_id, count vs k.
+  const distinct = new Set();
+  for (const s of input.statements) {
+    if (s.host_id !== input.host_id || s.sequence !== input.sequence
+        || s.store_head !== input.store_head) continue;
+    const w = s.witness ?? {};
+    const wPub = createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                          Buffer.from(w.public_key ?? "", "base64")]),
+      format: "der", type: "spki" });
+    const header = { kind: s.kind, host_id: s.host_id, sequence: s.sequence,
+                     store_head: s.store_head, witnessed_at: s.witnessed_at,
+                     canonicalization: s.canonicalization,
+                     ...(s.revocation_head ? { revocation_head: s.revocation_head } : {}) };
+    const sigOk = s.signature?.algorithm === "ed25519"
+      && edVerify(null, Buffer.from(canon(header), "utf8"), wPub, Buffer.from(s.signature.signature, "base64"));
+    if (sigOk && s.signature?.key_id) distinct.add(s.signature.key_id);
+  }
+  ok = distinct.size >= input.k && input.expected_verdict === "quorum_met"
+    && distinct.size === input.expected_distinct;
+  console.log(ok ? `VALID (witness-quorum: ${distinct.size}/${input.k} distinct witnesses → quorum_met)`
+                 : `INVALID (quorum: ${distinct.size} distinct, expected ${input.expected_distinct})`);
 } else if (input.kind === "chunk-seq") {
   // chp-chunk-seq-v1 (§13.1): SHA-256 over each chp-stable-v1(delta) + "\n", in order.
   const h = createHash("sha256");

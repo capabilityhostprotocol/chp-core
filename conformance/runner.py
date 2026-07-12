@@ -1935,6 +1935,91 @@ async def check_selective_disclosure(host: Any) -> None:
         "a tampered disclosed payload must be refused")
 
 
+async def check_witness_quorum(host: Any) -> None:
+    """v0.2 §12 (proposal 0013): k DISTINCT witnesses countersign a head →
+    quorum_met (k-1 → quorum_short); an external did:key SSHSIG-anchors the head
+    → verifies offline and round-trips through POST/GET /anchors."""
+    import base64
+    import json as _json
+    import os
+    import subprocess
+    import tempfile
+    import urllib.request
+    from pathlib import Path
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from chp_core import signing, sshsig
+    from chp_core.types import utc_now
+    from chp_core.witnessing import evaluate_witness_quorum
+
+    base = getattr(host, "_base", None)
+    assert base, "witness-quorum check requires a wire host"
+    api_key = getattr(host, "_api_key", None)
+
+    def _req(path: str, body=None):
+        req = urllib.request.Request(
+            f"{base}{path}",
+            data=_json.dumps(body).encode() if body is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"X-CHP-Key": api_key} if api_key else {})},
+            method="POST" if body is not None else "GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return _json.loads(resp.read().decode())
+
+    def _key(seed: bytes) -> signing.HostKey:
+        priv = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
+        pub = base64.b64encode(priv.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+        return signing.HostKey(key_id=signing.key_id_for(base64.b64decode(pub)),
+                               public_key_b64=pub, _private=priv)
+
+    await invoke_host(host, "conformance.echo", {"value": "quorum"})
+    head = _req("/head")
+    seq, sh, host_id = head["sequence"], head["store_head"], head["host_id"]
+
+    # Three DISTINCT witnesses countersign the SAME head.
+    for n in range(3):
+        stmt = signing.build_chain_witness(host_id, seq, sh, _key(bytes([80 + n]) * 32),
+                                           witness_id=f"conf-witness-{n}", witnessed_at=utc_now())
+        _req("/witness", stmt)
+    served = _req("/witnesses")["witnesses"]
+    q = evaluate_witness_quorum(served, host_id=host_id, sequence=seq, store_head=sh, k=3)
+    assert q["verdict"] == "quorum_met" and q["distinct"] >= 3, (
+        f"3 distinct witnesses must meet quorum k=3: {q}")
+    short = evaluate_witness_quorum(served, host_id=host_id, sequence=seq, store_head=sh,
+                                    k=q["distinct"] + 1)
+    assert short["verdict"] == "quorum_short", f"k above distinct must be short: {short}"
+
+    # External store-head anchor: an out-of-mesh did:key SSHSIG-countersigns the head.
+    anchor_priv = ed25519.Ed25519PrivateKey.from_private_bytes(bytes([210]) * 32)
+    raw = anchor_priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    did = sshsig.raw_to_did_key(raw)
+    at = utc_now()
+    msg = signing.store_head_anchor_message(host_id, seq, sh, at)
+    with tempfile.TemporaryDirectory() as d:
+        kf = Path(d) / "id"
+        kf.write_bytes(anchor_priv.private_bytes(serialization.Encoding.PEM,
+                                                 serialization.PrivateFormat.OpenSSH,
+                                                 serialization.NoEncryption()))
+        os.chmod(kf, 0o600)
+        mf = Path(d) / "m"
+        mf.write_bytes(msg)
+        subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(kf),
+                        "-n", sshsig.STORE_HEAD_ANCHOR_NAMESPACE, str(mf)],
+                       check=True, capture_output=True)
+        armored = (Path(d) / "m.sig").read_text()
+    anchor = signing.build_store_head_anchor(host_id, seq, sh, anchored_at=at,
+                                             did=did, countersignature=armored)
+    assert signing.verify_store_head_anchor(anchor).valid, "anchor must verify offline"
+    _req("/anchors", anchor)
+    served_anchors = _req("/anchors")["anchors"]
+    assert any(signing.verify_store_head_anchor(a).valid for a in served_anchors), (
+        "the served external anchor must verify offline")
+
+
 async def check_mandate_revocation(host: Any) -> None:
     """v0.2 §10 Revocation (proposal 0007): withdrawing authority before
     expiry. The runner plays PRINCIPAL: a mandated invoke succeeds; the
@@ -2272,6 +2357,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("revocation freshness (v0.2 §12, proposal 0010)", check_revocation_freshness),
     ("selective disclosure (v0.2 §14, proposal 0011)", check_selective_disclosure),
     ("streaming completion (v0.2 §13.1, proposal 0012)", check_streaming_completion),
+    ("witness quorum + anchoring (v0.2 §12, proposal 0013)", check_witness_quorum),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {

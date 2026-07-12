@@ -1,0 +1,87 @@
+{
+  "expected_distinct": 3,
+  "expected_verdict": "quorum_met",
+  "host_id": "vector-witnessed-host",
+  "k": 3,
+  "kind": "witness-quorum",
+  "note": "chp-witness-quorum-v1 (chp-v0.2.md \u00a712): distinct witnesses over one head, deduped by signature.key_id, counted vs k.",
+  "sequence": 42,
+  "statements": [
+    {
+      "canonicalization": "chp-stable-v1",
+      "host_id": "vector-witnessed-host",
+      "kind": "chain-witness",
+      "sequence": 42,
+      "signature": {
+        "algorithm": "ed25519",
+        "key_id": "8b66e5c51ff27bf5",
+        "signature": "yioLO/VoaXKGZ3HO4Clvm3d4jf3hCqMGkenzy0pgu1rpGoKfbWjWV6ciV0okF1tFl4ke69+wKSzZHe/KC2ilDg=="
+      },
+      "store_head": "3b0cc1fa06529112ead2292b581e8206dfff42aa4cbe55f9246163ad540ab2d1",
+      "witness": {
+        "host_id": "vector-witness-0",
+        "host_identity": {
+          "host_id": "vector-witness-0",
+          "key_id": "8b66e5c51ff27bf5",
+          "public_key": "7pOk9m+NFrgZu5vrn/zN/NwUEuh/7moyTCqZoeDmcUg=",
+          "signature": "Vx0dZ+0HWBeduKGpdpqsF0yuPvSkp8PXzKhXineMvGwcZWqcDzXYBuPBaYZYfuZfGfZyV1IJUqA1Xi/i+x1RDA==",
+          "valid_from": "2026-01-01T00:00:00Z",
+          "valid_until": null
+        },
+        "public_key": "7pOk9m+NFrgZu5vrn/zN/NwUEuh/7moyTCqZoeDmcUg="
+      },
+      "witnessed_at": "2026-01-01T00:00:00Z"
+    },
+    {
+      "canonicalization": "chp-stable-v1",
+      "host_id": "vector-witnessed-host",
+      "kind": "chain-witness",
+      "sequence": 42,
+      "signature": {
+        "algorithm": "ed25519",
+        "key_id": "63ed95d660e07cb9",
+        "signature": "58LNc8HRnkJ3o5l3EZLtIu8WYhwZqwy+HnzNO1TnhhhLbNbxuZz5JSAwSu5QRNcUPh5qfrPaDJ7msLuuv+ynCA=="
+      },
+      "store_head": "3b0cc1fa06529112ead2292b581e8206dfff42aa4cbe55f9246163ad540ab2d1",
+      "witness": {
+        "host_id": "vector-witness-1",
+        "host_identity": {
+          "host_id": "vector-witness-1",
+          "key_id": "63ed95d660e07cb9",
+          "public_key": "4oqJcHUzMr1y/vQT5rCy7xtKrdp6osFB8jNxKmh2s1E=",
+          "signature": "EFJnlpMTDkIkeDd/MprOd8/TL8v5yLsS6C+qSS/SqDI7LvYySROWo3xAKUeXFmzjTdH/wptGsrZ9+dlx9NLuBA==",
+          "valid_from": "2026-01-01T00:00:00Z",
+          "valid_until": null
+        },
+        "public_key": "4oqJcHUzMr1y/vQT5rCy7xtKrdp6osFB8jNxKmh2s1E="
+      },
+      "witnessed_at": "2026-01-01T00:00:00Z"
+    },
+    {
+      "canonicalization": "chp-stable-v1",
+      "host_id": "vector-witnessed-host",
+      "kind": "chain-witness",
+      "sequence": 42,
+      "signature": {
+        "algorithm": "ed25519",
+        "key_id": "86091e73ba6e8f4d",
+        "signature": "RgTxeAkhEdqtBd/pwQLITSbPiiiAILg/qJ0nBdCX2gcCW3xk60ZRrJgnOZOVx2yV2IqoSe4O4+7z5bXc0MhOCw=="
+      },
+      "store_head": "3b0cc1fa06529112ead2292b581e8206dfff42aa4cbe55f9246163ad540ab2d1",
+      "witness": {
+        "host_id": "vector-witness-2",
+        "host_identity": {
+          "host_id": "vector-witness-2",
+          "key_id": "86091e73ba6e8f4d",
+          "public_key": "1O7Bhp+xuKToF1Fq1akxVXy1aAXD6xbo86gD1kffeGk=",
+          "signature": "/Atp1lZkCAv0u5BXKGAnTpIyqY4RJc4s8IlQgWwkBMs4LS3InaT8EcqR+S1lndVXSQtOrTuuv27sWvbLBCccDw==",
+          "valid_from": "2026-01-01T00:00:00Z",
+          "valid_until": null
+        },
+        "public_key": "1O7Bhp+xuKToF1Fq1akxVXy1aAXD6xbo86gD1kffeGk="
+      },
+      "witnessed_at": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "store_head": "3b0cc1fa06529112ead2292b581e8206dfff42aa4cbe55f9246163ad540ab2d1"
+}

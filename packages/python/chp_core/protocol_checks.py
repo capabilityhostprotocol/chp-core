@@ -431,6 +431,16 @@ def check_alignment(repo_root: Path) -> JSON:
             and "chunk_seq_digest" in spec_v02,
             {"path": "spec/chp-v0.2.md"},
         )
+        # Witness quorum + external anchoring (§12, proposal 0013).
+        add_check(
+            checks,
+            "spec_defines_witness_quorum",
+            "Witness quorum" in spec_v02
+            and "chp-witness-quorum-v1" in spec_v02
+            and "quorum_met" in spec_v02
+            and "chp-store-head-anchor-v1" in spec_v02,
+            {"path": "spec/chp-v0.2.md"},
+        )
 
     # The language-neutral reserved-names registry must match source — every
     # reserved denial code and evidence-type member appears in the generated doc.
@@ -686,6 +696,40 @@ def check_alignment(repo_root: Path) -> JSON:
             )
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "chunk_seq_vector_verifies", False, {"error": str(exc)})
+
+    # Witness quorum + anchor vectors (§12, proposal 0013).
+    quorum_vec = repo_root / "spec" / "test-vectors" / "witness-quorum.json"
+    anchor_vec = repo_root / "spec" / "test-vectors" / "store-head-anchor.json"
+    if quorum_vec.exists():
+        try:
+            from .witnessing import evaluate_witness_quorum
+
+            q = read_json(quorum_vec)
+            res = evaluate_witness_quorum(q["statements"], host_id=q["host_id"],
+                                          sequence=q["sequence"], store_head=q["store_head"],
+                                          k=q["k"])
+            add_check(
+                checks,
+                "witness_quorum_vector_verifies",
+                res["verdict"] == q["expected_verdict"]
+                and res["distinct"] == q["expected_distinct"],
+                {"result": res, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "witness_quorum_vector_verifies", False, {"error": str(exc)})
+    if anchor_vec.exists():
+        try:
+            from .signing import verify_store_head_anchor
+
+            anchor_v = verify_store_head_anchor(read_json(anchor_vec))
+            add_check(
+                checks,
+                "store_head_anchor_vector_verifies",
+                anchor_v.valid and anchor_v.checks.get("anchor") is True,
+                {"checks": anchor_v.checks, "hint": "regenerate via scripts/gen-test-vectors.py"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "store_head_anchor_vector_verifies", False, {"error": str(exc)})
 
     sync = check_sync_integrity(repo_root)
     checks.extend(sync["checks"])

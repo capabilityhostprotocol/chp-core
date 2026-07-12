@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion** 2026-07-11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring** 2026-07-11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -737,14 +737,41 @@ revocation.** The witness signs only the digest; no revocation id leaks to
 peers. Lawful revocation-expiry dispositions and cross-mesh freshness quorum
 are out of scope (named in proposal 0010).
 
+**Witness quorum** ([proposal 0013](proposals/0013-witness-quorum.md)). One
+witness is a single point of collusion, and every witness is a peer the
+operator's mesh controls. **`chp-witness-quorum-v1`** turns the collected
+`chain-witness` statements into an anti-collusion proof: an auditor verifies
+each statement, keeps only those over the EXACT `(host_id, sequence,
+store_head)`, **dedupes by the witness's `key_id`** (a witness re-submitting
+counts once — quorum measures distinct identities, not statement volume),
+optionally restricts to a trusted witness set (the *n*), and counts. The
+verdict is **`quorum_met`** (distinct witnesses ≥ *k*) or **`quorum_short`** —
+"≥*k* independent parties countersigned this exact head." The policy (*k*, and
+optionally the *n* set) is host config; the witness loop is unchanged (it still
+countersigns every remote), and `quorum_short` is an audit verdict, never a gate
+denial. No new canonical object — quorum aggregates statements that already
+exist, so every published vector is byte-identical.
+
+**External anchoring** ([proposal 0013](proposals/0013-witness-quorum.md)).
+Quorum still depends on *our* peer set; **`chp-store-head-anchor-v1`** binds a
+head to a party OUTSIDE the mesh, so an independent record survives even if all
+witnesses collude. A `store-head-anchor` statement — `{kind:"store-head-anchor",
+host_id, sequence, store_head, anchored_at, anchor:{type:"did", did,
+countersignature}}` — carries an external `did:key`'s ed25519 **SSHSIG
+countersignature** over `chp-stable-v1({kind, host_id, sequence, store_head,
+anchored_at})` (SSHSIG namespace `chp-store-head-anchor`, the §3.1 DID-anchor
+mechanism applied to a store head instead of a key), verified fully offline. The
+anchor key is a designated notary or a transparency-log checkpoint key. Real
+transparency-log (Rekor/Sigstore) Merkle-inclusion proofs + gossip are out of
+scope (named in proposal 0013) — this is the signed-checkpoint form.
+
 **Cadence and posture.** Any authed peer MAY witness any peer; the reference
 gateway carries an opt-in witnessing loop (`gateway.witness_interval_s`,
 default off — the prober pattern). A host that neither issues nor accepts
 witnesses remains conformant at the export-signing floor; witnessing upgrades
 the assurance story from tamper-evident to tamper-proof-against-the-operator.
-Witness-of-witness chains, cross-mesh witnessing, quorum policies, and
-external transparency-log anchoring are deliberately out of scope (named in
-proposal 0005).
+Witness-of-witness chains and cross-mesh witnessing are deliberately out of
+scope (named in proposal 0005).
 
 ## 13. Reliability — Idempotent Replay
 
