@@ -509,6 +509,32 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "inclusion_vector_verifies", False, {"error": str(exc)})
 
+    # in-toto / DSSE attestation bridge (proposal 0021): the spec must define it,
+    # and the attestation vector must verify — the DSSE PAE signature + the
+    # embedded CHP bundle + the subject digest.
+    spec_v02_dsse = read_text(repo_root / "spec" / "chp-v0.2.md")
+    add_check(
+        checks,
+        "spec_defines_dsse_bridge",
+        "in-toto" in spec_v02_dsse and "DSSE" in spec_v02_dsse and "PAE" in spec_v02_dsse,
+        {"hint": "chp-v0.2.md §15 must define the in-toto/DSSE attestation bridge"},
+    )
+    dsse_vec = repo_root / "spec" / "test-vectors" / "dsse-attestation.json"
+    if dsse_vec.exists():
+        try:
+            from .dsse import verify_attestation
+
+            att_v = verify_attestation(read_json(dsse_vec))
+            add_check(
+                checks,
+                "attestation_vector_verifies",
+                att_v.valid and att_v.checks.get("dsse_signature") is True
+                and att_v.checks.get("bundle") is True,
+                {"checks": att_v.checks, "hint": "regenerate dsse-attestation.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "attestation_vector_verifies", False, {"error": str(exc)})
+
     # Security model (proposal 0020): the properties matrix must exist AND stay in
     # sync — every reserved denial code and every scheme name must be referenced,
     # so a new code/scheme cannot ship without appearing in the threat model.

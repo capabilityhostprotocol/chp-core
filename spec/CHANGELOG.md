@@ -5,6 +5,36 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.6.0] — in-toto / DSSE attestation bridge over 0.5.1
+
+### Added
+- **in-toto / DSSE attestation export** (chp-v0.2.md §15,
+  [proposals/0021](proposals/0021-intoto-dsse.md)): a signed CHP bundle → a
+  standard **in-toto Statement** (`subject: [{name: correlation_id, digest:
+  {sha256: root_hash}}]`, `predicateType:
+  https://chp.dev/attestation/evidence-bundle/v1`, `predicate: <the bundle>`)
+  wrapped in a **DSSE envelope** (`payload`/`payloadType:
+  application/vnd.in-toto+json`/`signatures`), signed by the host ed25519 key
+  over the DSSE **PAE**. Portable into the Sigstore/in-toto/SLSA ecosystem: any
+  DSSE verifier checks the PAE signature; a CHP verifier additionally re-verifies
+  the embedded bundle (`verify_bundle`) and the subject digest. Lossless
+  round-trip. New `dsse-envelope` + `in-toto-statement` schemas; `chp bundle
+  attest` / `chp attest verify`.
+
+### Compatibility
+- **Additive, no bytes move.** A CHP bundle is *wrapped, not modified* — every
+  existing bundle, vector, and signature is byte-identical (byte gate holds). No
+  new denial code or evidence type; the output conforms to the upstream
+  in-toto/DSSE specs (like the OTel/PROV exports). **Minor** bump (v0.6.0) — a
+  new signed-artifact family + standards interop surface, though no existing
+  bytes move.
+
+### Regression gate
+- The byte gate: every `spec/test-vectors/` fixture verifies unchanged; the new
+  `dsse-attestation.json` is the only addition, its PAE signature + embedded
+  bundle verified by Python, the TS SDK, and the stdlib `verify.mjs`.
+  `spec_defines_dsse_bridge` + `attestation_vector_verifies` guards.
+
 ## [0.5.1] — security model over 0.5.0
 
 ### Added
