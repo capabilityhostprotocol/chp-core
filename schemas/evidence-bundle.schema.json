@@ -29,9 +29,10 @@
     },
     "canonicalization": {
       "type": "string",
-      "description": "Named canonicalization scheme for event hashes.",
+      "description": "Named canonicalization scheme for the bundle-header signature (chp-v0.2.md section 2). A verifier dispatches the serializer on this value. chp-jcs-v1 is RFC 8785 JCS (proposal 0015).",
       "enum": [
-        "chp-stable-v1"
+        "chp-stable-v1",
+        "chp-jcs-v1"
       ]
     },
     "assurance": {

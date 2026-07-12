@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once** 2026-07-11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -72,8 +72,22 @@ The **signature** (ed25519) is computed over the **ASCII-hex `root_hash` string*
 `spec/test-vectors/` publishes fixed inputs → exact `content_hash`, `root_hash`,
 and signature (with a fixed key seed), plus `verify.mjs` — a stdlib-only Node
 verifier that validates a Python-signed bundle from these rules alone, proving
-cross-language interoperability. A future `chp-jcs-v1` (RFC 8785 JCS: compact,
-raw-UTF-8) MAY be added non-breakingly via the `canonicalization` field.
+cross-language interoperability.
+
+**Second canonicalization (`chp-jcs-v1`).** Since v0.4.0
+([proposals/0015](proposals/0015-chp-jcs.md)) the `canonicalization` field is a
+real **dispatch seam**: a verifier MUST select the header-signature serializer by
+the bundle's `canonicalization` value (absent/legacy → `chp-stable-v1`).
+**`chp-jcs-v1`** is [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) JCS —
+identical structure to chp-stable-v1 except: **compact separators** (`,` / `:`,
+no spaces); **raw-UTF-8 strings** (`café`, `🔒` literal, not `\uXXXX`); **keys
+sorted by UTF-16 code unit** (identical to chp-stable-v1 for the BMP, differing
+only for astral-plane keys). Numbers are integers as bare decimal — **rule 6 (no
+floats in hashed content) is retained across ALL schemes**, so RFC 8785's
+ECMAScript number-formatting algorithm is never exercised by CHP content
+(deferred). chp-jcs-v1 governs the **bundle-header signature** only; the
+per-event content-hash is the orthogonal `hash_scheme` axis (below). A future
+scheme MAY likewise be added non-breakingly through the field.
 
 **Content-hash schemes (`hash_scheme`).** The rule above is
 **`chp-event-hash-v1`** — the default, selected when an event carries **no**

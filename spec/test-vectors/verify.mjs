@@ -46,6 +46,49 @@ function encodeStr(s) {
   }
   return out + '"';
 }
+
+// chp-jcs-v1 (RFC 8785 JCS, proposal 0015): compact separators (,/:), raw UTF-8
+// strings (no \uXXXX escaping — only " \ and control chars escape), keys sorted
+// by UTF-16 code unit (JS .sort() default — matches Python's utf-16-be sort).
+// Over CHP's float-free content the RFC 8785 number algorithm is never exercised
+// (§2 rule 6 retained: non-integers throw). Governs the bundle HEADER signature;
+// the host_identity attestation stays chp-stable-v1.
+function canonJcs(v) {
+  if (v === null) return "null";
+  if (v === true) return "true";
+  if (v === false) return "false";
+  if (typeof v === "number") {
+    if (!Number.isInteger(v)) throw new Error("chp-jcs-v1 forbids non-integer numbers (§2 rule 6)");
+    return String(v);
+  }
+  if (typeof v === "string") return encodeStrJcs(v);
+  if (Array.isArray(v)) return "[" + v.map(canonJcs).join(",") + "]";
+  return "{" + Object.keys(v).sort().map((k) => encodeStrJcs(k) + ":" + canonJcs(v[k])).join(",") + "}";
+}
+function encodeStrJcs(s) {
+  let out = '"';
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (c === 0x08) out += "\\b";
+    else if (c === 0x09) out += "\\t";
+    else if (c === 0x0a) out += "\\n";
+    else if (c === 0x0c) out += "\\f";
+    else if (c === 0x0d) out += "\\r";
+    else if (c < 0x20) out += "\\u" + c.toString(16).padStart(4, "0");
+    else out += ch;   // raw UTF-8 (incl. non-ASCII and astral)
+  }
+  return out + '"';
+}
+
+// The canonicalization dispatch seam (§2): pick the header serializer by the
+// bundle's `canonicalization`. Absent/legacy → chp-stable-v1; unknown throws.
+function canonFor(scheme) {
+  if (scheme === "chp-jcs-v1") return canonJcs;
+  if (scheme == null || scheme === "" || scheme === "chp-stable-v1") return canon;
+  throw new Error(`unknown canonicalization scheme: ${scheme}`);
+}
 const sha256hex = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
 // chp-event-hash-v2 (14): sha256(chp-stable-v1(payload)). Empty payload = {}.
@@ -101,11 +144,18 @@ if (bundle.assurance === "signed") {
     edVerify(null, Buffer.from(canon(obj), "utf8"), pub, Buffer.from(sigB64, "base64"));
 
   // Signature is over the canonical HEADER (origin/time/scheme + root_hash), not
-  // bare root_hash — so a relabelled host_id breaks it.
+  // bare root_hash — so a relabelled host_id breaks it. The header serializer
+  // dispatches on `canonicalization` (§2 seam); an unknown scheme fails, never
+  // crashes. The attestation below stays chp-stable-v1 (signed at keygen time).
+  let headerCanon;
+  try { headerCanon = canonFor(bundle.canonicalization); }
+  catch (e) { console.error(e.message); return false; }
   const header = { host_id: bundle.host_id, protocol_version: bundle.protocol_version,
                    created_at: bundle.created_at, canonicalization: bundle.canonicalization,
                    root_hash: bundle.root_hash };
-  if (!verifyCanon(header, bundle.signature.signature)) { console.error("signature INVALID"); ok = false; }
+  const headerSigOk = edVerify(null, Buffer.from(headerCanon(header), "utf8"),
+                               pub, Buffer.from(bundle.signature.signature, "base64"));
+  if (!headerSigOk) { console.error("signature INVALID"); ok = false; }
 
   // Host-identity attestation: the key must self-assert this host_id + public_key.
   const att = bundle.host_identity;
