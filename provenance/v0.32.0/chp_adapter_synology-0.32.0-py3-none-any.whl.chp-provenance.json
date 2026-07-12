@@ -1,0 +1,32 @@
+{
+  "canonicalization": "chp-stable-v1",
+  "created_at": "2026-07-12T20:12:51.567259Z",
+  "kind": "adapter-provenance",
+  "package": "chp-adapter-synology",
+  "publisher": {
+    "host_id": "chp-release",
+    "host_identity": {
+      "anchors": [
+        {
+          "countersignature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg5qHZxtZ8HVlzspvd/WxFfXKRm6\ngyof2xXFalgUb/bHMAAAAPY2hwLWhvc3QtYW5jaG9yAAAAAAAAAAZzaGE1MTIAAABTAAAA\nC3NzaC1lZDI1NTE5AAAAQE5WEoiFMzOzfYAjeNVgWnjWh0BZkhX5ZU23jEgvZVO5/wk0bd\n/x9S7lds1MJ5ceUKgIcnLAejTfdVmYbpIJQQw=\n-----END SSH SIGNATURE-----\n",
+          "did": "did:key:z6MkuyYxVQL4aRVpAKPbG4tc15FJ9E1ryZSSHjFyqsBBuxAn",
+          "type": "did"
+        }
+      ],
+      "host_id": "chp-release",
+      "key_id": "d20d8b42b94c3375",
+      "public_key": "3iXoZQbvRVRl2rCRDpb6BYwLETaTpjtvJuvfA9EN7bU=",
+      "signature": "jU7gyffZK87p+t8uzImagSOkPwIEFVkZTpBDZE/DIOfMKqJOo+RM6HY7Np9gTbQxK/y330Q4obARj+HYK7F2Dw==",
+      "valid_from": "2026-07-12T20:12:51.567259Z",
+      "valid_until": null
+    },
+    "public_key": "3iXoZQbvRVRl2rCRDpb6BYwLETaTpjtvJuvfA9EN7bU="
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "d20d8b42b94c3375",
+    "signature": "+DXzk74jDfh6mZFq3SJW+akymdPVMjTPY/b7xwz7i3ttkPFI4UjrDIvlCF2ofy2zDjSC8Y5VjI2maw04O4ckAw=="
+  },
+  "version": "0.32.0",
+  "wheel_sha256": "cde5fbf153ccca67b6ff4855e66d47e44ba9a146127dc6c503e6a83cc62a23ac"
+}
