@@ -720,7 +720,7 @@ class SQLiteEvidenceStore:
         return int(row["count"])
 
     def get_store_head(self, at_sequence: int | None = None, *,
-                       fresh: bool = False) -> JSON:
+                       fresh: bool = False, scheme: str | None = None) -> JSON:
         """The witnessable store digest (`chp-store-head-v1`, spec §12).
 
         Chains are per-correlation over one GLOBAL sequence: for every
@@ -780,13 +780,14 @@ class SQLiteEvidenceStore:
                         ).fetchone()
                         if old is not None:
                             leaves[r["correlation_id"]] = old["content_hash"]
-        digest = hashlib.sha256()
-        for correlation_id in sorted(leaves):
-            digest.update(f"{correlation_id}\x00{leaves[correlation_id] or ''}\n".encode())
+        # Dispatch the root scheme (proposal 0019): chp-store-head-v1 (flat fold,
+        # the default — byte-identical) or chp-store-head-v2 (RFC 6962 Merkle).
+        from .merkle import CHP_STORE_HEAD_V1, store_head_root  # noqa: PLC0415
+        scheme = scheme or CHP_STORE_HEAD_V1
         return {
-            "scheme": "chp-store-head-v1",
+            "scheme": scheme,
             "sequence": at_sequence,
-            "store_head": digest.hexdigest(),
+            "store_head": store_head_root(scheme, leaves),
             "leaves": leaves,
         }
 

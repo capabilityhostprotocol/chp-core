@@ -10,6 +10,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, type KeyObject } from 'node:crypto';
 import { canon, canonFor, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, rootHash, type EvidenceEvent } from './hash.js';
+import { CHP_STORE_HEAD_V1, storeHeadRoot } from './merkle.js';
 
 export const CANONICALIZATION = 'chp-stable-v1';
 export const SIGNATURE_ALGORITHM = 'ed25519';
@@ -536,24 +537,23 @@ export function buildContinuityStatement(
 // ── Chain witnessing (chp-v0.2.md §12, proposal 0005) ───────────────────────
 
 export interface StoreHead {
-  scheme: 'chp-store-head-v1';
+  scheme: string;
   sequence: number;
   store_head: string;
   leaves: Record<string, string | null>;
 }
 
-/** chp-store-head-v1: sha256 over sorted `correlation_id\x00head_hash\n` lines. */
+/** The witnessable store digest (spec §12). `scheme` selects chp-store-head-v1
+ * (flat fold, the default — byte-identical) or chp-store-head-v2 (RFC 6962
+ * Merkle root, proposal 0019); the dispatcher rejects an unknown scheme. */
 export function computeStoreHead(
   leaves: Map<string, string | null> | Record<string, string | null>,
   sequence: number,
+  scheme: string = CHP_STORE_HEAD_V1,
 ): StoreHead {
-  const entries = leaves instanceof Map ? [...leaves.entries()] : Object.entries(leaves);
-  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const h = createHash('sha256');
-  for (const [cid, head] of entries) h.update(`${cid}\x00${head ?? ''}\n`);
-  const obj: Record<string, string | null> = {};
-  for (const [cid, head] of entries) obj[cid] = head;
-  return { scheme: 'chp-store-head-v1', sequence, store_head: h.digest('hex'), leaves: obj };
+  const obj: Record<string, string | null> =
+    leaves instanceof Map ? Object.fromEntries(leaves) : { ...leaves };
+  return { scheme, sequence, store_head: storeHeadRoot(scheme, obj), leaves: obj };
 }
 
 /** chp-revocation-head-v1: sha256 over sorted revocation-identifier lines

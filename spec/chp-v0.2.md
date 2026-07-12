@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -842,7 +842,32 @@ omission; a correlation no witness saw is **`unwitnessed`**. The honest boundary
 an unwitnessed tail-truncation is uncatchable — no protocol can force a host to
 record, or to have had the record witnessed (the same limit as denial of
 revocation). Third-party inclusion proofs over the signed `store_head` root alone
-(a Merkle-ized head) are out of scope (named in proposal 0018).
+were out of scope in 0018; `chp-store-head-v2` (below) delivers them.
+
+**Merkle store head — third-party inclusion** ([proposal 0019](proposals/0019-transparency-log.md)).
+`chp-store-head-v1` is a **flat SHA-256 fold** over all per-correlation leaves, so
+proving one correlation's leaf is committed under a head requires the WHOLE leaves
+snapshot — which only a witness holds (why the completeness audit above is
+witness-side). **`chp-store-head-v2`** replaces the fold with an
+[RFC 6962](https://www.rfc-editor.org/rfc/rfc6962#section-2) Merkle tree over the
+SAME sorted leaves (leaf `SHA256(0x00 ‖ correlation_id\x00head_hash\n)`, node
+`SHA256(0x01 ‖ left ‖ right)`, split at the largest power of two — domain-separated,
+the audited CT construction). The head declares its `scheme`; a `store_head_root`
+dispatcher folds v1 or builds the v2 root and rejects an unknown scheme (the §2
+canonicalization-dispatch pattern). Everything that SIGNS the head — the
+chain-witness header, the store-head-anchor, the quorum compare — treats
+`store_head` as an **opaque string**, so a v2 head is witnessed and anchored
+byte-for-byte as v1; only the root's value differs, and `chp-store-head-v1` stays
+the default (byte-identical). An **inclusion proof** — `{leaf_index, tree_size,
+audit_path}` (RFC 6962 §2.1.1) — recomputes the root from a single leaf up the
+path, so a party holding only `{the signed/anchored root, one correlation's
+(id, head_hash), the proof}` verifies inclusion **with no leaves snapshot and no
+witness**. The **store-head-anchor** is the carrier (it already signs the opaque
+root; it gains an omit-when-absent `store_head_scheme` so a stranger can
+recompute), making non-omission (`chp-completeness-v1`) third-party-verifiable for
+an anchored correlation. Merkle *consistency* proofs (append-only between two
+roots), real Rekor/Sigstore submission + gossip, and log monitors are out of scope
+(named in proposal 0019).
 
 **Cadence and posture.** Any authed peer MAY witness any peer; the reference
 gateway carries an opt-in witnessing loop (`gateway.witness_interval_s`,

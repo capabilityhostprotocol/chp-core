@@ -402,15 +402,38 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if path == "/metrics":
             self._write_metrics()
             return
-        if path == "/head":
-            # Witnessing (spec §12): the store head a peer countersigns. AUTHED
-            # (the sequence discloses activity volume — mesh-count privacy).
-            # Leaves stay LOCAL: the witness signs only the root.
+        if path.startswith("/head/inclusion/"):
+            # Merkle inclusion (§12, proposal 0019): a chp-store-head-v2 inclusion
+            # proof for one correlation under the CURRENT head, so a third party
+            # verifies its tail is committed with no leaves snapshot and no witness.
             store = getattr(self.server.chp_host, "store", None)
             if store is None or not hasattr(store, "get_store_head"):
                 self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
                 return
-            head = store.get_store_head()
+            corr = unquote(path.removeprefix("/head/inclusion/"))
+            from .merkle import CHP_STORE_HEAD_V2, store_head_inclusion_proof
+            head = store.get_store_head(fresh=True, scheme=CHP_STORE_HEAD_V2)
+            if corr not in head["leaves"]:
+                self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"no correlation {corr!r}")
+                return
+            self._write_json({
+                "sequence": head["sequence"],
+                "store_head": head["store_head"],
+                "proof": store_head_inclusion_proof(head["leaves"], corr),
+            })
+            return
+        if path == "/head":
+            # Witnessing (spec §12): the store head a peer countersigns. AUTHED
+            # (the sequence discloses activity volume — mesh-count privacy).
+            # Leaves stay LOCAL: the witness signs only the root. `?scheme=` opts
+            # into chp-store-head-v2 (RFC 6962 Merkle, proposal 0019).
+            store = getattr(self.server.chp_host, "store", None)
+            if store is None or not hasattr(store, "get_store_head"):
+                self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
+                return
+            from urllib.parse import parse_qs
+            scheme = (parse_qs(urlparse(self.path).query).get("scheme") or [None])[0]
+            head = store.get_store_head(scheme=scheme)
             from . import revocations as _revocations
             from .types import utc_now
             host_id = getattr(self.server.chp_host, "host_id",

@@ -30,6 +30,7 @@ from ._core import (
     cmd_stream_verify,
     cmd_revocation_verify,
     cmd_completeness_verify,
+    cmd_head_inclusion,
     cmd_store_backup,
     cmd_serve_demo,
     cmd_validate_contract,
@@ -814,6 +815,18 @@ def build_parser() -> argparse.ArgumentParser:
     comp_verify.add_argument("--receipts", default=None,
                              help="Witness receipts JSON (default: ~/.chp/witnesses/received.json).")
     comp_verify.set_defaults(func=cmd_completeness_verify)
+
+    # chp head — Merkle store head inclusion (spec §12, proposal 0019)
+    head_p = subcommands.add_parser(
+        "head",
+        help="Transparency-log store head: third-party Merkle inclusion (spec §12, proposal 0019).")
+    head_sub = head_p.add_subparsers(dest="head_command", required=True)
+    head_incl = head_sub.add_parser(
+        "inclusion",
+        help="Verify a store-head-inclusion ({anchor, proof}): the external anchor's SSHSIG + "
+             "the RFC 6962 inclusion proof against the anchored root — no leaves, no witness.")
+    head_incl.add_argument("--file", required=True, help="A store-head-inclusion JSON ({anchor, proof}).")
+    head_incl.set_defaults(func=cmd_head_inclusion)
 
     # chp bundle — selective disclosure (spec §14, proposal 0011)
     bundle_p = subcommands.add_parser(
