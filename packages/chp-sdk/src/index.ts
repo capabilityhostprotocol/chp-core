@@ -109,3 +109,4 @@ export {
 } from './sshsig.js';
 export { RemoteCapabilityHost, childCorrelation, type InvocationResult } from './client.js';
 export { SUPPORTED_VERSIONS, PROTOCOL_VERSION, versionsUpto, negotiateVersion } from './version.js';
+export { versionSatisfies, bestSatisfying, parseVersion } from './semver.js';

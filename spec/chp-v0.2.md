@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -50,6 +50,21 @@ default-when-absent, select on the value, unknown → reject not silently degrad
 `version_unsupported` is a reserved denial code (§ Governance). This proposal
 ships the negotiator with a single wire lineage present; a future wire version is
 added to `supported_versions` and old clients keep selecting `0.2`.
+
+**Capability-version negotiation** ([proposal 0028](proposals/0028-schema-negotiation.md)).
+Wire-version negotiation is one axis; a **capability**'s own version is another. A
+`CapabilityDescriptor` already carries `version` (and `output_schema`); an invocation
+MAY carry `requested_capability_version` — a **semver range** (`1.0.0` exact, `^1.2`,
+`~1.2.3`, `>=1.0 <2`, `1.x`, space = AND). At the resolution gate (pipeline gate 2)
+the host resolves the id and, when a range is present, checks the registered version
+satisfies it: no satisfying version → **`capability_version_unsupported`** (the
+capability *exists* — distinct from `capability_not_found`; `details` carry
+`requested` + `available`), else it resolves to the highest satisfying version. This
+lets a client evolve safely across a mesh where a host runs `cap@2` and the client
+needs `cap@1`. Absent the field, resolution is unchanged (exact `version` or the
+single registered match). Cross-host router auto-selection of a compatible variant
+is out of scope (named in proposal 0028); `output_schema` compatibility assertion is
+deferred.
 
 ## 2. Hash Chain (`hash-chain` and above)
 

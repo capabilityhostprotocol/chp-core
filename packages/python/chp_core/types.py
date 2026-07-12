@@ -685,6 +685,7 @@ class DenialReason:
         "safety_blocked",                 # a safety guardrail blocked the invocation
         "mandate_invalid",                # presented mandate failed verification (§10)
         "mandate_exhausted",              # mandate's max_invocations cap reached (§10, proposal 0026)
+        "capability_version_unsupported", # capability exists but no version satisfies the requested range (resolution gate 2, proposal 0028)
         "host_unreachable",               # routing intermediary reached no owner (§11; retryable)
         "version_unsupported",            # explicit X-CHP-Version not in supported_versions (§1.1)
     })
@@ -711,6 +712,10 @@ class InvocationEnvelope:
     capability_id: str
     payload: JSON = field(default_factory=dict)
     version: str | None = None
+    # OPTIONAL capability-version range (chp-v0.2.md §1.1, proposal 0028): a semver
+    # range the resolved capability's version MUST satisfy, else the resolution
+    # gate denies capability_version_unsupported. None = today's exact resolution.
+    requested_capability_version: str | None = None
     invocation_id: str = field(default_factory=lambda: new_id("inv"))
     mode: str = "sync"
     correlation: CorrelationContext = field(default_factory=CorrelationContext)
@@ -727,6 +732,7 @@ class InvocationEnvelope:
             invocation_id=value.get("invocation_id") or new_id("inv"),
             capability_id=value["capability_id"],
             version=value.get("version"),
+            requested_capability_version=value.get("requested_capability_version"),
             mode=value.get("mode", "sync"),
             correlation=CorrelationContext.from_mapping(value.get("correlation")),
             subject=dict(value.get("subject") or {"id": "local", "type": "user"}),
@@ -741,6 +747,8 @@ class InvocationEnvelope:
         data["correlation"] = self.correlation.to_dict()
         if data.get("mandate") is None:
             del data["mandate"]  # additive field: absent stays absent on the wire
+        if data.get("requested_capability_version") is None:
+            del data["requested_capability_version"]  # additive (proposal 0028)
         return data
 
 
