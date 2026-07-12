@@ -604,6 +604,31 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "sealed_vector_verifies", False, {"error": str(exc)})
 
+    # Capability-version negotiation (proposal 0028): the spec must define it, and
+    # the matcher vector's known-answers must all agree.
+    add_check(
+        checks,
+        "spec_defines_version_negotiation",
+        "requested_capability_version" in spec_v02_mk
+        and "capability_version_unsupported" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §1.1 must define capability-version negotiation"},
+    )
+    ver_vec = repo_root / "spec" / "test-vectors" / "version-negotiation.json"
+    if ver_vec.exists():
+        try:
+            from .semver import version_satisfies
+
+            neg_doc = read_json(ver_vec)
+            add_check(
+                checks,
+                "version_negotiation_vector_verifies",
+                all(version_satisfies(c["version"], c["spec"]) is c["satisfies"]
+                    for c in neg_doc.get("cases", [])),
+                {"hint": "regenerate version-negotiation.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "version_negotiation_vector_verifies", False, {"error": str(exc)})
+
     # Transport auth (proposal 0027): §5 must be normative + define signed tokens,
     # and the auth-token vector must verify (and reject a wrong audience).
     add_check(

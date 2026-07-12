@@ -5,6 +5,29 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.7.3] — Cross-host capability-version negotiation over 0.7.2
+
+### Added
+- **Capability-version negotiation** (chp-v0.2.md §1.1 + pipeline gate 2,
+  [proposals/0028](proposals/0028-schema-negotiation.md)): an invocation MAY carry
+  `requested_capability_version`, a semver range (`1.0.0`, `^1.2`, `~1.2.3`,
+  `>=1.0 <2`, `1.x`, space = AND). At the resolution gate the host resolves the id
+  and, when a range is present, checks the registered version satisfies it — no
+  satisfying version yields the new **`capability_version_unsupported`** reserved
+  code (the capability *exists*, distinct from `capability_not_found`; `details`
+  carry `requested` + `available`), else it resolves to the highest satisfying
+  version. Lets a client evolve safely across a mesh (a host on `cap@2`, a client
+  needing `cap@1`).
+
+### Compatibility
+- **Additive, no byte changes.** `requested_capability_version` is optional; an
+  invocation without it resolves exactly as before, so every existing envelope /
+  vector / fixture is unchanged. The new reserved code is additive to the closed
+  vocabulary (present across `RESERVED_CODES`, the denial schema, the governance /
+  security-model / pipeline specs, and `reserved-names.md` / `reserved.ts`).
+  Regression gate: the `version-negotiation` matcher vector agrees in Python + the
+  TS SDK + `verify.mjs`; a conformance wire check denies an unavailable version.
+
 ## [0.7.2] — Normative transport/auth + signed bearer tokens over 0.7.1
 
 ### Added

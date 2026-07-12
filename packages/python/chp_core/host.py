@@ -486,6 +486,7 @@ class LocalCapabilityHost:
         payload: JSON | None = None,
         *,
         version: str | None = None,
+        requested_capability_version: str | None = None,
         correlation: CorrelationContext | JSON | None = None,
         subject: JSON | None = None,
         mode: str = "sync",
@@ -498,6 +499,7 @@ class LocalCapabilityHost:
         envelope = InvocationEnvelope(
             capability_id=capability_id,
             version=version,
+            requested_capability_version=requested_capability_version,
             payload=payload or {},
             mode=mode,
             correlation=corr,
@@ -556,6 +558,34 @@ class LocalCapabilityHost:
             )
 
         entry = self._resolve(envelope.capability_id, envelope.version)
+
+        # Capability-version negotiation (§1.1, proposal 0028): when the envelope
+        # requests a semver range, resolve to the highest registered version that
+        # satisfies it. A registered id with NO satisfying version is
+        # capability_version_unsupported — the capability EXISTS (distinct from
+        # capability_not_found); an unregistered id still falls through below.
+        rcv = envelope.requested_capability_version
+        if rcv:
+            with self._registry_lock:
+                versions = sorted({rc.descriptor.version for rc in self._capabilities.values()
+                                   if rc.descriptor.id == envelope.capability_id})
+            if versions:
+                from .semver import best_satisfying
+                picked = best_satisfying(versions, rcv)
+                if picked is None:
+                    return envelope, None, self._deny(
+                        envelope,
+                        DenialReason(
+                            code="capability_version_unsupported",
+                            message=f"no version of {envelope.capability_id!r} "
+                                    f"satisfies {rcv!r}",
+                            retryable=False,
+                            details={"requested": rcv, "available": versions,
+                                     "capability_id": envelope.capability_id},
+                        ),
+                    )
+                entry = self._resolve(envelope.capability_id, picked)
+
         if entry is None:
             # A governed denial that also TEACHES: closest registered ids ride
             # in details (wire-safe — DenialReason.details serializes today).

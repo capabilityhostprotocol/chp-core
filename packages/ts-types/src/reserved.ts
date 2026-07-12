@@ -12,6 +12,7 @@ export const RESERVED_DENIAL_CODES = [
   "budget_exceeded",
   "capability_disabled",
   "capability_not_found",
+  "capability_version_unsupported",
   "host_unreachable",
   "input_schema_validation_failed",
   "invariant_failed",
