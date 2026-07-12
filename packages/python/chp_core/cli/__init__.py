@@ -31,6 +31,7 @@ from ._core import (
     cmd_revocation_verify,
     cmd_completeness_verify,
     cmd_head_inclusion,
+    cmd_head_consistency,
     cmd_bundle_attest,
     cmd_attest_verify,
     cmd_store_backup,
@@ -829,6 +830,14 @@ def build_parser() -> argparse.ArgumentParser:
              "the RFC 6962 inclusion proof against the anchored root — no leaves, no witness.")
     head_incl.add_argument("--file", required=True, help="A store-head-inclusion JSON ({anchor, proof}).")
     head_incl.set_defaults(func=cmd_head_inclusion)
+    head_cons = head_sub.add_parser(
+        "consistency",
+        help="Verify a store-head-consistency ({first_anchor, second_anchor, proof}): both "
+             "anchors' SSHSIGs + the RFC 6962 §2.1.2 append-only proof between the two anchored "
+             "roots — no leaves, no witness (spec §12, proposal 0022).")
+    head_cons.add_argument("--file", required=True,
+                           help="A store-head-consistency JSON ({first_anchor, second_anchor, proof}).")
+    head_cons.set_defaults(func=cmd_head_consistency)
 
     # chp bundle — selective disclosure (spec §14, proposal 0011)
     bundle_p = subcommands.add_parser(

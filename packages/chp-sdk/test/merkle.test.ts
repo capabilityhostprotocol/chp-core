@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import {
   merkleRoot, storeHeadRoot, storeHeadInclusionProof, verifyStoreHeadInclusion,
   storeHeadSchemeMatching, CHP_STORE_HEAD_V1, CHP_STORE_HEAD_V2,
+  consistencyProof, verifyConsistency, storeHeadConsistencyProof, verifyStoreHeadConsistency,
 } from '../src/merkle.js';
 import { verifyStoreHeadAnchor, auditCompletenessViaAnchor } from '../src/verify.js';
 import type { JsonValue } from '../src/canon.js';
@@ -66,5 +67,47 @@ describe('chp-store-head-v2 (RFC 6962 Merkle)', () => {
     // a bundle that claims a DIFFERENT (truncated) tail — the anchored proof exposes it
     const truncated = { completeness: { correlation_id: corr, as_of_sequence: 1, head_hash: 'a'.repeat(64) } } as Record<string, JsonValue>;
     expect(auditCompletenessViaAnchor(truncated, iv.anchor, iv.proof).verdict).toBe('incomplete');
+  });
+});
+
+// Consistency proofs — append-only across two heads (§12, proposal 0022),
+// byte-parity with Python chp_core.merkle.
+describe('chp-store-head-v2 consistency (RFC 6962 §2.1.2)', () => {
+  it('cross-verifies the Python consistency vector (both anchored roots recompute)', () => {
+    const cv = load('store-head-consistency.json');
+    expect(verifyStoreHeadAnchor(cv.first_anchor).valid).toBe(true);
+    expect(verifyStoreHeadAnchor(cv.second_anchor).valid).toBe(true);
+    expect(verifyStoreHeadConsistency(
+      cv.first_anchor.store_head, cv.second_anchor.store_head, cv.proof)).toBe(true);
+    // a wrong carried root (anchor mismatch) fails
+    expect(verifyStoreHeadConsistency('0'.repeat(64), cv.second_anchor.store_head, cv.proof)).toBe(false);
+  });
+
+  it('TS-native: consistencyProof recomputes both roots for every m ≤ n ≤ 8', () => {
+    for (let n = 1; n <= 8; n++) {
+      const leaves: Buffer[] = [];
+      for (let i = 0; i < n; i++) leaves.push(Buffer.from(`L${i}`));
+      const newRoot = merkleRoot(leaves);
+      for (let m = 0; m <= n; m++) {
+        const oldRoot = m ? merkleRoot(leaves.slice(0, m)) : createHash('sha256').update(Buffer.alloc(0)).digest();
+        const proof = consistencyProof(leaves, m);
+        expect(verifyConsistency(oldRoot, newRoot, m, n, proof)).toBe(true);
+      }
+    }
+  });
+
+  it('TS-native: a rebuilt Python store head is append-only extended byte-identically', () => {
+    const oldLeaves = { c1: 'a'.repeat(64), c2: 'b'.repeat(64) };
+    const newLeaves = { ...oldLeaves, c3: 'c'.repeat(64), c4: 'd'.repeat(64) };
+    const proof = storeHeadConsistencyProof(oldLeaves, newLeaves);
+    const oldRoot = storeHeadRoot(CHP_STORE_HEAD_V2, oldLeaves);
+    const newRoot = storeHeadRoot(CHP_STORE_HEAD_V2, newLeaves);
+    expect(proof.first_root).toBe(oldRoot);
+    expect(proof.second_root).toBe(newRoot);
+    expect(verifyStoreHeadConsistency(oldRoot, newRoot, proof)).toBe(true);
+    // a later head that altered an old correlation is caught
+    const tampered = { ...newLeaves, c2: 'Z'.repeat(64) };
+    const tamperedRoot = storeHeadRoot(CHP_STORE_HEAD_V2, tampered);
+    expect(verifyStoreHeadConsistency(oldRoot, tamperedRoot, proof)).toBe(false);
   });
 });

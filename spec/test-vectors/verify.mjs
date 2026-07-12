@@ -119,6 +119,36 @@ function verifyStoreHeadInclusion(rootHex, correlationId, headHash, proof) {
   return path.length === 0 && computed.toString("hex") === rootHex;
 }
 
+// RFC 6962 §2.1.2 consistency verify (§12, proposal 0022). Replay SUBPROOF(m, n, b):
+// recompute BOTH the old root (size m) and new root (size n); bind each shifted
+// entry AFTER the recursion (no argument-evaluation-order reliance, as in _walk).
+function _consistencyWalk(m, n, b, path, firstRoot) {
+  if (m === n) {
+    if (b) return [firstRoot, firstRoot];       // verifier-known root, omitted
+    const h = path.shift();
+    return [h, h];
+  }
+  const k = _splitN(n);
+  if (m <= k) {
+    const [old, newLeft] = _consistencyWalk(m, k, b, path, firstRoot);
+    const right = path.shift();                  // new right subtree
+    return [old, _nodeHash(newLeft, right)];
+  }
+  const [oldRight, newRight] = _consistencyWalk(m - k, n - k, false, path, firstRoot);
+  const left = path.shift();                     // shared left subtree
+  return [_nodeHash(left, oldRight), _nodeHash(left, newRight)];
+}
+function verifyConsistency(firstRootHex, secondRootHex, m, n, proofHex) {
+  if (!(m >= 0 && m <= n)) return false;
+  if (m === 0) return proofHex.length === 0;
+  if (m === n) return proofHex.length === 0 && firstRootHex === secondRootHex;
+  const path = proofHex.map((h) => Buffer.from(h, "hex"));
+  const first = Buffer.from(firstRootHex, "hex");
+  const [old, next] = _consistencyWalk(m, n, true, path, first);
+  return path.length === 0
+    && old.toString("hex") === firstRootHex && next.toString("hex") === secondRootHex;
+}
+
 // chp-event-hash-v2 (14): sha256(chp-stable-v1(payload)). Empty payload = {}.
 const payloadCommitment = (payload) => sha256hex(canon(payload ?? {}));
 
@@ -462,6 +492,23 @@ if (input.kind === "adapter-provenance") {
   ok = ok && forgeFails;
   console.log(ok
     ? `VALID (store-head-inclusion: ${proof.correlation_id} committed under anchored Merkle root ${String(root).slice(0, 16)}…)`
+    : "INVALID");
+} else if (input.kind === "store-head-consistency") {
+  // Append-only across two anchored heads (chp-v0.2.md §12, proposal 0022):
+  // the two roots in the proof must equal the anchored store_heads, then
+  // recompute BOTH from the RFC 6962 §2.1.2 proof — no leaves, no witness.
+  const { first_anchor, second_anchor, proof } = input;
+  const oldRoot = first_anchor?.store_head, newRoot = second_anchor?.store_head;
+  ok = first_anchor?.store_head_scheme === "chp-store-head-v2"
+    && second_anchor?.store_head_scheme === "chp-store-head-v2"
+    && proof.first_root === oldRoot && proof.second_root === newRoot
+    && verifyConsistency(oldRoot, newRoot, proof.first_size, proof.second_size, proof.proof);
+  // a later head that dropped a leaf (fewer leaves → different root) must fail
+  const truncFails = !verifyConsistency(oldRoot, "0".repeat(64),
+                                        proof.first_size, proof.second_size, proof.proof);
+  ok = ok && truncFails;
+  console.log(ok
+    ? `VALID (store-head-consistency: log append-only ${oldRoot.slice(0, 12)}…→${newRoot.slice(0, 12)}…, ${proof.first_size}→${proof.second_size} leaves)`
     : "INVALID");
 } else if (input.kind === "dsse" || input.payloadType === "application/vnd.in-toto+json") {
   // in-toto / DSSE attestation (chp-v0.2.md §15, proposal 0021). Level 1: any

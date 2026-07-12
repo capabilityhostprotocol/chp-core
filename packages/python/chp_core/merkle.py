@@ -89,6 +89,83 @@ def verify_inclusion(root: bytes, leaf_data: bytes, index: int,
     return computed == root
 
 
+# ── Consistency proofs (RFC 6962 §2.1.2, proposal 0022) ─────────────────────
+# Prove a later tree (size n) is an append-only extension of an earlier one
+# (size m ≤ n): a minimal set of subtree hashes from which BOTH roots recompute.
+# Like inclusion, we replay the prover's recursive split rather than the fn/sn
+# bit walk, so verify is exactly the inverse of the build.
+
+
+def consistency_proof(leaves: list[bytes], m: int) -> list[bytes]:
+    """RFC 6962 §2.1.2 consistency proof between the first ``m`` leaves and the
+    full tree (``n = len(leaves)``, ``0 <= m <= n``). ``PROOF(m, D[0:n]) =
+    SUBPROOF(m, D[0:n], true)``; the top ``b=true`` omits the old root (the
+    verifier already holds it). Empty when ``m == 0`` or ``m == n``."""
+    n = len(leaves)
+    if not 0 <= m <= n:
+        raise ValueError(f"consistency: need 0 <= m({m}) <= n({n})")
+    if m == 0 or m == n:
+        return []
+    return _subproof(m, leaves, True)
+
+
+def _subproof(m: int, leaves: list[bytes], b: bool) -> list[bytes]:
+    n = len(leaves)
+    if m == n:
+        # A complete subtree: omit its root when the verifier already has it (b),
+        # else hand it over.
+        return [] if b else [merkle_root(leaves)]
+    k = _split(n)
+    if m <= k:
+        # The old tree lives entirely in the left subtree; the right is new.
+        return _subproof(m, leaves[:k], b) + [merkle_root(leaves[k:])]
+    # m > k: the left subtree is wholly old; recurse into the right (now b=False).
+    return _subproof(m - k, leaves[k:], False) + [merkle_root(leaves[:k])]
+
+
+def _consistency_walk(m: int, n: int, b: bool, path: Iterator[bytes],
+                      first_root: bytes) -> tuple[bytes, bytes]:
+    """Replay SUBPROOF(m, D[0:n], b), returning (old_root@m, new_root@n). At the
+    ``m == n`` base the old root is either the verifier-known ``first_root``
+    (b=true, omitted from the proof) or the next path entry (b=false)."""
+    if m == n:
+        if b:
+            return first_root, first_root
+        h = next(path)
+        return h, h
+    k = _split(n)
+    if m <= k:
+        old, new_left = _consistency_walk(m, k, b, path, first_root)
+        right = next(path)                       # MTH(D[k:n]) — the new right subtree
+        return old, _node_hash(new_left, right)
+    old_right, new_right = _consistency_walk(m - k, n - k, False, path, first_root)
+    left = next(path)                            # MTH(D[0:k]) — shared left subtree
+    return _node_hash(left, old_right), _node_hash(left, new_right)
+
+
+def verify_consistency(first_root: bytes, second_root: bytes, m: int, n: int,
+                       proof: list[bytes]) -> bool:
+    """True iff a tree of size ``n`` with root ``second_root`` is an append-only
+    extension of a tree of size ``m`` with root ``first_root``, given ``proof``
+    (RFC 6962 §2.1.2). Recomputes BOTH roots by replaying the build's split; all
+    path entries must be consumed. ``m == 0`` (extend the empty tree) and
+    ``m == n`` (same tree) take an empty proof."""
+    if not 0 <= m <= n:
+        return False
+    if m == 0:
+        return proof == []                       # empty tree extends into anything
+    if m == n:
+        return proof == [] and first_root == second_root
+    it: Iterator[bytes] = iter(proof)
+    try:
+        old, new = _consistency_walk(m, n, True, it, first_root)
+    except StopIteration:
+        return False
+    if next(it, None) is not None:
+        return False                             # leftover path entries
+    return old == first_root and new == second_root
+
+
 # ── Store-head schemes (chp-v0.2.md §12) ────────────────────────────────────
 # v1 = the flat SHA-256 fold; v2 = the RFC 6962 Merkle root (proposal 0019). One
 # dispatcher so every recompute site agrees; raises on an unknown scheme (the §2
@@ -167,6 +244,44 @@ def verify_store_head_inclusion(root: str, correlation_id: str,
         return False
 
 
+def store_head_consistency_proof(old_leaves: dict, new_leaves: dict) -> dict:
+    """A `store-head-consistency` object proving the ``new_leaves`` store head
+    (chp-store-head-v2) is an append-only extension of ``old_leaves``. Requires
+    the old leaves to be a sorted prefix of the new ones (every old correlation
+    still present with the same head_hash, in sort order) — the caller supplies
+    two snapshots; the proof is what a stranger checks against the anchored roots."""
+    old_ordered = sorted(old_leaves)
+    new_ordered = sorted(new_leaves)
+    m, n = len(old_ordered), len(new_ordered)
+    new_bytes = [store_head_leaf(cid, new_leaves[cid]) for cid in new_ordered]
+    return {
+        "scheme": CHP_STORE_HEAD_V2,
+        "first_size": m,
+        "second_size": n,
+        "first_root": store_head_root(CHP_STORE_HEAD_V2, old_leaves),
+        "second_root": merkle_root(new_bytes).hex(),
+        "proof": [h.hex() for h in consistency_proof(new_bytes, m)],
+    }
+
+
+def verify_store_head_consistency(old_root: str, new_root: str, proof: dict) -> bool:
+    """Third-party, witness-free (§12, proposal 0022): from two anchored
+    chp-store-head-v2 roots and ``proof``, verify the later log only APPENDED —
+    no old correlation dropped, altered, or reordered. The carried roots must
+    equal the anchored ``old_root``/``new_root``."""
+    if proof.get("scheme") != CHP_STORE_HEAD_V2:
+        return False
+    if proof.get("first_root") != old_root or proof.get("second_root") != new_root:
+        return False
+    try:
+        path = [bytes.fromhex(h) for h in proof.get("proof", [])]
+        return verify_consistency(
+            bytes.fromhex(old_root), bytes.fromhex(new_root),
+            int(proof["first_size"]), int(proof["second_size"]), path)
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
 def _selfcheck() -> None:
     """Assertion-based sanity check (RFC 6962 known-answers + inclusion round
     trips). Runnable: ``python -m chp_core.merkle``."""
@@ -192,7 +307,31 @@ def _selfcheck() -> None:
             if proof:  # a tampered path fails
                 bad = list(proof); bad[0] = b"\x00" * 32
                 assert not verify_inclusion(root, leaves[i], i, n, bad), (n, i)
-    print("merkle self-check OK (RFC 6962)")
+    # Consistency: for every m <= n (n up to 9), the proof recomputes BOTH the
+    # size-m and size-n roots; empty proof for m==0 and m==n.
+    for n in range(1, 10):
+        leaves = [f"leaf-{i}".encode() for i in range(n)]
+        new_root = merkle_root(leaves)
+        for m in range(0, n + 1):
+            old_root = merkle_root(leaves[:m]) if m else hashlib.sha256(b"").digest()
+            proof = consistency_proof(leaves, m)
+            assert verify_consistency(old_root, new_root, m, n, proof), (m, n)
+            if 0 < m < n:
+                assert proof, (m, n)  # a real extension needs a non-empty proof
+                # A later tree that DROPPED the last old leaf breaks consistency:
+                # rebuild an "old" root over a rewritten prefix → recompute ≠ signed.
+                forged_old = merkle_root(leaves[:m - 1] + [b"REWRITTEN"])
+                assert not verify_consistency(forged_old, new_root, m, n, proof), (m, n)
+                # A tampered proof entry fails.
+                bad = list(proof); bad[0] = b"\x00" * 32
+                assert not verify_consistency(old_root, new_root, m, n, bad), (m, n)
+    # A truncated log (later root drops a leaf) is caught: proof for (m, n) cannot
+    # validate against a second_root that removed leaves.
+    full = [f"c{i}".encode() for i in range(6)]
+    truncated_root = merkle_root(full[:5])
+    p = consistency_proof(full, 4)
+    assert not verify_consistency(merkle_root(full[:4]), truncated_root, 4, 6, p)
+    print("merkle self-check OK (RFC 6962 inclusion + consistency)")
 
 
 if __name__ == "__main__":
