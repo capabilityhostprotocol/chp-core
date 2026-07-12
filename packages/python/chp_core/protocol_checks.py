@@ -509,6 +509,45 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "inclusion_vector_verifies", False, {"error": str(exc)})
 
+    # Security model (proposal 0020): the properties matrix must exist AND stay in
+    # sync — every reserved denial code and every scheme name must be referenced,
+    # so a new code/scheme cannot ship without appearing in the threat model.
+    sec_path = repo_root / "spec" / "chp-security-model.md"
+    if sec_path.exists():
+        sec = read_text(sec_path)
+        add_check(
+            checks,
+            "spec_defines_security_model",
+            "CHP Security Model" in sec and "Adversary classes" in sec
+            and ("Residual risk" in sec or "residual risk" in sec),
+            {"path": "spec/chp-security-model.md"},
+        )
+        missing_codes = sorted(c for c in reserved if f"`{c}`" not in sec)
+        add_check(
+            checks,
+            "security_model_names_denial_codes",
+            not missing_codes,
+            {"missing": missing_codes,
+             "hint": "every DenialReason.RESERVED_CODES code must appear in chp-security-model.md"},
+        )
+        _schemes = (
+            "chp-stable-v1", "chp-jcs-v1", "chp-event-hash-v1", "chp-event-hash-v2",
+            "chp-causal-order-v1", "chp-store-head-v1", "chp-store-head-v2",
+            "chp-revocation-head-v1", "chp-witness-quorum-v1", "chp-store-head-anchor-v1",
+            "chp-completeness-v1", "chp-chunk-seq-v1",
+        )
+        missing_schemes = [s for s in _schemes if s not in sec]
+        add_check(
+            checks,
+            "security_model_names_schemes",
+            not missing_schemes,
+            {"missing": missing_schemes,
+             "hint": "every chp-*-v* scheme must appear in chp-security-model.md"},
+        )
+    else:
+        add_check(checks, "spec_defines_security_model", False,
+                  {"hint": "spec/chp-security-model.md is missing"})
+
     # Anchors (spec §3.1): the anchored vector must still verify (guards the
     # omit-when-empty conditional in build/verify), and the spec must define
     # the anchor mechanism + the well-known route.

@@ -10,8 +10,9 @@ The Capability Host Protocol (CHP) specification is a set of layered documents.
 | 3 | [chp-invocation-pipeline.md](chp-invocation-pipeline.md) | The normative 10-gate governed-invocation ordering + per-code trigger predicates | 0.2–0.2.2 (additive) | **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 2026-07-09) |
 | 4 | [chp-http-binding.md](chp-http-binding.md) | The HTTP wire binding: routes, auth, the 200-for-processed rule, conformance fixtures | 0.2–0.2.2 (additive) | **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 2026-07-09) |
 | 5 | [chp-v0.2.md](chp-v0.2.md) | Evidence integrity: assurance tiers, chp-stable-v1 canonicalization, hash chains, signed bundles, anchors (§3.1), key lifecycle (§3.2) | 0.2–0.2.2 (additive) | **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 2026-07-09) |
-| 6 | [reserved-names.md](reserved-names.md) | Generated registry of reserved event types, denial codes, anchor types, prefixes | — | generated |
-| 7 | [test-vectors/](test-vectors/) | Byte-exact fixtures + `verify.mjs` (the stdlib reference verifier). Regenerate with `scripts/gen-test-vectors.py` | — | pinned |
+| 6 | [chp-security-model.md](chp-security-model.md) | The security model: a guarantee × adversary × residual-risk matrix over every mechanism; what CHP proves, against whom, and what it explicitly does not | 0.5.1 | **normative** (2026-07-12) |
+| 7 | [reserved-names.md](reserved-names.md) | Generated registry of reserved event types, denial codes, anchor types, prefixes | — | generated |
+| 8 | [test-vectors/](test-vectors/) | Byte-exact fixtures + `verify.mjs` (the stdlib reference verifier). Regenerate with `scripts/gen-test-vectors.py` | — | pinned |
 
 Supporting: [CHANGELOG.md](CHANGELOG.md) (protocol history) ·
 [proposals/](proposals/) (how the protocol evolves) ·
