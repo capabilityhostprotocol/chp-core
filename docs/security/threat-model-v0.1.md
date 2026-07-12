@@ -1,5 +1,13 @@
 # CHP v0.1 Threat Model
 
+> **Superseded (2026-07-12) by [spec/chp-security-model.md](../../spec/chp-security-model.md)**
+> — the normative, cross-version properties matrix (guarantee × adversary ×
+> residual-risk). Every Non-Goal below (tamper-evident ledgers, host attestation,
+> policy evaluation, multi-host causal ordering) has since **shipped** in v0.2+
+> (witnessing/anchoring/Merkle head, attestation + anchors, the governed pipeline
+> + mandates, `chp-causal-order-v1`). This v0.1 document is kept for history; the
+> security model is now maintained in the spec.
+
 ## Scope
 
 This threat model covers CHP v0.1 local hosts, schemas, local evidence stores, examples, and conformance. It does not cover hosted multi-tenant services or production SaaS controls.
