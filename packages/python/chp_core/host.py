@@ -638,6 +638,31 @@ class LocalCapabilityHost:
                         retryable=False,
                     ),
                 )
+            # Use-count cap (§10, proposal 0026): count the distinct invocations
+            # already recorded under this mandate_id and deny once the signed
+            # max_invocations is reached. Keyed on invocation_id (the replay key),
+            # so a re-run of the same invocation does not consume a new use.
+            max_inv = envelope.mandate.get("max_invocations")
+            store = getattr(self, "store", None)
+            if max_inv is not None and store is not None and hasattr(store, "count_mandate_uses"):
+                mid = envelope.mandate.get("mandate_id")
+                inv_id = envelope.invocation_id
+                already = store.mandate_use_recorded(mid, inv_id)
+                used = store.count_mandate_uses(mid)
+                if not already and used >= int(max_inv):
+                    return envelope, None, self._deny(
+                        envelope,
+                        DenialReason(
+                            code="mandate_exhausted",
+                            message=f"mandate {mid!r} exhausted "
+                                    f"({used}/{max_inv} invocations used)",
+                            retryable=False,
+                            details={"used": used, "max_invocations": int(max_inv),
+                                     "mandate_id": mid},
+                        ),
+                    )
+                store.record_mandate_use(mid, inv_id, utc_now())
+
             immediate = (envelope.mandate.get("principal") or {}).get("host_id")
             root = mandate_root_principal(envelope.mandate)
             envelope.subject = {

@@ -63,7 +63,7 @@ replay never bypasses it. Streaming mode is excluded.
 | 2 | Resolution | No registered capability matches `(capability_id, version)`. If `version` is null and exactly one version is registered, it resolves; an ambiguous unversioned match does **not** resolve | `denied` | `capability_not_found` | false | `execution_denied` |
 | 3 | Enabled | The resolved capability is registered but **disabled** | **`skipped`** | `capability_disabled` | n/a | `execution_skipped` |
 | 4 | Mode | `envelope.mode` ∉ `descriptor.modes` | `denied` | `unsupported_mode` | false | `execution_denied` |
-| 5 | Mandate | The envelope presents a `mandate` (see §3) | `denied` when it fails | `mandate_invalid` **or** `policy_blocked` | false | `execution_denied`; a VALID mandate denies nothing — it rebinds the subject |
+| 5 | Mandate | The envelope presents a `mandate` (see §3) | `denied` when it fails | `mandate_invalid`, `mandate_exhausted`, **or** `policy_blocked` | false | `execution_denied`; a VALID in-scope mandate denies nothing — it rebinds the subject |
 | 6 | Policy | A `PolicyConfig` is active and blocks (see §4) | `denied` | `policy_blocked` | false | `execution_denied` |
 | 7 | Invariants | A host-enforced invariant with `failure_behavior="deny"` does not hold for the payload | `denied` | `invariant_failed` | false | `execution_denied` (carries `invariant_id`) |
 | 8 | Autonomy | An `AutonomyProfile` budget/tier gate fires (see §5) | `denied` | `budget_exceeded` **or** `approval_required` | see §5 | a governance event **then** `execution_denied` |
@@ -93,8 +93,18 @@ evaluate in this order; absent a mandate this gate is a no-op:
 2. **Scope** — if the resolved capability id is outside the mandate's `scope`
    (http-binding §2 grammar) → deny `policy_blocked` (the same semantics as an
    out-of-scope caller key).
-3. **Bind** — a valid, in-scope mandate rebinds the envelope subject to
-   `{id: <delegate_id>, type: "mandate", verified: true, mandate_id,
+3. **Count** — when the mandate carries an optional signed `max_invocations`
+   cap ([chp-v0.2.md](chp-v0.2.md) §10, proposal 0026): the host counts the
+   **distinct `invocation_id`s** it has already recorded under this `mandate_id`
+   (keyed like idempotent replay, so a replayed invocation never double-counts).
+   If that count ≥ `max_invocations` and this is a new `invocation_id` → deny
+   `mandate_exhausted` (`retryable: false` — the grant is spent; a new mandate is
+   a new object); `details` SHOULD carry `used` and `max_invocations`. Otherwise
+   the host records this use. Absent `max_invocations` the cap is unlimited and
+   this step is a no-op. The count is per delegate host (a shared cross-host
+   counter is out of scope).
+4. **Bind** — a valid, in-scope, non-exhausted mandate rebinds the envelope subject
+   to `{id: <delegate_id>, type: "mandate", verified: true, mandate_id,
    principal: <principal host_id>}` before any later gate runs, so every
    evidence event attributes the work to the delegate acting under the
    principal's authority. A mandate **narrows and attributes — it never

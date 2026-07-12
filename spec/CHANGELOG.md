@@ -5,6 +5,30 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.7.1] — max_invocations enforcement + delegation-lifecycle events over 0.7.0
+
+### Added
+- **`max_invocations` enforcement** (chp-v0.2.md §10,
+  [proposals/0026](proposals/0026-max-invocations.md)): a mandate gains an
+  optional signed-header `max_invocations` cap. The mandate gate counts the
+  distinct `invocation_id`s recorded under each `mandate_id` (the idempotent-
+  replay key, so a replay never double-counts) and, once the cap is reached,
+  denies the new **`mandate_exhausted`** reserved code (`retryable: false`,
+  `details` carries `used` + `max_invocations`). A sub-mandate may only lower the
+  cap. Closes the most-repeated authority deferral (0002/0007/0009). The
+  `delegation_created/accepted/completed/rejected` lifecycle events are recognized
+  evidence types.
+
+### Compatibility
+- **Additive, no byte changes.** `max_invocations` is omit-when-absent in the
+  mandate and its signed header, so every existing mandate/sub-mandate/vector is
+  byte-identical; an uncapped mandate is unlimited as before. The new
+  `mandate_exhausted` code is additive to the closed vocabulary (present across
+  `RESERVED_CODES`, the denial schema, the governance/security-model/pipeline
+  specs, and the generated `reserved-names.md`/`reserved.ts`). Regression gate: a
+  capped-mandate vector's header signs `max_invocations` and verifies in Python +
+  the TS SDK + `verify.mjs`; a conformance wire check exercises the cap.
+
 ## [0.7.0] — Sealed payloads / confidentiality over 0.6.3
 
 ### Added

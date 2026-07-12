@@ -684,6 +684,7 @@ class DenialReason:
         "approval_required",              # human approval gate not satisfied
         "safety_blocked",                 # a safety guardrail blocked the invocation
         "mandate_invalid",                # presented mandate failed verification (§10)
+        "mandate_exhausted",              # mandate's max_invocations cap reached (§10, proposal 0026)
         "host_unreachable",               # routing intermediary reached no owner (§11; retryable)
         "version_unsupported",            # explicit X-CHP-Version not in supported_versions (§1.1)
     })

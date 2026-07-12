@@ -43,6 +43,7 @@ ordering are normative in [chp-invocation-pipeline.md](chp-invocation-pipeline.m
 - `host_unreachable`
 - `input_schema_validation_failed`
 - `invariant_failed`
+- `mandate_exhausted`
 - `mandate_invalid`
 - `policy_blocked`
 - `safety_blocked`
