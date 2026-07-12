@@ -526,14 +526,15 @@ def check_alignment(repo_root: Path) -> JSON:
             from .merkle import verify_store_head_consistency
             from .signing import verify_store_head_anchor
 
-            cv = read_json(cons_vec)
-            fa, sa, proof = cv["first_anchor"], cv["second_anchor"], cv["proof"]
+            cons_doc = read_json(cons_vec)
+            fa, sa, cons_proof = (cons_doc["first_anchor"], cons_doc["second_anchor"],
+                                  cons_doc["proof"])
             add_check(
                 checks,
                 "consistency_vector_verifies",
                 verify_store_head_anchor(fa).valid and verify_store_head_anchor(sa).valid
-                and verify_store_head_consistency(fa["store_head"], sa["store_head"], proof)
-                and not verify_store_head_consistency(fa["store_head"], "0" * 64, proof),
+                and verify_store_head_consistency(fa["store_head"], sa["store_head"], cons_proof)
+                and not verify_store_head_consistency(fa["store_head"], "0" * 64, cons_proof),
                 {"hint": "regenerate store-head-consistency.json"},
             )
         except Exception as exc:  # pragma: no cover - defensive
