@@ -27,6 +27,48 @@ def chunk_seq_digest(deltas: list) -> str:
         digest.update((json.dumps(delta, sort_keys=True) + "\n").encode())
     return digest.hexdigest()
 
+
+def lookup_recorded_result(store: Any, invocation_id: str) -> "InvocationResult | None":
+    """§13 idempotent-replay lookup: read the recorded result for *invocation_id*
+    off *store* and rebuild it with ``replayed=True`` (or None). Best-effort — a
+    cache error means a fresh execution. Shared by ``LocalCapabilityHost`` gate 0
+    and the routing gateway's cross-owner gate 0 (§13.2, proposal 0014)."""
+    from .types import CorrelationContext, DenialReason, InvocationResult
+    lookup = getattr(store, "lookup_result", None)
+    if lookup is None:
+        return None
+    try:
+        data = lookup(invocation_id)
+    except Exception:  # noqa: BLE001 — cache trouble must not block invokes
+        return None
+    if not isinstance(data, dict):
+        return None
+    denial_raw = data.get("denial")
+    denial = None
+    if isinstance(denial_raw, dict):
+        denial = DenialReason(
+            code=str(denial_raw.get("code", "")),
+            message=str(denial_raw.get("message", "")),
+            invariant_id=denial_raw.get("invariant_id"),
+            retryable=bool(denial_raw.get("retryable", False)),
+            details=denial_raw.get("details") or {},
+        )
+    return InvocationResult(
+        invocation_id=str(data.get("invocation_id", invocation_id)),
+        capability_id=str(data.get("capability_id", "")),
+        capability_version=data.get("capability_version"),
+        correlation=CorrelationContext.from_mapping(data.get("correlation")),
+        outcome=data.get("outcome", "success"),
+        success=bool(data.get("success", False)),
+        data=data.get("data"),
+        error=data.get("error"),
+        denial=denial,
+        evidence_ids=list(data.get("evidence_ids") or []),
+        started_at=data.get("started_at"),
+        completed_at=str(data.get("completed_at") or ""),
+        replayed=True,
+    )
+
 from .store import EVENT_HASH_V2, SQLiteEvidenceStore, _payload_commitment
 from .decorators import adapt_callable, get_capability_descriptor
 from .policy import PolicyConfig, evaluate_policy, load_policy
@@ -674,41 +716,7 @@ class LocalCapabilityHost:
     def _lookup_recorded_result(self, invocation_id: str) -> "InvocationResult | None":
         """Gate 0 lookup: rebuild the recorded InvocationResult (replayed=True),
         or None. Best-effort — a cache error means a fresh execution."""
-        lookup = getattr(self.store, "lookup_result", None)
-        if lookup is None:
-            return None
-        try:
-            data = lookup(invocation_id)
-        except Exception:  # noqa: BLE001 — cache trouble must not block invokes
-            return None
-        if not isinstance(data, dict):
-            return None
-        from .types import CorrelationContext
-        denial_raw = data.get("denial")
-        denial = None
-        if isinstance(denial_raw, dict):
-            denial = DenialReason(
-                code=str(denial_raw.get("code", "")),
-                message=str(denial_raw.get("message", "")),
-                invariant_id=denial_raw.get("invariant_id"),
-                retryable=bool(denial_raw.get("retryable", False)),
-                details=denial_raw.get("details") or {},
-            )
-        return InvocationResult(
-            invocation_id=str(data.get("invocation_id", invocation_id)),
-            capability_id=str(data.get("capability_id", "")),
-            capability_version=data.get("capability_version"),
-            correlation=CorrelationContext.from_mapping(data.get("correlation")),
-            outcome=data.get("outcome", "success"),
-            success=bool(data.get("success", False)),
-            data=data.get("data"),
-            error=data.get("error"),
-            denial=denial,
-            evidence_ids=list(data.get("evidence_ids") or []),
-            started_at=data.get("started_at"),
-            completed_at=str(data.get("completed_at") or ""),
-            replayed=True,
-        )
+        return lookup_recorded_result(self.store, invocation_id)
 
     def _record_result(self, result: InvocationResult,
                        chunks: list | None = None) -> InvocationResult:

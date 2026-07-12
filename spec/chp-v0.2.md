@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring** 2026-07-11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once** 2026-07-11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -788,9 +788,10 @@ every attempt; a fresh id (the default) always means a fresh execution.
 Replay covers every processed outcome — `success`, `failure`, `denied`,
 `skipped` — and, since v0.3.1, **streaming invocations too** (§13.1); a
 replayed denial is the same denial and gates do not re-run (their decision is
-part of the recorded outcome). The scope is a single host: replay happens only
-on the host that served the original — cross-owner dedupe at a gateway is
-deliberately out of scope.
+part of the recorded outcome). The base scope is a single host: replay happens
+only on the host that served the original. Cross-owner dedupe at a **gateway** —
+so a router failing over between owners does not double-execute — is **§13.2**
+(since v0.3.3).
 
 **The result cache is serving state, never evidence.** Evidence remains the
 audit record and deliberately does not persist handler result data; the
@@ -850,6 +851,42 @@ committed. Per-chunk events are NOT emitted (they are transport, not evidence).
 Deferred (proposal 0012): live mid-flight resume (reconnecting to a
 still-producing generator), per-chunk hashed events, SSE keep-alive pings,
 backpressure, durable cross-restart chunk storage, and cross-host resume.
+
+### 13.2 Gateway exactly-once
+
+*(v0.3.3, [proposals/0014](proposals/0014-gateway-exactly-once.md).) Idempotent
+replay extended across a routing gateway's owner set.*
+
+§13's base cache is per-host, so a **gateway** (§11 routing) failing over between
+owner hosts can still **double-execute**: reusing one `invocation_id` across
+owner-failover attempts lets an owner replay via its own gate 0, but only for a
+retry landing on the **same** owner — a cross-owner failover re-executes on a
+peer whose separate cache never saw the id, and a gateway that mints its own id
+(dropping the client's) cannot dedupe a client retry or survive a restart.
+
+A gateway SHOULD maintain a **result cache keyed by the client's
+`invocation_id`** that spans its owners:
+
+- It **preserves the client's `invocation_id` end-to-end** (client → gateway →
+  owner), one id for the whole logical operation.
+- **Before routing** it checks the cache; on a hit it returns the recorded
+  result with `"replayed": true` and **routes to no owner** — a gateway that has
+  served an id once never routes it again.
+- **On a definitive processed outcome** (success/failure/final denial) it records
+  the result — first-write-wins, window-bounded (the §13 result-cache retention),
+  spanning owners AND gateway restarts (persistent store). A **retryable**
+  outcome — notably `host_unreachable` (§11) — is NOT cached, so a transient
+  failure stays retryable.
+- The cache is **serving state, never evidence** (like §13); a cache hit emits no
+  lifecycle events. No new evidence type or denial code.
+
+This makes a client retry exactly-once across owner **selection, failover, and
+gateway restart**. The owner still runs its own §13 gate 0 on the forwarded id.
+Deferred (proposal 0014): the honest §11 residual — an owner that executed but
+whose response was lost *before reaching the gateway* leaves the gateway unable
+to cache what it never saw, so a failover to a different owner still double-
+executes (true exactly-once there needs owner-side coordination); owner-pinned /
+shared caches; multi-gateway distributed dedupe.
 
 ## 14. Selective Disclosure — Withholdable Payloads
 
