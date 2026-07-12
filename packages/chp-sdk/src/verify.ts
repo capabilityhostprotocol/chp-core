@@ -10,7 +10,7 @@ import { canon, canonFor, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
 import { attenuates, bundleHeader, computeStoreHead, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader, COMPLETENESS_SCHEME } from './signing.js';
-import { verifyStoreHeadInclusion, type StoreHeadInclusion } from './merkle.js';
+import { verifyStoreHeadInclusion, verifyStoreHeadConsistency, CHP_STORE_HEAD_V2, type StoreHeadInclusion, type StoreHeadConsistency } from './merkle.js';
 import { didKeyToRaw, verifySshsig, STORE_HEAD_ANCHOR_NAMESPACE } from './sshsig.js';
 import { orderEvents } from './ordering.js';
 
@@ -526,6 +526,50 @@ export function verifyStoreHeadMonitorReport(
     reason: valid ? undefined : 'monitor-report checks failed: '
       + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
   };
+}
+
+/** The finding of a remote-monitor walk (unsigned; sign into a report host-side). */
+export interface RemoteMonitorVerdict {
+  verdict: 'consistent' | 'forked';
+  verified_through_sequence: number;
+  anchor_count: number;
+  divergence?: { sequence: number; anchored_root: string; reconstructed_root: string };
+}
+
+/**
+ * Remote monitor (chp-v0.2.md §12, proposal 0024): verify a host's anchor history
+ * is append-only holding ONLY the anchors — for each consecutive pair, `fetchProof`
+ * returns a served `store-head-consistency` object and it is checked against the
+ * IMMUTABLE anchored roots. A host that rewrote history serves a proof whose
+ * `first_root` ≠ the anchor and is rejected. Requires chp-store-head-v2 anchors
+ * (consistency is a v2 feature — refuse rather than falsely accuse a v1 host).
+ */
+export async function monitorAnchorHistoryRemote(
+  anchors: Array<Record<string, JsonValue>>,
+  fetchProof: (first: number, second: number) => Promise<Record<string, JsonValue> | null>,
+): Promise<RemoteMonitorVerdict> {
+  for (const a of anchors) {
+    if ((a.store_head_scheme ?? '') !== CHP_STORE_HEAD_V2) {
+      throw new Error(`remote monitoring requires chp-store-head-v2 anchors (sequence ${String(a.sequence)} is ${String(a.store_head_scheme ?? 'chp-store-head-v1')})`);
+    }
+  }
+  const ordered = [...anchors].sort((x, y) => Number(x.sequence) - Number(y.sequence));
+  let lastGood = ordered.length ? Number(ordered[0].sequence) : 0;
+  for (let i = 0; i + 1 < ordered.length; i++) {
+    const s1 = Number(ordered[i].sequence), r1 = String(ordered[i].store_head);
+    const s2 = Number(ordered[i + 1].sequence), r2 = String(ordered[i + 1].store_head);
+    const proof = await fetchProof(s1, s2);
+    const ok = proof != null && verifyStoreHeadConsistency(r1, r2, proof as unknown as StoreHeadConsistency);
+    if (ok) { lastGood = s2; continue; }
+    const sf = String(proof?.first_root ?? ''), ss = String(proof?.second_root ?? '');
+    const divergence = (sf.length === 64 && sf !== r1)
+      ? { sequence: s1, anchored_root: r1, reconstructed_root: sf }
+      : (ss.length === 64 && ss !== r2)
+        ? { sequence: s2, anchored_root: r2, reconstructed_root: ss }
+        : { sequence: s2, anchored_root: r2, reconstructed_root: '0'.repeat(64) };
+    return { verdict: 'forked', verified_through_sequence: lastGood, anchor_count: ordered.length, divergence };
+  }
+  return { verdict: 'consistent', verified_through_sequence: lastGood, anchor_count: ordered.length };
 }
 
 // ── Non-omission / completeness audit (chp-v0.2.md §12, proposal 0018) ──────

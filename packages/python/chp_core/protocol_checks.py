@@ -568,6 +568,16 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "monitor_report_vector_verifies", False, {"error": str(exc)})
 
+    # Remote monitor (proposal 0024): the spec must define the no-store-copy monitor
+    # and the /head/consistency serving endpoint.
+    add_check(
+        checks,
+        "spec_defines_remote_monitor",
+        "remote monitor" in spec_v02_mk and "/head/consistency" in spec_v02_mk
+        and "no store copy" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §12 must define the remote monitor + the /head/consistency endpoint"},
+    )
+
     # in-toto / DSSE attestation bridge (proposal 0021): the spec must define it,
     # and the attestation vector must verify — the DSSE PAE signature + the
     # embedded CHP bundle + the subject digest.

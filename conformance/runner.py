@@ -1551,6 +1551,50 @@ async def check_store_head_inclusion(host: Any) -> None:
     assert not verify_store_head_inclusion(root, corr, "f" * 64, proof), "forged tail must fail"
 
 
+async def check_remote_monitor(host: Any) -> None:
+    """v0.6.3 §12 (proposal 0024): a host serves a consistency proof between two
+    sequences so a REMOTE monitor holding ONLY the anchors (no store copy) verifies
+    append-only. Reference feature; over the wire only, v2 only, skipped otherwise."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    from chp_core.merkle import verify_store_head_consistency
+
+    base = getattr(host, "_base", None)
+    if not base:
+        return  # in-process sample host — the HTTP head routes aren't exercised
+    api_key = getattr(host, "_api_key", None)
+
+    def _get(path: str):
+        req = urllib.request.Request(f"{base}{path}", method="GET")
+        if api_key:
+            req.add_header("X-CHP-Key", api_key)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, _json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, (_json.loads(e.read()) if e.headers.get("content-type", "").startswith("application/json") else {})
+
+    # Two points in history = two anchors a remote monitor would hold.
+    await invoke_host(host, "conformance.echo", {"value": "a"},
+                      correlation={"correlation_id": f"{RUN}-conf-rm-1"})
+    st1, h1 = _get("/head?scheme=chp-store-head-v2")
+    if st1 != 200 or h1.get("scheme") != "chp-store-head-v2":
+        return  # host doesn't opt into v2 — reference feature, skip
+    s1, r1 = h1["sequence"], h1["store_head"]
+    await invoke_host(host, "conformance.echo", {"value": "b"},
+                      correlation={"correlation_id": f"{RUN}-conf-rm-2"})
+    _st2, h2 = _get("/head?scheme=chp-store-head-v2")
+    s2, r2 = h2["sequence"], h2["store_head"]
+    # The host serves the proof; the monitor verifies it against the anchored roots.
+    st3, proof = _get(f"/head/consistency?first={s1}&second={s2}")
+    assert st3 == 200 and proof.get("proof") is not None, f"v2 host must serve a consistency proof: {proof}"
+    assert verify_store_head_consistency(r1, r2, proof), "served proof must prove append-only vs the anchors"
+    # a rewritten history (wrong first anchor) must NOT verify — the detection.
+    assert not verify_store_head_consistency("0" * 64, r2, proof), "proof must fail against a wrong first anchor"
+
+
 async def check_completeness(host: Any) -> None:
     """v0.4.3 §12 (proposal 0018): non-omission. A host's exported bundle carries
     a `chp-completeness-v1` claim asserting it is the complete correlation as of a
@@ -2510,6 +2554,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("wire-version negotiation (v0.4.1 §1.1, proposal 0016)", check_version_negotiation),
     ("non-omission / completeness (v0.4.3 §12, proposal 0018)", check_completeness),
     ("Merkle store head + inclusion (v0.5.0 §12, proposal 0019)", check_store_head_inclusion),
+    ("remote monitor / served consistency (v0.6.3 §12, proposal 0024)", check_remote_monitor),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {
