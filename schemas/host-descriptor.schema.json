@@ -27,7 +27,20 @@
         "0.1",
         "0.2"
       ],
-      "description": "Protocol version lineage the host serves. v0.2 is an additive superset of v0.1 (spec/README.md); a host serving the v0.2 surface (hash-chain/signed tiers, governance vocabulary) advertises 0.2."
+      "description": "Preferred (highest) wire version the host serves. v0.2 is an additive superset of v0.1 (spec/README.md); a host serving the v0.2 surface (hash-chain/signed tiers, governance vocabulary) advertises 0.2."
+    },
+    "supported_versions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "0.1",
+          "0.2"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Ordered set of wire versions the host speaks, for version negotiation (chp-v0.2.md §1.1, proposal 0016). When absent it defaults to [protocol_version]. A client selects the highest version present in both its own set and this one, and MAY declare it via the X-CHP-Version header."
     },
     "kind": {
       "type": "string",

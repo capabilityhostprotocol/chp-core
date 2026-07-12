@@ -74,6 +74,18 @@ authority carrier that survives per-hop subject rebinding.
 If no keys are configured the host MAY accept all callers (local-first default).
 Network-layer confidentiality (e.g. a private mesh) MAY substitute for TLS.
 
+**Version selection (`X-CHP-Version`).** A request MAY carry an optional
+**`X-CHP-Version`** header naming the wire version the caller selected from the
+host's `supported_versions` (chp-v0.2.md §1.1). When **absent**, the host
+processes under its `protocol_version` — the default, so no caller is required to
+send it. When **present and supported**, the host processes under that version.
+When **present and NOT in `supported_versions`**, the host MUST reject the
+request with HTTP `400` and a body `{error, denial:{code:"version_unsupported",
+…}}` rather than silently processing under a version the caller did not ask for
+(chp-v0.2.md §1.1 — the tier-rejection rule extended to the wire version). This
+is a *transport-level* rejection before routing (like an auth failure), not a
+processed governance denial, so it is `400`, not `200`-with-evidence.
+
 ## 3. Routes
 
 `/` and `/health` are **public** (unauthenticated) for mesh probes and load
@@ -83,7 +95,7 @@ balancers; every other route requires auth (§2).
 |---|---|---|---|---|
 | GET | `/health` (= `/`) | public | — | `{status:"ok", host_id, protocol:"chp", version, host_version}` |
 | GET | `/.well-known/chp-identity` | public | — | identity document `{assurance, key_id?, public_key?, host_identity?, key_history?, revoked_keys?}` (chp-v0.2.md §3.1–3.2) |
-| GET | `/host` | required | — | `HostDescriptor` (+ `host_version`, and `assurance`/`key_id`/`public_key` when signed) |
+| GET | `/host` | required | — | `HostDescriptor` (+ `host_version`, `supported_versions` (§1.1), and `assurance`/`key_id`/`public_key` when signed) |
 | GET | `/capabilities` | required | — | `{capabilities: CapabilityDescriptor[]}` |
 | POST | `/invoke` | required | `InvocationEnvelope` | `InvocationResult` (see §1) |
 | GET | `/replay/{correlation_id}` | required | — | `ReplayResult` |

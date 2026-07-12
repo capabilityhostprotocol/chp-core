@@ -6,6 +6,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { JsonValue } from './canon.js';
+import { SUPPORTED_VERSIONS, negotiateVersion } from './version.js';
 
 export interface InvocationResult {
   invocation_id: string;
@@ -35,18 +36,42 @@ export class RemoteCapabilityHost {
   private readonly base: string;
   private readonly apiKey?: string;
   private readonly timeoutMs: number;
+  // Selected wire version (spec §1.1); declared as X-CHP-Version on every request
+  // when set. Call negotiate() to select it from the host's supported_versions.
+  private wireVersion?: string;
 
-  constructor(baseUrl: string, opts: { apiKey?: string; timeoutMs?: number } = {}) {
+  constructor(baseUrl: string, opts: { apiKey?: string; timeoutMs?: number; wireVersion?: string } = {}) {
     this.base = baseUrl.replace(/\/+$/, '');
     this.apiKey = opts.apiKey;
     this.timeoutMs = opts.timeoutMs ?? 30_000;
+    this.wireVersion = opts.wireVersion;
   }
 
   private headers(json = false): Record<string, string> {
     const h: Record<string, string> = {};
     if (json) h['Content-Type'] = 'application/json';
     if (this.apiKey) h['X-CHP-Key'] = this.apiKey;
+    if (this.wireVersion) h['X-CHP-Version'] = this.wireVersion;
     return h;
+  }
+
+  /**
+   * Select the wire version to speak (spec §1.1): fetch the host's
+   * `supported_versions` and pick the highest also in this client's
+   * SUPPORTED_VERSIONS. Stores it (declared as X-CHP-Version thereafter) and
+   * returns it. Throws `version_unsupported` when the sets are disjoint.
+   */
+  async negotiate(): Promise<string> {
+    const desc = await this.discover();
+    const hostVersions = (desc.supported_versions as string[]) ?? [String(desc.protocol_version ?? '0.1')];
+    const chosen = negotiateVersion(SUPPORTED_VERSIONS, hostVersions);
+    if (chosen === null) {
+      throw new Error(
+        `version_unsupported: client ${JSON.stringify(SUPPORTED_VERSIONS)} shares no wire version with host ${JSON.stringify(hostVersions)}`,
+      );
+    }
+    this.wireVersion = chosen;
+    return chosen;
   }
 
   private async req(path: string, init?: RequestInit): Promise<JsonValue> {

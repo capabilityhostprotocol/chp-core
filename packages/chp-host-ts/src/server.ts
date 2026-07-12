@@ -7,7 +7,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead } from '@capabilityhostprotocol/sdk';
+import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead, PROTOCOL_VERSION } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
 import type { InvocationEnvelope, JsonValue } from './types.js';
 
@@ -97,11 +97,26 @@ export function createHostServer(
     const path = url.pathname;
     const method = req.method ?? 'GET';
 
+    // Version negotiation (spec §1.1, binding §2): an explicit X-CHP-Version not
+    // in supported_versions is a transport-level 400 version_unsupported —
+    // reject rather than silently process. Absent → today's behavior.
+    const requestedVersion = req.headers['x-chp-version'] as string | undefined;
+    if (requestedVersion) {
+      const supported = (host.discover().supported_versions as string[]) ?? [PROTOCOL_VERSION];
+      if (!supported.includes(requestedVersion)) {
+        return sendJson(res, 400, {
+          error: { code: 'version_unsupported', message: `wire version '${requestedVersion}' not supported; host speaks ${JSON.stringify(supported)}` },
+          denial: { code: 'version_unsupported', requested: requestedVersion, supported },
+        });
+      }
+    }
+
     // Public: /health (= /)
     if (method === 'GET' && (path === '/' || path === '/health')) {
       const d = host.discover();
       return sendJson(res, 200, {
-        status: 'ok', host_id: d.id, protocol: 'chp', version: '0.1', host_version: HOST_VERSION,
+        status: 'ok', host_id: d.id, protocol: 'chp',
+        version: String(d.protocol_version ?? PROTOCOL_VERSION), host_version: HOST_VERSION,
       });
     }
     // Public: the identity document — a never-met verifier resolves the key

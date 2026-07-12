@@ -19,6 +19,7 @@ export const RESERVED_DENIAL_CODES = [
   "policy_blocked",
   "safety_blocked",
   "unsupported_mode",
+  "version_unsupported",
 ] as const;
 
 export type ReservedDenialCode = (typeof RESERVED_DENIAL_CODES)[number];
