@@ -181,9 +181,11 @@ for (const ev of bundle.events) {
   if (recomputed !== ev.content_hash) { console.error(`content_hash mismatch on ${ev.event_id}`); ok = false; }
   if ((ev.prev_hash ?? null) !== prev) { console.error(`chain break at ${ev.event_id}`); ok = false; }
   // v2 (14): a DISCLOSED payload must match the signed commitment; a WITHHELD
-  // one ({chp_withheld:true}) is skipped — the commitment alone secures the chain.
+  // ({chp_withheld:true}) or SEALED ({chp_sealed} — §16, proposal 0025, encrypted
+  // but present) one is skipped — the commitment alone secures the chain.
   if (ev.hash_scheme === "chp-event-hash-v2"
       && !(ev.payload && ev.payload.chp_withheld === true)
+      && !(ev.payload && ev.payload.chp_sealed)
       && payloadCommitment(ev.payload) !== ev.payload_commitment) {
     console.error(`payload_commitment mismatch on ${ev.event_id}`); ok = false;
   }
@@ -492,6 +494,24 @@ if (input.kind === "adapter-provenance") {
   ok = ok && forgeFails;
   console.log(ok
     ? `VALID (store-head-inclusion: ${proof.correlation_id} committed under anchored Merkle root ${String(root).slice(0, 16)}…)`
+    : "INVALID");
+} else if (input.kind === "sealed-bundle") {
+  // Sealed payloads (chp-v0.2.md §16, proposal 0025): a third party with NO key
+  // verifies the full chain/root/signature over the ciphertext (the {chp_sealed}
+  // marker is skipped like {chp_withheld}), and the sealed payload does not leak.
+  const bundle = input.bundle;
+  const integrityOk = verifyOne(bundle);
+  const sealedEvs = bundle.events.filter((e) => e.payload && e.payload.chp_sealed);
+  // confidentiality (structural, no key needed): a sealed payload is ONLY the
+  // marker — the plaintext was replaced, not augmented — and carries the envelope.
+  const hasSealed = sealedEvs.length > 0
+    && sealedEvs.every((e) => Object.keys(e.payload).length === 1
+                          && e.payload.chp_sealed.scheme === "chp-sealed-v1"
+                          && e.payload.chp_sealed.ct && e.payload.chp_sealed.epk
+                          && e.payload.chp_sealed.nonce);
+  ok = integrityOk && hasSealed;
+  console.log(ok
+    ? `VALID (sealed-bundle: chain verifies with NO key, ${sealedEvs.length} sealed payload(s), no plaintext leak)`
     : "INVALID");
 } else if (input.kind === "store-head-consistency") {
   // Append-only across two anchored heads (chp-v0.2.md §12, proposal 0022):

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/sealed-payload.schema.json",
+  "title": "SealedPayload",
+  "description": "The marker that replaces an evidence event's inline payload when it is sealed (chp-v0.2.md section 16, proposal 0025). The sibling of the selective-disclosure {chp_withheld} marker: the event's payload_commitment (over the plaintext) is unchanged, so the chain, root hash, and signature verify offline over the ciphertext with no key. Only the holder of the recipient X25519 private key can unseal. The bundle verifier skips this marker exactly as it skips a withheld payload.",
+  "type": "object",
+  "required": ["chp_sealed"],
+  "additionalProperties": false,
+  "properties": {
+    "chp_sealed": {
+      "type": "object",
+      "required": ["scheme", "epk", "nonce", "ct"],
+      "additionalProperties": false,
+      "properties": {
+        "scheme": {
+          "const": "chp-sealed-v1",
+          "description": "The sealing suite: ephemeral X25519 ECDH -> HKDF-SHA256 (info='chp-sealed-v1') -> ChaCha20-Poly1305 AEAD over canon(plaintext). The scheme string is the algorithm-agility seam."
+        },
+        "epk": {
+          "type": "string",
+          "description": "Base64 of the sender's ephemeral X25519 public key (32 bytes)."
+        },
+        "nonce": {
+          "type": "string",
+          "description": "Base64 of the AEAD nonce (12 bytes for ChaCha20-Poly1305)."
+        },
+        "ct": {
+          "type": "string",
+          "description": "Base64 of the AEAD ciphertext+tag over canon(plaintext)."
+        }
+      }
+    }
+  }
+}
