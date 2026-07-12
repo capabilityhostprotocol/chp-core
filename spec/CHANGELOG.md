@@ -5,6 +5,35 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.4.2] — key custody at rest over 0.4.1
+
+### Added
+- **Encrypted-at-rest host keys** (chp-v0.2.md §3,
+  [proposals/0017](proposals/0017-key-custody.md)): a signed host MAY hold its
+  ed25519 key **passphrase-encrypted** (PKCS#8 under `BestAvailableEncryption`),
+  unlocked from `$CHP_KEY_PASSPHRASE`, an OS keychain, or a prompt at load.
+  Opt-in — `generate_keypair(…, passphrase=…)` encrypts; the default keygen and
+  every existing key file stay Raw+base64. `load_host_key` auto-detects the
+  format (PEM header → decrypt; else legacy). A custody concern only: the
+  unlocked key produces byte-identical signatures/attestations/bundles.
+- **Schema `$id` consistency**: the two off-domain `$id`s
+  (`certification-record`, `invocation-metrics`) normalized onto the canonical
+  `https://chp.dev/schemas/v0.X/…` base; new `schema_ids_consistent` alignment
+  guard asserts the single base + `$ref`↔`$id` integrity.
+
+### Compatibility
+- **Additive, no wire bytes move.** Encryption is at-rest only — no signature,
+  attestation, bundle, or test vector changes (the byte gate holds). The default
+  key format is unchanged. The schema change rewrites two `$id` strings nothing
+  references; all 35 schemas still validate. **Patch** bump (v0.4.2) — a custody
+  recommendation + a schema-hygiene fix, no wire surface added.
+
+### Regression gate
+- The byte gate: every `spec/test-vectors/` fixture verifies unchanged (no
+  signed object touched). A key round-trip test signs a bundle from an
+  encrypted key and verifies it byte-identically to an unencrypted one;
+  `schema_ids_consistent` + the schema-registry test hold.
+
 ## [0.4.1] — wire-version negotiation over 0.4.0
 
 ### Added

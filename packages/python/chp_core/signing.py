@@ -111,6 +111,69 @@ class HostKey:
         return self._private is not None
 
 
+def _resolve_key_passphrase(
+    passphrase: str | None, *, prompt: bool = False, confirm: bool = False
+) -> bytes | None:
+    """At-rest key passphrase (proposal 0017): explicit arg → ``$CHP_KEY_PASSPHRASE``
+    → (when ``prompt``) a ``getpass`` prompt. Returns UTF-8 bytes, or None for an
+    unencrypted key. An operator MAY source it from an OS keychain and export it
+    into the env — no platform-locked dependency lives in core. An empty value is
+    treated as no passphrase."""
+    import os  # noqa: PLC0415
+
+    pw = passphrase if passphrase is not None else os.environ.get("CHP_KEY_PASSPHRASE")
+    if not pw and prompt:
+        import getpass  # noqa: PLC0415
+
+        pw = getpass.getpass("CHP key passphrase: ")
+        if confirm and pw != getpass.getpass("Confirm passphrase: "):
+            raise ValueError("passphrases do not match")
+    return pw.encode("utf-8") if pw else None
+
+
+def _serialize_private(private: Any, passphrase: bytes | None) -> bytes:
+    """Bytes to write for the private key. With a passphrase: PKCS#8 PEM under
+    ``BestAvailableEncryption`` (self-describing, encrypted at rest). Without:
+    the legacy Raw-seed base64 — byte-identical to every existing key."""
+    from cryptography.hazmat.primitives import serialization  # noqa: PLC0415
+
+    if passphrase:
+        return private.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.BestAvailableEncryption(passphrase),
+        )
+    raw = private.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    return base64.b64encode(raw)
+
+
+def _load_private(data: bytes, passphrase: bytes | None) -> Any:
+    """Load a private key, dispatching on the on-disk format: an encrypted PKCS#8
+    PEM (``-----BEGIN`` header) is decrypted with the passphrase; anything else is
+    the legacy Raw-seed base64."""
+    ed25519 = _load_backend()
+    if data.lstrip().startswith(b"-----BEGIN"):
+        from cryptography.hazmat.primitives import serialization  # noqa: PLC0415
+
+        key = serialization.load_pem_private_key(data, password=passphrase)
+        if not isinstance(key, ed25519.Ed25519PrivateKey):
+            raise ValueError("key file is not an ed25519 private key")
+        return key
+    return ed25519.Ed25519PrivateKey.from_private_bytes(base64.b64decode(data))
+
+
+def _private_is_encrypted(key_dir: Path) -> bool:
+    """True when the on-disk private key is an encrypted PEM (proposal 0017)."""
+    priv_path = key_dir / _PRIVATE_NAME
+    if not priv_path.exists():
+        return False
+    return priv_path.read_bytes().lstrip().startswith(b"-----BEGIN")
+
+
 def _archive_keypair(key_dir: Path) -> str | None:
     """Move the current keypair to ``<key_dir>/archive/<key_id>/``. Returns the
     archived key_id, or None if there was no key. Overwrite/rotation MUST never
@@ -128,11 +191,17 @@ def _archive_keypair(key_dir: Path) -> str | None:
     return old_key_id
 
 
-def generate_keypair(key_dir: str | Path = DEFAULT_KEY_DIR, *, overwrite: bool = False) -> HostKey:
+def generate_keypair(
+    key_dir: str | Path = DEFAULT_KEY_DIR, *, overwrite: bool = False,
+    passphrase: str | None = None,
+) -> HostKey:
     """Create an ed25519 keypair under *key_dir* (private 0600, dir 0700).
 
     ``overwrite=True`` ARCHIVES the existing pair to ``archive/<key_id>/``
-    (never destroys it). For rotation with continuity use ``rotate_keypair``."""
+    (never destroys it). For rotation with continuity use ``rotate_keypair``.
+    A non-empty ``passphrase`` encrypts the private key at rest (PKCS#8,
+    proposal 0017); None writes the default Raw+base64 format, byte-identical to
+    every existing key. The public key is always written unencrypted."""
     ed25519 = _load_backend()
     key_dir = Path(key_dir)
     priv_path = key_dir / _PRIVATE_NAME
@@ -150,11 +219,7 @@ def generate_keypair(key_dir: str | Path = DEFAULT_KEY_DIR, *, overwrite: bool =
 
     private = ed25519.Ed25519PrivateKey.generate()
     from cryptography.hazmat.primitives import serialization  # noqa: PLC0415
-    priv_bytes = private.private_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PrivateFormat.Raw,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
+    priv_bytes = _serialize_private(private, passphrase.encode("utf-8") if passphrase else None)
     pub_bytes = private.public_key().public_bytes(
         encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
     )
@@ -162,14 +227,21 @@ def generate_keypair(key_dir: str | Path = DEFAULT_KEY_DIR, *, overwrite: bool =
     import os  # noqa: PLC0415
     fd = os.open(str(priv_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as fh:
-        fh.write(base64.b64encode(priv_bytes))
+        fh.write(priv_bytes)
     pub_path.write_bytes(base64.b64encode(pub_bytes))
     return HostKey(key_id=key_id_for(pub_bytes), public_key_b64=base64.b64encode(pub_bytes).decode(), _private=private)
 
 
-def load_host_key(key_dir: str | Path = DEFAULT_KEY_DIR) -> HostKey | None:
+def load_host_key(
+    key_dir: str | Path = DEFAULT_KEY_DIR, *, passphrase: str | None = None, prompt: bool = False,
+) -> HostKey | None:
     """Load the host keypair if present. Returns None if no key exists (the host
-    then operates at the hash-chain tier)."""
+    then operates at the hash-chain tier).
+
+    An encrypted-at-rest private key (proposal 0017) is unlocked with the
+    passphrase resolved from ``passphrase`` → ``$CHP_KEY_PASSPHRASE`` → (when
+    ``prompt``) a prompt. A server loads with ``prompt=False`` (env only) so it
+    never blocks on stdin; the CLI passes ``prompt=True``."""
     key_dir = Path(key_dir)
     priv_path = key_dir / _PRIVATE_NAME
     pub_path = key_dir / _PUBLIC_NAME
@@ -178,9 +250,18 @@ def load_host_key(key_dir: str | Path = DEFAULT_KEY_DIR) -> HostKey | None:
     pub_bytes = base64.b64decode(pub_path.read_bytes())
     private = None
     if priv_path.exists():
-        ed25519 = _load_backend()
-        priv_bytes = base64.b64decode(priv_path.read_bytes())
-        private = ed25519.Ed25519PrivateKey.from_private_bytes(priv_bytes)
+        data = priv_path.read_bytes()
+        # Resolve a passphrase only when the file is actually encrypted, so an
+        # unencrypted key never prompts.
+        pw = None
+        if data.lstrip().startswith(b"-----BEGIN"):
+            pw = _resolve_key_passphrase(passphrase, prompt=prompt)
+            if pw is None:
+                raise ValueError(
+                    f"encrypted key at {priv_path} requires a passphrase "
+                    "(set $CHP_KEY_PASSPHRASE)"
+                )
+        private = _load_private(data, pw)
     return HostKey(
         key_id=key_id_for(pub_bytes),
         public_key_b64=base64.b64encode(pub_bytes).decode(),
@@ -514,7 +595,9 @@ def verify_store_head_anchor(statement: dict) -> BundleVerification:
 # Key lifecycle: rotation with continuity, history, revocation (spec §3.2)
 # --------------------------------------------------------------------------
 
-def rotate_keypair(key_dir: str | Path = DEFAULT_KEY_DIR) -> tuple[HostKey, dict]:
+def rotate_keypair(
+    key_dir: str | Path = DEFAULT_KEY_DIR, *, passphrase: str | None = None, prompt: bool = False,
+) -> tuple[HostKey, dict]:
     """Rotate the host keypair WITH CONTINUITY: the OLD key signs a statement
     vouching for the new one, so a verifier that pinned the old key can follow
     the lineage instead of treating rotation as impersonation.
@@ -522,14 +605,22 @@ def rotate_keypair(key_dir: str | Path = DEFAULT_KEY_DIR) -> tuple[HostKey, dict
     Returns (new_key, continuity_statement). The statement is self-contained
     (carries old_public_key) and appended to ``<key_dir>/key_history.json``;
     the old pair is archived; the persisted attestation is invalidated so the
-    next serve rebuilds under the new key."""
+    next serve rebuilds under the new key. The new key preserves the old one's
+    encryption disposition (proposal 0017) — an encrypted key rotates to an
+    encrypted key under the same passphrase."""
     key_dir = Path(key_dir)
-    old = load_host_key(key_dir)
+    was_encrypted = _private_is_encrypted(key_dir)
+    old = load_host_key(key_dir, passphrase=passphrase, prompt=prompt)
     if old is None or not old.can_sign:
         raise SigningUnavailable("no signing-capable key to rotate; run keygen first")
     from .types import utc_now  # noqa: PLC0415
 
-    new = generate_keypair(key_dir, overwrite=True)  # archives the old pair
+    # Keep the new key encrypted iff the old one was (reuse the same passphrase).
+    new_pass = _resolve_key_passphrase(passphrase, prompt=False) if was_encrypted else None
+    new = generate_keypair(
+        key_dir, overwrite=True,  # archives the old pair
+        passphrase=new_pass.decode("utf-8") if new_pass else None,
+    )
     claim = {
         "old_key_id": old.key_id,
         "old_public_key": old.public_key_b64,
