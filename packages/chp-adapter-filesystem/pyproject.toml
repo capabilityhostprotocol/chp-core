@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-filesystem"
-version = "0.30.1"
+version = "0.31.0"
 description = "CHP capability adapter — governed file read/write/list with path allowlist"
 readme = "README.md"
 requires-python = ">=3.10"

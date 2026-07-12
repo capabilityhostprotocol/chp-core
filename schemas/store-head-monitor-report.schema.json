@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/store-head-monitor-report.schema.json",
+  "title": "StoreHeadMonitorReport",
+  "description": "A monitor's signed finding that a host's externally-anchored store-head history is (or is not) faithful (chp-v0.2.md section 12, proposal 0023). For each store-head-anchor (sequence N, root R), the monitor reconstructs the head as-of N from the live store and checks it still equals R; a mismatch is a provable rewrite. The report is offline-verifiable: recompute the header and check the monitor's ed25519 signature. A 'forked' verdict carries a divergence block naming the sequence where the live store stopped reproducing the anchored root.",
+  "type": "object",
+  "required": [
+    "kind",
+    "host_id",
+    "verified_through_sequence",
+    "anchor_count",
+    "verdict",
+    "monitored_at",
+    "canonicalization",
+    "monitor",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "store-head-monitor-report",
+      "description": "Statement family discriminator."
+    },
+    "host_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The monitored host whose anchor history was checked."
+    },
+    "verified_through_sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The highest anchor sequence confirmed faithful (for 'forked', the last good sequence before the divergence)."
+    },
+    "anchor_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many anchors were in the walked history."
+    },
+    "verdict": {
+      "enum": ["consistent", "forked"],
+      "description": "'consistent': every anchored root still reconstructs from the live store. 'forked': an anchored root no longer reconstructs (a rewrite)."
+    },
+    "divergence": {
+      "type": "object",
+      "description": "Present ONLY when verdict is 'forked' (omit-when-consistent, the section 10 byte rule). Names where the live store stopped reproducing the anchored root.",
+      "required": ["sequence", "anchored_root", "reconstructed_root"],
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The anchor sequence at which reconstruction diverged."
+        },
+        "anchored_root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The immutable externally-anchored store head at that sequence."
+        },
+        "reconstructed_root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "What the live store now reconstructs for that sequence (differs → rewrite)."
+        }
+      }
+    },
+    "monitored_at": {
+      "type": "string",
+      "description": "ISO-8601 time the monitor ran."
+    },
+    "canonicalization": {
+      "type": "string",
+      "description": "The canonicalization scheme for the signed header (e.g. chp-stable-v1)."
+    },
+    "monitor": {
+      "type": "object",
+      "description": "The monitor's identity: the signed report lives with the monitor, not the monitored host.",
+      "required": ["host_id", "public_key"],
+      "properties": {
+        "host_id": { "type": "string" },
+        "public_key": { "type": "string" },
+        "host_identity": { "type": "object" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["algorithm", "key_id", "signature"],
+      "properties": {
+        "algorithm": { "type": "string" },
+        "key_id": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    }
+  }
+}
