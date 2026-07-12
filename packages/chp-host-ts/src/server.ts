@@ -7,7 +7,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { verifyChainWitness, verifyMandateRevocation, computeRevocationHead } from '@capabilityhostprotocol/sdk';
+import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
 import type { InvocationEnvelope, JsonValue } from './types.js';
 
@@ -53,6 +53,7 @@ export function createHostServer(
   const { apiKey } = opts;
   // Received chain-witness statements (§12) — in-memory for the conformance host.
   const receivedWitnesses: Record<string, JsonValue>[] = [];
+  const receivedAnchors: Record<string, JsonValue>[] = [];  // §12 External anchoring (0013)
   // chp-revocation-head-v1 (§12, proposal 0010) over the host's held mandate
   // revocations (in-memory conformance host has no key revocations).
   const revocationHead = (): string => computeRevocationHead(
@@ -178,6 +179,32 @@ export function createHostServer(
       return sendJson(res, 200, {
         accepted: true, sequence: stmt.sequence,
         witness: ((stmt.witness as Record<string, JsonValue> | undefined) ?? {}).host_id ?? null,
+      });
+    }
+    // External store-head anchors (§12 External anchoring, proposal 0013).
+    if (method === 'GET' && path === '/anchors') {
+      return sendJson(res, 200, { anchors: receivedAnchors as unknown as JsonValue });
+    }
+    if (method === 'POST' && path === '/anchors') {
+      let stmt: Record<string, JsonValue>;
+      try {
+        stmt = JSON.parse((await readBody(req)) || '{}') as Record<string, JsonValue>;
+      } catch (e) {
+        return err(res, 400, 'invalid_json', String((e as Error).message));
+      }
+      if (stmt.host_id !== host.hostId) {
+        return err(res, 400, 'invalid_anchor', 'anchor host_id does not match this host');
+      }
+      const av = verifyStoreHeadAnchor(stmt);
+      if (!av.valid) return err(res, 400, 'invalid_anchor', 'anchor failed verification');
+      const mine = host.store.getStoreHead(Number(stmt.sequence));
+      if (mine.store_head !== stmt.store_head) {
+        return err(res, 409, 'head_mismatch', 'anchor head does not match this store at that sequence');
+      }
+      receivedAnchors.push(stmt);
+      return sendJson(res, 200, {
+        accepted: true, sequence: stmt.sequence,
+        anchor_did: ((stmt.anchor as Record<string, JsonValue> | undefined) ?? {}).did ?? null,
       });
     }
 

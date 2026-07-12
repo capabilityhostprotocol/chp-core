@@ -15,6 +15,8 @@ import {
   computeStoreHead,
   keypairFromSeed,
   verifyChainWitness,
+  evaluateWitnessQuorum,
+  verifyStoreHeadAnchor,
   verifyContinuity,
   verifyMandate,
   verifyMandateRevocation,
@@ -216,5 +218,29 @@ describe('chain witnessing (§12)', () => {
       fileURLToPath(new URL('../../../spec/test-vectors/chain-witness.json', import.meta.url)),
       'utf8'));
     expect(verifyChainWitness(vector, { expectedHostId: 'vector-witnessed-host' }).valid).toBe(true);
+  });
+
+  // Witness quorum + external anchoring (§12, proposal 0013) — cross-verify the Python vectors.
+  it('cross-verifies the Python witness-quorum vector (k distinct witnesses)', () => {
+    const v = JSON.parse(readFileSync(
+      fileURLToPath(new URL('../../../spec/test-vectors/witness-quorum.json', import.meta.url)), 'utf8'));
+    const q = evaluateWitnessQuorum(v.statements, {
+      hostId: v.host_id, sequence: v.sequence, storeHead: v.store_head, k: v.k });
+    expect(q.verdict).toBe('quorum_met');
+    expect(q.distinct).toBe(v.expected_distinct);
+    // one fewer statement → short (anti-collusion threshold)
+    expect(evaluateWitnessQuorum(v.statements.slice(0, v.k - 1), {
+      hostId: v.host_id, sequence: v.sequence, storeHead: v.store_head, k: v.k }).verdict).toBe('quorum_short');
+  });
+
+  it('cross-verifies the Python store-head-anchor vector (external SSHSIG)', () => {
+    const anchor = JSON.parse(readFileSync(
+      fileURLToPath(new URL('../../../spec/test-vectors/store-head-anchor.json', import.meta.url)), 'utf8'));
+    const v = verifyStoreHeadAnchor(anchor);
+    expect(v.valid).toBe(true);
+    expect(v.checks.anchor).toBe(true);
+    expect(v.anchoredDid).toBe(anchor.anchor.did);
+    // tamper the head → the external countersignature no longer matches
+    expect(verifyStoreHeadAnchor({ ...anchor, store_head: 'c'.repeat(64) }).valid).toBe(false);
   });
 });

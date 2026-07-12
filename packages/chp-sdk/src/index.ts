@@ -62,6 +62,9 @@ export {
   scopeAllows,
   verifyContinuity,
   verifyChainWitness,
+  verifyStoreHeadAnchor,
+  storeHeadAnchorMessage,
+  evaluateWitnessQuorum,
   type BundleVerification,
   type TaskBundleVerification,
 } from './verify.js';

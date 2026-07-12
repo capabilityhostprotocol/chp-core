@@ -10,7 +10,7 @@ import { canon, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
 import { attenuates, bundleHeader, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader } from './signing.js';
-import { didKeyToRaw, verifySshsig } from './sshsig.js';
+import { didKeyToRaw, verifySshsig, STORE_HEAD_ANCHOR_NAMESPACE } from './sshsig.js';
 import { orderEvents } from './ordering.js';
 
 export interface BundleVerification {
@@ -132,6 +132,61 @@ export function verifyDidAnchor(
   }
   return verifySshsig(String(anchor.countersignature ?? ''),
     didAnchorMessage(chpPublicKeyB64, hostId), { expectedRawPubkey: rawPub });
+}
+
+/** The exact bytes an external DID key countersigns to anchor a store head
+ * (§12 External anchoring, proposal 0013). */
+export function storeHeadAnchorMessage(
+  hostId: string, sequence: number, storeHead: string, anchoredAt: string,
+): Buffer {
+  return Buffer.from(canon({ kind: 'store-head-anchor', host_id: hostId,
+    sequence, store_head: storeHead, anchored_at: anchoredAt }), 'utf8');
+}
+
+/** Offline-verify a store-head anchor (§12, proposal 0013): the external did:key
+ * must have SSHSIG-countersigned THIS (host_id, sequence, store_head, anchored_at)
+ * under namespace chp-store-head-anchor. Independent of the witness peer set. */
+export function verifyStoreHeadAnchor(
+  statement: Record<string, JsonValue>,
+): { valid: boolean; checks: Record<string, boolean>; anchoredDid: string | null } {
+  const checks: Record<string, boolean> = {};
+  checks.structure = statement.kind === 'store-head-anchor' && !!statement.host_id
+    && Number.isInteger(statement.sequence) && !!statement.store_head;
+  const anchor = (statement.anchor ?? {}) as Record<string, JsonValue>;
+  let anchoredDid: string | null = null;
+  try {
+    const rawPub = didKeyToRaw(String(anchor.did ?? ''));
+    checks.anchor = verifySshsig(String(anchor.countersignature ?? ''),
+      storeHeadAnchorMessage(String(statement.host_id), Number(statement.sequence),
+        String(statement.store_head), String(statement.anchored_at ?? '')),
+      { namespace: STORE_HEAD_ANCHOR_NAMESPACE, expectedRawPubkey: rawPub });
+    if (checks.anchor) anchoredDid = String(anchor.did);
+  } catch {
+    checks.anchor = false;
+  }
+  const valid = Object.values(checks).every(Boolean);
+  return { valid, checks, anchoredDid };
+}
+
+/** Witness quorum (§12, proposal 0013): verify each chain-witness statement over
+ * the same head, dedupe by the witness's signature.key_id, optionally restrict
+ * to a witness set, count vs k → quorum_met / quorum_short. */
+export function evaluateWitnessQuorum(
+  statements: Record<string, JsonValue>[],
+  opts: { hostId: string; sequence: number; storeHead: string; k: number; witnessSet?: string[] },
+): { verdict: string; k: number; distinct: number; witnesses: string[] } {
+  const allowed = opts.witnessSet ? new Set(opts.witnessSet) : null;
+  const distinct = new Map<string, string>();
+  for (const s of statements) {
+    if (s.host_id !== opts.hostId || s.sequence !== opts.sequence || s.store_head !== opts.storeHead) continue;
+    if (!verifyChainWitness(s, { expectedHostId: opts.hostId }).valid) continue;
+    const kid = String((s.signature as Record<string, JsonValue> | undefined)?.key_id ?? '');
+    if (!kid || (allowed && !allowed.has(kid))) continue;
+    if (!distinct.has(kid)) distinct.set(kid, String((s.witness as Record<string, JsonValue> | undefined)?.host_id ?? ''));
+  }
+  const met = distinct.size >= opts.k;
+  return { verdict: met ? 'quorum_met' : 'quorum_short', k: opts.k,
+    distinct: distinct.size, witnesses: [...distinct.keys()].sort() };
 }
 
 // ── Anchor resolution (spec §3 Anchors) ─────────────────────────────────────

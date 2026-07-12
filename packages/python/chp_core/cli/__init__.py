@@ -17,6 +17,8 @@ from ._core import (
     cmd_mandate_revoke,
     cmd_mandate_verify,
     cmd_witness_verify,
+    cmd_witness_quorum,
+    cmd_witness_anchor_verify,
     cmd_provenance_sign,
     cmd_provenance_verify,
     cmd_revoke_key,
@@ -762,6 +764,27 @@ def build_parser() -> argparse.ArgumentParser:
     wit_verify.add_argument("--receipts", default=None,
                             help="Receipts JSON (default: ~/.chp/witnesses/received.json).")
     wit_verify.set_defaults(func=cmd_witness_verify)
+    # chp witness quorum — k-of-n over collected chain-witness statements (0013)
+    wit_quorum = witness_sub.add_parser(
+        "quorum",
+        help="Count DISTINCT witnesses over a head vs k (spec §12, proposal 0013): quorum_met / quorum_short.")
+    wit_quorum.add_argument("--statements", required=True,
+                            help="JSON list of chain-witness statements (or a /witnesses response).")
+    wit_quorum.add_argument("--host-id", required=True, dest="host_id")
+    wit_quorum.add_argument("--sequence", required=True, type=int)
+    wit_quorum.add_argument("--store-head", required=True, dest="store_head")
+    wit_quorum.add_argument("--k", required=True, type=int)
+    wit_quorum.add_argument("--witness-set", default=None, dest="witness_set",
+                            help="Comma-separated allowed witness key_ids (the n). Default: any.")
+    wit_quorum.set_defaults(func=cmd_witness_quorum)
+    # chp witness anchor verify — external store-head anchor (0013)
+    wit_anchor = witness_sub.add_parser(
+        "anchor", help="External store-head anchoring (spec §12, proposal 0013).")
+    wit_anchor_sub = wit_anchor.add_subparsers(dest="anchor_command", required=True)
+    wa_verify = wit_anchor_sub.add_parser(
+        "verify", help="Offline-verify a store-head-anchor statement's external SSHSIG countersignature.")
+    wa_verify.add_argument("file", help="Path to a store-head-anchor JSON.")
+    wa_verify.set_defaults(func=cmd_witness_anchor_verify)
 
     revocation_p = subcommands.add_parser(
         "revocation",

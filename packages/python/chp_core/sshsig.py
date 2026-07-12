@@ -26,6 +26,7 @@ import struct
 
 SSHSIG_MAGIC = b"SSHSIG"
 DID_ANCHOR_NAMESPACE = "chp-host-anchor"
+STORE_HEAD_ANCHOR_NAMESPACE = "chp-store-head-anchor"  # §12 External anchoring (0013)
 _ED25519_MULTICODEC = b"\xed\x01"
 _B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 

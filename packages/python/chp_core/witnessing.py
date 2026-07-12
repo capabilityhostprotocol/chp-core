@@ -62,6 +62,51 @@ def load_received() -> list[JSON]:
     return _load_json(witness_dir() / "received.json", [])
 
 
+def evaluate_witness_quorum(statements: list[JSON], *, host_id: str, sequence: int,
+                            store_head: str, k: int,
+                            witness_set: list | None = None) -> JSON:
+    """Witness quorum (chp-v0.2.md §12, proposal 0013): the anti-collusion proof
+    over a collected set of ``chain-witness`` statements. Verify each, keep only
+    those over the EXACT ``(host_id, sequence, store_head)``, DEDUPE by the
+    witness's ``signature.key_id`` (a witness re-submitting counts once — quorum
+    measures distinct identities, not statement volume), optionally restrict to
+    an allowed ``witness_set`` (the *n*), and count. Verdict ``quorum_met`` when
+    distinct ≥ ``k``, else ``quorum_short``."""
+    from .signing import verify_chain_witness  # noqa: PLC0415
+
+    allowed = set(witness_set) if witness_set is not None else None
+    distinct: dict[str, str] = {}  # witness key_id -> witness host_id
+    for stmt in statements:
+        if (stmt.get("host_id") != host_id
+                or stmt.get("sequence") != sequence
+                or stmt.get("store_head") != store_head):
+            continue  # a valid statement over a different head does not count
+        if not verify_chain_witness(stmt, expected_host_id=host_id).valid:
+            continue
+        key_id = str((stmt.get("signature") or {}).get("key_id") or "")
+        if not key_id or (allowed is not None and key_id not in allowed):
+            continue
+        distinct.setdefault(key_id, str((stmt.get("witness") or {}).get("host_id") or ""))
+    met = len(distinct) >= k
+    return {"verdict": "quorum_met" if met else "quorum_short",
+            "k": k, "distinct": len(distinct), "witnesses": sorted(distinct),
+            "host_id": host_id, "sequence": sequence, "store_head": store_head}
+
+
+def record_anchor(statement: JSON) -> None:
+    """Persist an external store-head anchor (§12 External anchoring, 0013) —
+    sidecar serving state like witness receipts, never hashed into the chain."""
+    path = witness_dir() / "anchors.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    anchors = _load_json(path, [])
+    anchors.append(statement)
+    path.write_text(json.dumps(anchors, indent=2, sort_keys=True) + "\n")
+
+
+def load_anchors() -> list[JSON]:
+    return _load_json(witness_dir() / "anchors.json", [])
+
+
 def record_issued(statement: JSON) -> None:
     """Keep the statements this host signed over a peer's head (rolling)."""
     host_id = str(statement.get("host_id") or "unknown")

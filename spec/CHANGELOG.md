@@ -5,6 +5,42 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.3.2] — additive over 0.3.1 — **released 2026-07-11**
+
+### Added
+- **Witness quorum + external anchoring** (chp-v0.2.md §12,
+  [proposals/0013](proposals/0013-witness-quorum.md)). **`chp-witness-quorum-v1`**:
+  an auditor aggregates the `chain-witness` statements over a host's head,
+  verifies each, keeps only those over the exact `(host_id, sequence,
+  store_head)`, **dedupes by the witness's `key_id`**, optionally restricts to a
+  trusted witness set, and counts → verdict **`quorum_met`** (distinct ≥ k) /
+  **`quorum_short`**. Policy (`witness_quorum_k`, optional `witness_set`) is host
+  config; the witness loop is unchanged. **`chp-store-head-anchor-v1`**: a new
+  optional `store-head-anchor` statement where an external `did:key` **SSHSIG-
+  countersigns** `chp-stable-v1({kind, host_id, sequence, store_head,
+  anchored_at})` (namespace `chp-store-head-anchor`), verified offline — an
+  independent, out-of-mesh record of a head. New `store-head-anchor` schema.
+
+### Compatibility
+- **Additive, no byte changes.** Quorum introduces NO canonical object — it
+  counts existing `chain-witness` statements, so `chain-witness.json` /
+  `chain-witness-revfresh.json` and every other vector are byte-identical. The
+  `store-head-anchor` statement is a new optional standalone object. No new
+  denial code, no new evidence type, no store-head change. `quorum_short` is an
+  audit verdict, never a gate denial.
+
+### Regression gate
+- New vectors `witness-quorum.json` + `store-head-anchor.json`; `git diff
+  spec/test-vectors/` shows only those. Guards `spec_defines_witness_quorum` +
+  `witness_quorum_vector_verifies` + `store_head_anchor_vector_verifies`. Both
+  reference hosts pass the new wire check (k distinct witnesses → `quorum_met`;
+  k-1 → `quorum_short`; an anchored head verifies).
+
+### Deferred
+- Real Rekor/Sigstore transparency-log Merkle-inclusion proofs + gossip;
+  federated cross-witness collection to defeat receipt-hiding; quorum-gated
+  serving; weighted/stake quorum; anchor key rotation/revocation.
+
 ## [0.3.1] — additive over 0.3.0 — **released 2026-07-11**
 
 ### Added
