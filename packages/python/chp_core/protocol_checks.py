@@ -389,6 +389,52 @@ def check_alignment(repo_root: Path) -> JSON:
     except Exception as exc:  # pragma: no cover - defensive
         add_check(checks, "descriptor_declares_supported_versions", False, {"error": str(exc)})
 
+    # Schema $id consistency (proposal 0017): every schema's $id MUST sit on the
+    # single canonical base https://chp.dev/schemas/v0.X/<filename>, and every
+    # absolute $ref MUST resolve to a registered $id. The drift guard that did
+    # not exist — it caught the two off-domain outliers.
+    try:
+        import re as _re
+
+        schema_dir = repo_root / "schemas"
+        id_re = _re.compile(r"^https://chp\.dev/schemas/v0\.\d+/[a-z0-9-]+\.schema\.json$")
+        schema_ids: set[str] = set()
+        bad_ids: list[str] = []
+        for sf in sorted(schema_dir.glob("*.schema.json")):
+            sid = read_json(sf).get("$id", "")
+            schema_ids.add(sid)
+            # the $id's filename segment must match the actual file
+            if not id_re.match(sid) or not sid.endswith(f"/{sf.name}"):
+                bad_ids.append(f"{sf.name} → {sid!r}")
+
+        def _abs_refs(node: JSON) -> list[str]:
+            out: list[str] = []
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k == "$ref" and isinstance(v, str) and v.startswith("http"):
+                        out.append(v.split("#", 1)[0])
+                    else:
+                        out.extend(_abs_refs(v))
+            elif isinstance(node, list):
+                for v in node:
+                    out.extend(_abs_refs(v))
+            return out
+
+        dangling: list[str] = []
+        for sf in sorted(schema_dir.glob("*.schema.json")):
+            for ref in _abs_refs(read_json(sf)):
+                if ref not in schema_ids:
+                    dangling.append(f"{sf.name} → {ref}")
+        add_check(
+            checks,
+            "schema_ids_consistent",
+            not bad_ids and not dangling,
+            {"off_base": bad_ids, "dangling_refs": dangling,
+             "hint": "every $id must be https://chp.dev/schemas/v0.X/<file>; every absolute $ref must match a registered $id"},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        add_check(checks, "schema_ids_consistent", False, {"error": str(exc)})
+
     # Anchors (spec §3.1): the anchored vector must still verify (guards the
     # omit-when-empty conditional in build/verify), and the spec must define
     # the anchor mechanism + the well-known route.

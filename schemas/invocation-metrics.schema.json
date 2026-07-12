@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://capabilityhostprotocol.dev/schemas/invocation-metrics.schema.json",
+  "$id": "https://chp.dev/schemas/v0.2/invocation-metrics.schema.json",
   "title": "InvocationMetrics",
   "description": "Aggregated chp.invocations.* statistics for a single capability (§9.3).",
   "type": "object",

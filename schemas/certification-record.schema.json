@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://capabilityhostprotocol.dev/schemas/certification-record.schema.json",
+  "$id": "https://chp.dev/schemas/v0.2/certification-record.schema.json",
   "title": "CertificationRecord",
   "description": "Formal attestation that a capability meets a declared maturity level (§11.4).",
   "type": "object",
