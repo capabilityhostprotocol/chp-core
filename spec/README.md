@@ -28,10 +28,15 @@ A host serving the v0.2 surface advertises `protocol_version: "0.2"` on `/host`;
 a bare v0.1 host advertises `"0.1"`. This additive pattern is *the* evolution
 rule — see [proposals/README.md](proposals/README.md).
 
-**Version negotiation is deliberately deferred**: with one additive version
-lineage, assurance-*tier* negotiation ("a verifier MUST reject a tier lower
-than it requires") covers the real compatibility decision. Revisit when a
-non-additive change is proposed.
+**Wire-version negotiation** (v0.4.1, [proposals/0016]): a host declares
+`supported_versions` on `/host`; a client selects the highest mutually-supported
+wire version and MAY declare it via `X-CHP-Version`; a host rejects an
+unsupported explicit version with `version_unsupported` rather than silently
+degrading. Specified before it is needed — with one additive `0.1 ⊂ 0.2` lineage
+the negotiator always selects `0.2`, but the path exists so the first
+non-additive change (if ever) travels a proven route. Assurance-*tier*
+negotiation (a verifier MUST reject a tier lower than it requires) remains the
+other half of the compatibility decision.
 
 ## Known issues
 

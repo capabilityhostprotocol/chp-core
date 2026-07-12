@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -21,6 +21,35 @@ A host declares one of three evidence assurance tiers:
 A host MUST declare its tier in the `/host` descriptor as `assurance`. A signed
 host MUST additionally expose `key_id` and `public_key`. A verifier MUST reject
 a tier lower than the one it requires rather than silently degrading.
+
+### 1.1 Version negotiation (v0.4.1)
+
+`protocol_version` names a host's *preferred* wire version. Since v0.4.1 a host
+also declares the full set it speaks so a client can negotiate — the path a
+non-additive change would travel, specified before it is needed (proposal 0016).
+The wire lineage is `0.1 ⊂ 0.2`: the spec's minor feature versions (0.3.x,
+0.4.x) are additive over the `0.2` wire surface and do not introduce a new wire
+version. The mechanism mirrors the §2 canonicalization dispatch — a named set,
+default-when-absent, select on the value, unknown → reject not silently degrade:
+
+- **Declare.** The `/host` descriptor MAY carry `supported_versions`: the ordered
+  list of wire versions the host speaks (e.g. `["0.1", "0.2"]`). **When absent it
+  defaults to `[protocol_version]`** — every existing descriptor is unchanged and
+  a bare v0.1 host advertises `["0.1"]`.
+- **Select.** A client picks the **highest version present in both** its own set
+  and the host's `supported_versions`, compared as `(major, minor)`. When the two
+  sets are disjoint the client MUST NOT invoke; it surfaces `version_unsupported`.
+- **Reject.** A client MAY declare its selection to the host (the HTTP binding
+  carries it as the optional `X-CHP-Version` header). A host that receives an
+  explicit version it does **not** support MUST reject the request with the
+  `version_unsupported` denial code rather than silently processing under a
+  version the client did not ask for — the tier-rejection rule above, extended to
+  the wire version. An absent selection is processed under `protocol_version`, so
+  no client is required to negotiate.
+
+`version_unsupported` is a reserved denial code (§ Governance). This proposal
+ships the negotiator with a single wire lineage present; a future wire version is
+added to `supported_versions` and old clients keep selecting `0.2`.
 
 ## 2. Hash Chain (`hash-chain` and above)
 

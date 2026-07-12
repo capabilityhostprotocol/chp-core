@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import { StreamResult } from './types.js';
@@ -103,7 +103,9 @@ export class LocalCapabilityHost {
       id: this.hostId,
       version: '0.1.0',
       // This host always hash-chains (and signs when keyed) — the v0.2 surface.
-      protocol_version: '0.2',
+      protocol_version: PROTOCOL_VERSION,
+      // Wire versions this host speaks, for negotiation (§1.1, proposal 0016).
+      supported_versions: versionsUpto(PROTOCOL_VERSION),
       kind: 'local',
       capabilities: [...this.caps.values()].map((c) => ({
         id: c.descriptor.id,

@@ -1508,6 +1508,55 @@ async def check_jcs_canonicalization(host: Any) -> None:
     assert not signing.verify_bundle(bogus).valid, "unknown scheme must fail, not crash"
 
 
+async def check_version_negotiation(host: Any) -> None:
+    """v0.4.1 §1.1 (proposal 0016): wire-version negotiation — declare, select,
+    reject. The host's /host descriptor MUST declare supported_versions (⊇ the
+    version it prefers); a client selects the highest mutual; an explicit
+    unsupported X-CHP-Version is a transport-level 400 version_unsupported, while
+    a supported one (or none) processes normally."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    from chp_core.types import negotiate_version
+
+    desc = host.discover()
+    supported = desc.get("supported_versions")
+    assert supported, f"/host MUST declare supported_versions: {list(desc)}"
+    pv = desc.get("protocol_version")
+    assert pv in supported, f"protocol_version {pv!r} must be in supported_versions {supported}"
+    # a client sharing a version negotiates it; a disjoint client gets nothing.
+    assert negotiate_version([pv], supported) == pv
+    assert negotiate_version(["99.0"], supported) is None
+
+    # The reject path is only observable over HTTP; skip against an in-process host.
+    base = getattr(host, "_base", None)
+    if not base:
+        return
+    api_key = getattr(host, "_api_key", None)
+
+    def _post_echo(version: str | None):
+        body = _json.dumps({"capability_id": "conformance.echo", "payload": {"v": 1}}).encode()
+        req = urllib.request.Request(f"{base}/invoke", data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        if api_key:
+            req.add_header("X-CHP-Key", api_key)
+        if version is not None:
+            req.add_header("X-CHP-Version", version)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, _json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, _json.loads(e.read())
+
+    # A supported explicit version processes; an unsupported one is 400 + code.
+    ok_status, ok_body = _post_echo(pv)
+    assert ok_status == 200 and ok_body.get("success") is True, f"supported version rejected: {ok_body}"
+    bad_status, bad_body = _post_echo("99.0")
+    assert bad_status == 400, f"unsupported X-CHP-Version must be 400, got {bad_status}"
+    assert bad_body.get("denial", {}).get("code") == "version_unsupported", bad_body
+
+
 async def check_identity_document(host: Any) -> None:
     """v0.2 (spec §3.1): the host serves its public identity document at
     /.well-known/chp-identity — unauthenticated, so a never-met verifier can
@@ -2392,6 +2441,7 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("streaming completion (v0.2 §13.1, proposal 0012)", check_streaming_completion),
     ("witness quorum + anchoring (v0.2 §12, proposal 0013)", check_witness_quorum),
     ("canonicalization dispatch / chp-jcs-v1 (v0.4.0 §2, proposal 0015)", check_jcs_canonicalization),
+    ("wire-version negotiation (v0.4.1 §1.1, proposal 0016)", check_version_negotiation),
 ]
 
 SUITES: dict[str, list[tuple[str, Check]]] = {
