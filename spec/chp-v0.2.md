@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -311,12 +311,30 @@ that never orphans a survivor's `prev_hash`). Payload redaction that rewrites a
 stored event MUST clear that event's `content_hash` (rendering it `unverified`)
 rather than leave a hash that no longer matches.
 
-## 5. Transport / Auth (informative for v0.2)
+## 5. Transport / Auth
 
-HTTP hosts MUST compare authentication credentials in constant time. A host
-SHOULD bind an authenticated caller to a verified `subject` on the evidence it
-records. Network-layer confidentiality (e.g. a private mesh) MAY substitute for
-transport TLS.
+Normative ([proposal 0027](proposals/0027-transport-auth.md)); the HTTP binding's
+[§2](chp-http-binding.md) is the detailed rule set. A conforming HTTP host:
+
+- **MUST** protect the transport with TLS, or with equivalent network-layer
+  confidentiality (e.g. a private/authenticated mesh fabric) — credentials and
+  payloads MUST NOT cross an unprotected channel.
+- **MUST** compare authentication credentials in constant time.
+- **MUST** bind an authenticated caller to a verified `subject` on the evidence it
+  records — the difference between "claims to be agent X" and "is agent X".
+
+**Credentials.** The base credential is the static `X-CHP-Key` (shared or
+per-caller, capability-scoped, rotatable — binding §2). A host MAY additionally
+accept a **signed bearer token** (`auth-token`): an ed25519-signed, short-lived,
+audience-bound statement `{sub, aud, iat, exp, caller, signature}` the caller mints
+with its identity key and presents as `X-CHP-Token` (or `Authorization: Bearer`).
+The host verifies the token is internally valid (header signature against the
+caller's self-attested key, `iat ≤ now < exp`, `aud` = this host) **and** authorizes
+the caller by pinning `sub`'s public key. Unlike a shared secret, the host stores
+only the caller's *public* key, the token expires, and `aud` prevents cross-host
+replay. Any credential failure is a transport **401** before the pipeline — never a
+`200` governance denial. An out-of-scope but authenticated caller is a *processed*
+`policy_blocked` (governance), not a 401.
 
 ## 6. Conformance
 

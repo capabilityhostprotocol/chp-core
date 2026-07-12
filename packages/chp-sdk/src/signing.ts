@@ -125,6 +125,35 @@ export function buildAttestation(
   return { ...claim, signature: signCanon(key.privateKey, claim as JsonValue) } as JsonValue;
 }
 
+/**
+ * Mint an auth-token (§5, proposal 0027): an ed25519-signed, short-lived,
+ * audience-bound bearer token the caller presents for transport auth. Byte-parity
+ * with Python `build_auth_token`.
+ */
+export function buildAuthToken(
+  callerKey: HostKey,
+  opts: { sub: string; aud: string; iat: string; exp: string; anchors?: JsonValue[] | null },
+): JsonValue {
+  if (!callerKey.privateKey) throw new Error('caller key has no private component; cannot mint a token');
+  const header: Record<string, JsonValue> = {
+    kind: 'auth-token', sub: opts.sub, aud: opts.aud, iat: opts.iat, exp: opts.exp,
+    canonicalization: CANONICALIZATION,
+  };
+  return {
+    ...header,
+    caller: {
+      host_id: opts.sub,
+      public_key: callerKey.publicKeyB64,
+      host_identity: buildAttestation(opts.sub, callerKey, opts.iat, null, opts.anchors ?? null),
+    },
+    signature: {
+      algorithm: SIGNATURE_ALGORITHM,
+      key_id: callerKey.keyId,
+      signature: signCanon(callerKey.privateKey, header as JsonValue),
+    },
+  } as JsonValue;
+}
+
 export function buildBundle(
   hostId: string,
   events: EvidenceEvent[],
