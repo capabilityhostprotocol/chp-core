@@ -1,0 +1,40 @@
+name: Publish TS types (ts-types)
+
+# One-click / recovery publish for @capabilityhostprotocol/types at its current
+# package.json version. Mirrors publish-ts-alpha.yml (SDK+host): same server-side
+# NPM_TOKEN (no interactive 2FA), lock-drift-tolerant `npm install`. Use when the
+# coordinated release.yml ts-types leg failed (e.g. a stale root lockfile) — no need
+# to force-move the release tag.
+on:
+  workflow_dispatch:
+    inputs:
+      dist_tag:
+        description: "npm dist-tag to publish under"
+        required: false
+        default: "latest"
+
+jobs:
+  publish:
+    name: Build + publish @capabilityhostprotocol/types
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # npm install (not ci) — tolerant of root-lockfile drift after a version bump.
+      - name: Install workspaces
+        run: npm install --no-audit --no-fund
+
+      - name: Build ts-types
+        run: npm run build --workspace @capabilityhostprotocol/types
+
+      - name: Publish ts-types
+        run: npm publish --workspace @capabilityhostprotocol/types --access public --tag "${{ github.event.inputs.dist_tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

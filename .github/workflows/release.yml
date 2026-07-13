@@ -216,9 +216,11 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      # npm install (not ci) — tolerant of root-lockfile drift after a workspace
+      # version bump (release syncs package.json but not the root lockfile); matches
+      # publish-ts-alpha.yml. Prevents the whole "npm ci out of sync" release failure.
       - name: Install dependencies
-        working-directory: packages/ts-types
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Build
         working-directory: packages/ts-types
