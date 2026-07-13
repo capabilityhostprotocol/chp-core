@@ -22,6 +22,7 @@
         "safety_blocked",
         "mandate_invalid",
         "mandate_exhausted",
+        "capability_version_unsupported",
         "host_unreachable",
         "version_unsupported"
       ]

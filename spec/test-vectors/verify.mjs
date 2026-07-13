@@ -531,6 +531,28 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (store-head-consistency: log append-only ${oldRoot.slice(0, 12)}…→${newRoot.slice(0, 12)}…, ${proof.first_size}→${proof.second_size} leaves)`
     : "INVALID");
+} else if (input.kind === "version-negotiation") {
+  // Capability-version negotiation matcher (§1.1, proposal 0028): the semver
+  // subset must agree with the reference impls on every known-answer case.
+  const pv = (v) => { const p = String(v).split("+")[0].split("-")[0].split("."); return [0,1,2].map(i => /^\d+$/.test(p[i]||"") ? +p[i] : 0); };
+  const cmp = (a,b) => { for (let i=0;i<3;i++) if (a[i]!==b[i]) return a[i]<b[i]?-1:1; return 0; };
+  const bump = (v,i) => { const p=[...v]; p[i]++; for (let j=i+1;j<3;j++) p[j]=0; return p; };
+  const sat1 = (ver, c) => {
+    c = c.trim();
+    if (c===""||c==="*"||c==="x"||c==="X") return true;
+    if (c[0]==="^") { const b=pv(c.slice(1)); const u=b[0]>0?bump([b[0],0,0],0):b[1]>0?bump([0,b[1],0],1):bump([0,0,b[2]],2); return cmp(ver,b)>=0&&cmp(ver,u)<0; }
+    if (c[0]==="~") { const b=pv(c.slice(1)); return cmp(ver,b)>=0&&cmp(ver,bump([b[0],b[1],0],1))<0; }
+    for (const op of [">=","<=",">","<","="]) if (c.startsWith(op)) { const b=pv(c.slice(op.length)); const k=cmp(ver,b); return op===">="?k>=0:op==="<="?k<=0:op===">"?k>0:op==="<"?k<0:k===0; }
+    const t = c.replace(/[*X]/g,"x").split(".");
+    if (t.includes("x")) { const i=t.indexOf("x"); const pre=t.slice(0,i).map(Number); if (!pre.length) return true; const pad=[...pre,0,0,0]; const lo=[pad[0],pad[1],pad[2]]; return cmp(ver,lo)>=0&&cmp(ver,bump(lo,pre.length-1))<0; }
+    if (t.length<3) { const pre=t.filter(x=>/^\d+$/.test(x)).map(Number); const pad=[...pre,0,0,0]; const lo=[pad[0],pad[1],pad[2]]; return cmp(ver,lo)>=0&&cmp(ver,bump(lo,pre.length-1))<0; }
+    return cmp(ver,pv(c))===0;
+  };
+  const satisfies = (v, spec) => String(spec).split(/\s+/).filter(Boolean).every(c => sat1(pv(v), c));
+  ok = (input.cases ?? []).every((c) => satisfies(c.version, c.spec) === c.satisfies);
+  console.log(ok
+    ? `VALID (version-negotiation: ${input.cases.length} semver cases agree)`
+    : "INVALID");
 } else if (input.kind === "auth-token") {
   // Signed bearer token (chp-v0.2.md §5, proposal 0027): verify the caller's
   // ed25519 signature over the canonical header, the caller attestation
