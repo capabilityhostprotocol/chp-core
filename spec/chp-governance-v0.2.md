@@ -42,6 +42,7 @@ accompanies a **`skipped`** outcome, not `denied` (pipeline gate 3).
 | `unsupported_mode` | The requested invoke `mode` isn't supported. | false |
 | `policy_blocked` | A `PolicyConfig` rule blocked it — a block-pattern match **or** the capability's risk tier exceeding `max_risk_tier` (§3). `details` SHOULD name the rule. | false |
 | `input_schema_validation_failed` | The payload failed the capability's declared input schema. | false |
+| `output_schema_validation_failed` | The result violated the capability's declared `output_schema`. Emitted only in strict mode — host `strict_output_schema` or a caller's `require_output_schema`; the default is validate-and-warn (the violation is recorded on the `execution_completed` evidence, still a success). `details` SHOULD carry `schema_id`, `path`. | false |
 | `invariant_failed` | A declared invariant did not hold. `invariant_id` SHOULD be set. | false |
 | `budget_exceeded` | An `AutonomyProfile` budget (calls / tokens / cost) was exhausted (§4.1). | true |
 | `approval_required` | A human-approval gate is unsatisfied (§4.1). | true |

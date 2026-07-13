@@ -10,6 +10,7 @@ from chp_core import (
     CapabilityDescriptor,
     CorrelationContext,
     InvariantDescriptor,
+    InvocationEnvelope,
     LocalCapabilityHost,
     ReplayQuery,
     SQLiteEvidenceStore,
@@ -564,6 +565,78 @@ class LocalHostTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.denial.code, "input_schema_validation_failed")
         # path should identify the failing field
         self.assertIsNotNone(result.denial.details.get("path"))
+
+
+_OUT_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
+
+
+class OutputSchemaTests(unittest.IsolatedAsyncioTestCase):
+    """Proposal 0029: descriptor.output_schema is validated post-execution.
+    Warn by default (violation recorded, still success); strict denies."""
+
+    async def _register(self, host, handler, *, cap_id="out.cap"):
+        host.register(
+            CapabilityDescriptor(id=cap_id, version="1.0.0", description="",
+                                 output_schema=_OUT_SCHEMA),
+            handler,
+        )
+
+    async def test_conforming_result_succeeds_no_markers(self) -> None:
+        host = LocalCapabilityHost("t", store=SQLiteEvidenceStore(":memory:"))
+        await self._register(host, lambda _c, _p: {"ok": True})
+        r = await host.ainvoke("out.cap", {}, correlation={"correlation_id": "c1"})
+        self.assertTrue(r.success)
+        completed = [e for e in host.replay("c1") if e["event_type"] == "execution_completed"][0]
+        self.assertNotIn("output_schema_valid", completed["payload"])
+
+    async def test_violation_warns_by_default(self) -> None:
+        host = LocalCapabilityHost("t", store=SQLiteEvidenceStore(":memory:"))
+        await self._register(host, lambda _c, _p: {"ok": "not-a-bool"})
+        r = await host.ainvoke("out.cap", {}, correlation={"correlation_id": "c2"})
+        self.assertTrue(r.success)  # warn: still a success
+        completed = [e for e in host.replay("c2") if e["event_type"] == "execution_completed"][0]
+        self.assertFalse(completed["payload"]["output_schema_valid"])
+        self.assertIn("output_schema_error", completed["payload"])
+
+    async def test_violation_denied_host_strict(self) -> None:
+        host = LocalCapabilityHost("t", store=SQLiteEvidenceStore(":memory:"),
+                                   strict_output_schema=True)
+        await self._register(host, lambda _c, _p: {"ok": "not-a-bool"})
+        r = await host.ainvoke("out.cap", {}, correlation={"correlation_id": "c3"})
+        self.assertFalse(r.success)
+        self.assertEqual(r.outcome, "denied")
+        self.assertEqual(r.denial.code, "output_schema_validation_failed")
+        self.assertFalse(r.denial.retryable)
+
+    async def test_violation_denied_caller_require_flag(self) -> None:
+        host = LocalCapabilityHost("t", store=SQLiteEvidenceStore(":memory:"))  # warn host
+        await self._register(host, lambda _c, _p: {"ok": "not-a-bool"})
+        # A caller that REQUIRES the output shape gets a hard denial even on a
+        # warn-mode host (per-invocation strict — proposal 0029).
+        r = await host.ainvoke_envelope(InvocationEnvelope(
+            capability_id="out.cap", require_output_schema=True))
+        self.assertFalse(r.success)
+        self.assertEqual(r.denial.code, "output_schema_validation_failed")
+
+    async def test_conforming_result_passes_require_flag(self) -> None:
+        host = LocalCapabilityHost("t", store=SQLiteEvidenceStore(":memory:"))
+        await self._register(host, lambda _c, _p: {"ok": True})
+        r = await host.ainvoke_envelope(InvocationEnvelope(
+            capability_id="out.cap", require_output_schema=True))
+        self.assertTrue(r.success)
+
+    async def test_no_output_schema_is_noop(self) -> None:
+        host = LocalCapabilityHost("t", store=SQLiteEvidenceStore(":memory:"),
+                                   strict_output_schema=True)
+        host.register(CapabilityDescriptor(id="loose.cap", version="1.0.0", description=""),
+                      lambda _c, _p: {"anything": 1})
+        r = await host.ainvoke("loose.cap", {})
+        self.assertTrue(r.success)  # no schema declared → gate skipped even when strict
 
 
 if __name__ == "__main__":

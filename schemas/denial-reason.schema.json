@@ -16,6 +16,7 @@
         "unsupported_mode",
         "policy_blocked",
         "input_schema_validation_failed",
+        "output_schema_validation_failed",
         "invariant_failed",
         "budget_exceeded",
         "approval_required",

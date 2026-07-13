@@ -5,6 +5,35 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.7.4] — Output-schema validation over 0.7.3
+
+### Added
+- **Output-schema validation** (chp-invocation-pipeline.md gate 12,
+  [proposals/0029](proposals/0029-output-schema-validation.md)): after a handler
+  returns `success`, when `descriptor.output_schema` is set the host validates the
+  **result** against it (the same `jsonschema` used for input, no new dep) — the
+  post-execution mirror of the input gate. Default is validate-and-**warn**: a
+  violation is recorded on the `execution_completed` evidence
+  (`output_schema_valid:false` + `output_schema_error`), outcome stays `success`,
+  so a capability with a loose declared schema doesn't start failing. **Strict**
+  mode denies the new **`output_schema_validation_failed`** reserved code
+  (`retryable:false`; `details` carry `schema_id`, `path`) and is opt-in either
+  host-wide (`strict_output_schema=True`) or per-call via the new optional
+  `require_output_schema` envelope flag (a caller requiring a validated output
+  shape — extends 0028's version negotiation).
+
+### Compatibility
+- Additive, **patch** bump. `require_output_schema` is omitted on the wire when
+  False (default); an empty `output_schema` skips the gate; a conforming result in
+  warn mode is byte-identical. Only a *violating* result in warn mode gains two
+  marker keys on its completed evidence. New reserved code is additive to the
+  closed vocabulary.
+
+### Regression gate
+- `output-schema.json` vector (conforming + violating result agree Python + TS SDK
+  + `verify.mjs`); guards `spec_defines_output_schema_validation` +
+  `output_schema_vector_verifies`.
+
 ## [0.7.3] — Cross-host capability-version negotiation over 0.7.2
 
 ### Added

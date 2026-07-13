@@ -553,6 +553,21 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (version-negotiation: ${input.cases.length} semver cases agree)`
     : "INVALID");
+} else if (input.kind === "output-schema") {
+  // Output-schema validation matcher (pipeline gate 12, proposal 0029): a
+  // capability result is validated against descriptor.output_schema post-
+  // execution. Cross-impl agreement on the shared subset — required keys (a
+  // missing required key is a violation; a non-object result satisfies none).
+  const conforms = (result, schema) => {
+    const req = schema && Array.isArray(schema.required) ? schema.required : [];
+    if (!req.length) return true;
+    if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
+    return req.every((k) => Object.prototype.hasOwnProperty.call(result, k));
+  };
+  ok = (input.cases ?? []).every((c) => conforms(c.result, c.output_schema) === c.valid);
+  console.log(ok
+    ? `VALID (output-schema: ${input.cases.length} result-validation cases agree)`
+    : "INVALID");
 } else if (input.kind === "auth-token") {
   // Signed bearer token (chp-v0.2.md §5, proposal 0027): verify the caller's
   // ed25519 signature over the canonical header, the caller attestation

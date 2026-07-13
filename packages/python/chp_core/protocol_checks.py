@@ -629,6 +629,40 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "version_negotiation_vector_verifies", False, {"error": str(exc)})
 
+    # Output-schema validation (proposal 0029): the pipeline must define gate 12
+    # and the governance table must carry the code, and the vector must agree.
+    pipeline_osv = read_text(repo_root / "spec" / "chp-invocation-pipeline.md")
+    gov_osv = read_text(repo_root / "spec" / "chp-governance-v0.2.md")
+    add_check(
+        checks,
+        "spec_defines_output_schema_validation",
+        "output_schema_validation_failed" in pipeline_osv
+        and "output_schema_validation_failed" in gov_osv,
+        {"hint": "pipeline gate 12 + governance §2 must define output_schema_validation_failed"},
+    )
+    osv_vec = repo_root / "spec" / "test-vectors" / "output-schema.json"
+    if osv_vec.exists():
+        try:
+            osv_doc = read_json(osv_vec)
+
+            def _osv_conforms(result: JSON, schema: JSON) -> bool:
+                req = schema.get("required") if isinstance(schema, dict) else None
+                if not isinstance(req, list) or not req:
+                    return True
+                if not isinstance(result, dict):
+                    return False
+                return all(k in result for k in req)
+
+            add_check(
+                checks,
+                "output_schema_vector_verifies",
+                all(_osv_conforms(c["result"], c["output_schema"]) is c["valid"]
+                    for c in osv_doc.get("cases", [])),
+                {"hint": "regenerate output-schema.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "output_schema_vector_verifies", False, {"error": str(exc)})
+
     # Transport auth (proposal 0027): §5 must be normative + define signed tokens,
     # and the auth-token vector must verify (and reject a wrong audience).
     add_check(
