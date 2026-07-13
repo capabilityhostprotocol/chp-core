@@ -1,7 +1,7 @@
 {
   "name": "@capabilityhostprotocol/host",
-  "version": "0.1.0-alpha.27",
-  "description": "A conformance-grade Capability Host Protocol (CHP) host in TypeScript \u2014 governed invocation pipeline + HTTP binding.",
+  "version": "0.1.0-alpha.28",
+  "description": "A conformance-grade Capability Host Protocol (CHP) host in TypeScript — governed invocation pipeline + HTTP binding.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

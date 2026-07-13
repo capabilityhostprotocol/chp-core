@@ -1,7 +1,7 @@
 {
   "name": "@capabilityhostprotocol/sdk",
-  "version": "0.1.0-alpha.27",
-  "description": "Pure TypeScript client + verifier for the Capability Host Protocol (CHP) \u2014 canonicalization, signing, and the HTTP-binding client.",
+  "version": "0.1.0-alpha.28",
+  "description": "Pure TypeScript client + verifier for the Capability Host Protocol (CHP) — canonicalization, signing, and the HTTP-binding client.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
