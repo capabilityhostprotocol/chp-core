@@ -5,6 +5,32 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.0] — Confidentiality depth: multi-recipient sealing + disclosure receipts over 0.7.4
+
+### Added
+- **`chp-sealed-v2` — multi-recipient sealing** (chp-v0.2.md §16.1,
+  [proposals/0030](proposals/0030-confidentiality-depth.md)): envelope encryption — a
+  single random content key encrypts `canon(plaintext)` ONCE (one `ct`), wrapped
+  per-recipient by a `chp-sealed-v1` seal of the key. Marker `{scheme:"chp-sealed-v2",
+  nonce, ct, recipients:[{epk,nonce,wrapped_key},…]}`. Any one of N recipients unseals
+  (trial-unwrap); a non-recipient cannot. The commitment invariant is untouched — the
+  chain/root/original-signature verify offline over the ciphertext with NO key, exactly
+  as v1. `seal_payloads` accepts a recipient list to select v2.
+- **Disclosure receipts** (chp-v0.2.md §16.1, `schemas/disclosure-receipt.schema.json`):
+  a recipient's ed25519-signed `{kind:"disclosure-receipt", who, content_hash,
+  payload_commitment, unsealed_at}` — a non-repudiable record of what it unsealed,
+  WITHOUT the plaintext (names the payload by its commitment). Emitted host-on-unseal;
+  the auth-token / mandate signed-record shape.
+
+### Compatibility
+- Additive, **minor** bump. A single-recipient seal stays `chp-sealed-v1`
+  (byte-identical to 0025); v2 is opt-in via the list form. The disclosure receipt is a
+  new standalone signed record. Chain/root/signature semantics unchanged.
+
+### Regression gate
+- `sealed-bundle-v2.json` (3-recipient, each unseals in Python + TS SDK, verify.mjs
+  keyless); guards `spec_defines_confidentiality_depth` + `sealed_v2_vector_verifies`.
+
 ## [0.7.4] — Output-schema validation over 0.7.3
 
 ### Added

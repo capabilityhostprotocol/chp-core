@@ -505,11 +505,16 @@ if (input.kind === "adapter-provenance") {
   const sealedEvs = bundle.events.filter((e) => e.payload && e.payload.chp_sealed);
   // confidentiality (structural, no key needed): a sealed payload is ONLY the
   // marker — the plaintext was replaced, not augmented — and carries the envelope.
+  // chp-sealed-v1 = single recipient (epk/nonce/ct); chp-sealed-v2 (proposal 0030)
+  // = multi-recipient envelope encryption (one ct, a recipients[] of wrapped keys).
+  const sealedShape = (s) =>
+    (s.scheme === "chp-sealed-v1" && s.ct && s.epk && s.nonce)
+    || (s.scheme === "chp-sealed-v2" && s.ct && s.nonce
+        && Array.isArray(s.recipients) && s.recipients.length > 0
+        && s.recipients.every((r) => r.epk && r.nonce && r.wrapped_key));
   const hasSealed = sealedEvs.length > 0
     && sealedEvs.every((e) => Object.keys(e.payload).length === 1
-                          && e.payload.chp_sealed.scheme === "chp-sealed-v1"
-                          && e.payload.chp_sealed.ct && e.payload.chp_sealed.epk
-                          && e.payload.chp_sealed.nonce);
+                          && sealedShape(e.payload.chp_sealed));
   ok = integrityOk && hasSealed;
   console.log(ok
     ? `VALID (sealed-bundle: chain verifies with NO key, ${sealedEvs.length} sealed payload(s), no plaintext leak)`

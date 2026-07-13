@@ -1,0 +1,155 @@
+{
+  "kind": "sealed-bundle",
+  "note": "chp-sealed-v2 multi-recipient envelope encryption (proposal 0030): the payload is encrypted ONCE under a content key wrapped to 3 recipients. Any one recipient_enc_private unseals; an outsider cannot. The bundle verifies offline with NO key (root/signature unchanged).",
+  "scheme": "chp-sealed-v2",
+  "recipient_enc_privates": [
+    "8OXKM+/y/CteWkMuBRj8bWq17d/08dVnqNcYsg6SgEA=",
+    "QFrDyNxjMmOSzDi2rUANQQifBo7MGFoTMBpIpBE9JWk=",
+    "sDfoJux52wmL1QFBl3i2zs3nHkHWQ8aD1sBHAOVB/Ho="
+  ],
+  "recipient_enc_publics": [
+    "n7hIkNULJ7xnn/c8DJr6Ph08lbMrd3fie4zLHlInih0=",
+    "WTFo//HCqZn0imxd9KrA89UFhESjvw+u00QxY4We+ls=",
+    "IaAJBBqduJYOOAFA1TsFXk7fRHbPyWoowCJV/rYeFAs="
+  ],
+  "bundle": {
+    "host_id": "seal-host",
+    "protocol_version": "0.2",
+    "created_at": "2026-07-12T00:00:00Z",
+    "canonicalization": "chp-stable-v1",
+    "assurance": "signed",
+    "events": [
+      {
+        "assurance": {
+          "evidence_policy": "local-append-only",
+          "level": "S1",
+          "notes": []
+        },
+        "capability_id": "s.cap",
+        "capability_version": "1.0.0",
+        "correlation": {
+          "baggage": {},
+          "causation_id": null,
+          "correlation_id": "seal-corr-1",
+          "parent_correlation_id": null,
+          "trace_id": null
+        },
+        "denial": null,
+        "error": null,
+        "event_id": "evt_12bba0ebb0c345059bb349db7e6a2224",
+        "event_type": "execution_started",
+        "hash_scheme": "chp-event-hash-v2",
+        "host_id": "seal-host",
+        "invocation_id": "inv_efcd9dbf031f486281e77641063cb0de",
+        "outcome": null,
+        "payload": {
+          "chp_sealed": {
+            "scheme": "chp-sealed-v2",
+            "nonce": "G7A/iku/kq7xjDSB",
+            "ct": "nxwY9Vxgr4JaAZM+p68jXP+Oy1oBMAsFvlFTGyNjUnbUzcD6Vd3fNj2n0hxfiOzbbw==",
+            "recipients": [
+              {
+                "epk": "DN8bVI2C7jVRZ7Tex6ShGWKkj8XRxBFypiy7QHBFmQQ=",
+                "nonce": "zzzQSTHJHFgDCNsk",
+                "wrapped_key": "JRUX4s1zL74MkwUM2yL1npkk3l3Be6O69/3afKS0QCGby1gUyULZSrESNIRAwQLf"
+              },
+              {
+                "epk": "/FbObQjsJOJnIdki22C67542TIW6W214sys2xqT3aA4=",
+                "nonce": "WnhZaMpxf4QVtIyS",
+                "wrapped_key": "zit/Ys50R660fcQimmTlMkufJWYookwndbDsZop3h2B/Bv5ldwYkkGUO5WEZVgrm"
+              },
+              {
+                "epk": "y6bBnYxP4VLWZ3TVPSrJng4KT8y4vBOoqt+7Kdxszm4=",
+                "nonce": "l5yY4zfVlcoAO8HB",
+                "wrapped_key": "9AAEDrfsNEiRAplSkLIjbscr5NWmsVywXfcW9tU0RiWnq4uTZU2gUR/sbr3h9rDD"
+              }
+            ]
+          }
+        },
+        "payload_commitment": "555b9f82d36ca86bb1cf2b6cc6b5b83699093453812e172159b9845f7de8ee6b",
+        "redacted": true,
+        "sequence": 1,
+        "subject": {
+          "id": "local",
+          "type": "user"
+        },
+        "timestamp": "2026-07-13T01:51:26.604975Z",
+        "content_hash": "120a975c3613a0122e60a1fc43d3583690e48945e6ddcee34a1c48fe1d3037c3",
+        "prev_hash": null
+      },
+      {
+        "assurance": {
+          "evidence_policy": "local-append-only",
+          "level": "S1",
+          "notes": []
+        },
+        "capability_id": "s.cap",
+        "capability_version": "1.0.0",
+        "correlation": {
+          "baggage": {},
+          "causation_id": null,
+          "correlation_id": "seal-corr-1",
+          "parent_correlation_id": null,
+          "trace_id": null
+        },
+        "denial": null,
+        "error": null,
+        "event_id": "evt_2c73d5aae47a4a1a98173654015d65ec",
+        "event_type": "execution_completed",
+        "hash_scheme": "chp-event-hash-v2",
+        "host_id": "seal-host",
+        "invocation_id": "inv_efcd9dbf031f486281e77641063cb0de",
+        "outcome": "success",
+        "payload": {
+          "chp_sealed": {
+            "scheme": "chp-sealed-v2",
+            "nonce": "/Fn+b0X/4w1/Jf7c",
+            "ct": "VPyNYqWNCnMwdJCzU2878ti4EGQrrvpYUJks3xGTJ9qSHmxis0AybYkGdjiTFxcHjQ==",
+            "recipients": [
+              {
+                "epk": "mViH2dl9X7QC7j/ZrSrAOSg88Ne2bU6eDviYvvnLFHU=",
+                "nonce": "L5ucUM5tsBGkBphU",
+                "wrapped_key": "E4MHfTu2DRfahDr6K14zUwpkQKR5llwVXWNSaf92ZQbi5leI1WZfsCg6m8aolIgn"
+              },
+              {
+                "epk": "4MXbw95ZzlYxOoSKAMTN9qvgl/fdRoVp4d1unoAb1hw=",
+                "nonce": "EAixs8natxOac7Xr",
+                "wrapped_key": "WAvohW6cVVn6XBdEe/9g0p5pHzJEBw8E2BPfu1nrxgXVQOnKJAipnOGhyzWP1/Cb"
+              },
+              {
+                "epk": "Rkx7Kt1X5a9OXDdxwbwNp/AChHVb8LiWOJ0wOhKk80Y=",
+                "nonce": "HDO0g05hju8kTp1P",
+                "wrapped_key": "34CiHiEJDlJeNx0aEGjxIizIb5eOgEdaKC/+vj2Pz42Qo5gyvhkD3axvKozX4IP6"
+              }
+            ]
+          }
+        },
+        "payload_commitment": "555b9f82d36ca86bb1cf2b6cc6b5b83699093453812e172159b9845f7de8ee6b",
+        "redacted": false,
+        "sequence": 2,
+        "subject": {
+          "id": "local",
+          "type": "user"
+        },
+        "timestamp": "2026-07-13T01:51:26.605094Z",
+        "content_hash": "cc714629777059e292441f97e04b70b2e37363efc8f83f5dce7a1c3150d65956",
+        "prev_hash": "120a975c3613a0122e60a1fc43d3583690e48945e6ddcee34a1c48fe1d3037c3"
+      }
+    ],
+    "root_hash": "e3b9075c3fac82afc30518934c0f4a391b2a242fdc2511cc4fc9cb986d76cfd6",
+    "public_key": "kZrwrvDcakPuy4oVt3yDjdgk1dJIIqWWmkusda2d2jo=",
+    "host_identity": {
+      "host_id": "seal-host",
+      "public_key": "kZrwrvDcakPuy4oVt3yDjdgk1dJIIqWWmkusda2d2jo=",
+      "key_id": "758f5eda9291ef53",
+      "valid_from": "2026-07-12T00:00:00Z",
+      "valid_until": null,
+      "signature": "zJqKviVLtQW3wdHVJvi10IeV89lYKG5pjayKWug6HBq8U0d2GGiPxL8mTcV6EMe9cBwf38hSud2Re1v8dNtfDg=="
+    },
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "758f5eda9291ef53",
+      "signature": "jRKDTw7dMHtZuq39sz3jzYx9U1WMdRqcOkCvUc43DsRqD+2QmCLQTIGCxfuvrsRsucvpl4yX7CE9tDxZCUYEAA=="
+    }
+  }
+}

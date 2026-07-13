@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -1204,7 +1204,30 @@ wrong key, a tampered ciphertext, or a swapped plaintext all fail.
 The recipient's sealing key is a **separate X25519 key** (ed25519 identity keys do
 not double as encryption keys) published as an omit-when-empty **`enc_public_key`**
 inside the signed `host_identity` attestation (§3) — bound to `host_id`, so a MITM
-cannot substitute a key it controls. Per-field sealing, multi-recipient envelopes,
-disclosure receipts, and forward-secrecy ratchets are out of scope (named in
-proposal 0025); in-transit confidentiality is the transport binding's concern (§5),
-not this.
+cannot substitute a key it controls. Per-field sealing and forward-secrecy ratchets
+are out of scope; in-transit confidentiality is the transport binding's concern
+(§5), not this.
+
+### 16.1 Multi-recipient sealing + disclosure receipts (v0.8.0)
+
+**`chp-sealed-v2`** (proposal 0030) seals a payload to **N recipients** by envelope
+encryption: a single random 32-byte content key encrypts `canon(plaintext)` **once**
+(one `ct`), and that content key is wrapped **per recipient** by a `chp-sealed-v1`
+seal of the key. The marker is `{scheme: "chp-sealed-v2", nonce, ct, recipients:
+[{epk, nonce, wrapped_key}, …]}`. Any one recipient recovers the content key from
+its wrap and decrypts the shared `ct`; a non-recipient cannot. The commitment
+invariant is untouched — the chain, root, and original signature verify offline over
+the ciphertext with **no key**, exactly as `chp-sealed-v1`. A single-recipient seal
+stays `chp-sealed-v1` (byte-identical to proposal 0025); the list form selects v2.
+
+A **disclosure receipt** (`kind: "disclosure-receipt"`) is a recipient's
+ed25519-signed record that it unsealed a specific event — `{who, content_hash,
+payload_commitment, unsealed_at}` with the recipient's signature over the canonical
+header (the auth-token / mandate signed-record shape). Emitted at the unseal seam
+(host-emit-on-unseal) and persisted alongside the recipient, it is a non-repudiable
+disclosure trail over confidential payloads **without revealing the plaintext**.
+Verification checks structure, the signature against the recipient's self-attested
+key, and that `who` equals the signing `key_id`; a caller cross-checks
+`content_hash` / `payload_commitment` against the bundle. Receipt revocation,
+threshold (k-of-n) unsealing, and per-recipient distinct plaintext remain out of
+scope.
