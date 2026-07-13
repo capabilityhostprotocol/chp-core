@@ -702,6 +702,19 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "output_schema_vector_verifies", False, {"error": str(exc)})
 
+    # Mutual TLS (proposal 0031): §5 + the HTTP binding must define mTLS, and the
+    # reference must expose the server TLS knobs + client-cert path.
+    http_binding_mtls = read_text(repo_root / "spec" / "chp-http-binding.md")
+    http_src_mtls = read_text(repo_root / "packages" / "python" / "chp_core" / "http.py")
+    add_check(
+        checks,
+        "spec_defines_mtls",
+        "mutual tls" in spec_v02_mk.lower() and "mutual tls" in http_binding_mtls.lower()
+        and 'type: "mtls"' in spec_v02_mk
+        and "_mtls_peer_identity" in http_src_mtls and "cafile" in http_src_mtls,
+        {"hint": "chp-v0.2.md §5 + chp-http-binding.md §2 must define mTLS; http.py must implement it"},
+    )
+
     # Transport auth (proposal 0027): §5 must be normative + define signed tokens,
     # and the auth-token vector must verify (and reject a wrong audience).
     add_check(

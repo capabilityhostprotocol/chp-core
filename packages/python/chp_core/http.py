@@ -108,9 +108,24 @@ def _host_assurance(host_id: str | None = None) -> JSON:
 class CapabilityHostHTTPServer(ThreadingHTTPServer):
     """Threading HTTP server bound to a CHP host (LocalCapabilityHost or MultiHostRouter)."""
 
-    def __init__(self, server_address: tuple[str, int], host: Any) -> None:
+    def __init__(self, server_address: tuple[str, int], host: Any,
+                 tls: dict | None = None) -> None:
         super().__init__(server_address, CapabilityHostRequestHandler)
         self.chp_host = host
+        # TLS / mutual-TLS (§5, proposal 0031). When a server cert is configured,
+        # wrap the LISTENING socket so every accepted connection is TLS; a `cafile`
+        # additionally demands + verifies a CLIENT cert (mTLS) — CERT_REQUIRED, so a
+        # client presenting no cert or one the CA didn't sign is refused at the
+        # handshake (no bytes reach a handler). A verified client cert's identity
+        # then binds to the evidence subject in _check_auth. stdlib ssl, no new dep.
+        if tls and tls.get("certfile"):
+            import ssl
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(certfile=tls["certfile"], keyfile=tls.get("keyfile"))
+            if tls.get("cafile"):
+                ctx.verify_mode = ssl.CERT_REQUIRED
+                ctx.load_verify_locations(cafile=tls["cafile"])
+            self.socket = ctx.wrap_socket(self.socket, server_side=True)
         # Drain accounting: ThreadingHTTPServer's daemon_threads=True means
         # server_close() does NOT join in-flight handlers — the SIGTERM drain
         # polls this counter instead.
@@ -125,6 +140,31 @@ class CapabilityHostHTTPServer(ThreadingHTTPServer):
     def inflight(self) -> int:
         with self._inflight_lock:
             return self._inflight
+
+
+def _mtls_peer_identity(connection: Any) -> str | None:
+    """The CA-verified identity of a mutual-TLS client cert, or None when the
+    connection is plain TCP / server-only TLS / has no peer cert (§5, proposal
+    0031). Prefers the subject commonName, falls back to the first DNS
+    subjectAltName. Only ever returns a value on a CERT_REQUIRED socket, so the
+    identity is already CA-verified — no trust decision is made here."""
+    getpeercert = getattr(connection, "getpeercert", None)
+    if getpeercert is None:
+        return None  # not a TLS socket
+    try:
+        cert = getpeercert()
+    except Exception:  # noqa: BLE001
+        return None
+    if not cert:
+        return None  # server-only TLS (client presented no cert)
+    for rdn in cert.get("subject", ()):
+        for key, value in rdn:
+            if key == "commonName" and value:
+                return str(value)
+    for typ, value in cert.get("subjectAltName", ()):
+        if typ == "DNS" and value:
+            return str(value)
+    return None
 
 
 # Servers created in this process — the SIGTERM drain acts on all of them.
@@ -212,6 +252,19 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         """
         self._caller: str | None = None
         self._caller_scope: list[str] | None = None
+        self._caller_type: str = "api_key"
+
+        # Mutual TLS (§5, proposal 0031): the connection already completed a
+        # CERT_REQUIRED handshake, so a peer cert here is CA-verified. Bind its
+        # identity (CN, else the first DNS SAN) as the VERIFIED caller — a third
+        # credential beside X-CHP-Key and X-CHP-Token, and the strongest (the TLS
+        # layer already authenticated it before any byte reached this handler).
+        peer_id = _mtls_peer_identity(self.connection)
+        if peer_id is not None:
+            self._caller = peer_id
+            self._caller_type = "mtls"
+            return True
+
         presented = self.headers.get("X-CHP-Key", "")
         named = os.environ.get("CHP_HOST_API_KEYS")
         shared = os.environ.get("CHP_HOST_API_KEY")
@@ -779,7 +832,11 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         # not to whatever the request body claimed. Accountability, not assertion.
         caller = getattr(self, "_caller", None)
         if caller is not None:
-            envelope_body["subject"] = {"id": caller, "type": "api_key", "verified": True}
+            envelope_body["subject"] = {
+                "id": caller,
+                "type": getattr(self, "_caller_type", "api_key"),  # "mtls" for a client cert (0031)
+                "verified": True,
+            }
         envelope = InvocationEnvelope.from_mapping(envelope_body)
         scope = getattr(self, "_caller_scope", None)
         if scope is not None and not _scope_allows(scope, envelope.capability_id):
@@ -1102,11 +1159,18 @@ def create_http_server(
     *,
     bind: str = "127.0.0.1",
     port: int = 8765,
+    certfile: str | None = None,
+    keyfile: str | None = None,
+    cafile: str | None = None,
 ) -> CapabilityHostHTTPServer:
     """Create, but do not start, a CHP HTTP server.
 
     *host* may be a ``LocalCapabilityHost`` or a ``MultiHostRouter`` — both
     satisfy the duck-type surface the handler expects.
+
+    TLS/mTLS (§5, proposal 0031): pass ``certfile`` (+ ``keyfile``) to serve over
+    TLS; add ``cafile`` to additionally require + verify a CLIENT certificate
+    (mutual TLS) — a verified client cert's identity binds to the evidence subject.
     """
     # Governed cloud-spill (proposal 0006): when a spill endpoint is configured,
     # the shim's spill paths invoke chp.spill.chat — register it so spill runs
@@ -1124,7 +1188,9 @@ def create_http_server(
             "CHP_HOST_REQUIRE_AUTH=1 but no API keys configured "
             "(set CHP_HOST_API_KEYS or CHP_HOST_API_KEY)")
 
-    server = CapabilityHostHTTPServer((bind, port), host)
+    tls = ({"certfile": certfile, "keyfile": keyfile, "cafile": cafile}
+           if certfile else None)
+    server = CapabilityHostHTTPServer((bind, port), host, tls=tls)
     _LIVE_SERVERS.append(server)
     return server
 
@@ -1134,15 +1200,21 @@ def serve_http(
     *,
     bind: str = "127.0.0.1",
     port: int = 8765,
+    certfile: str | None = None,
+    keyfile: str | None = None,
+    cafile: str | None = None,
 ) -> None:
     """Serve a CHP host until interrupted.
 
     *host* may be a ``LocalCapabilityHost`` (single-host) or a
     ``MultiHostRouter`` (gateway mode). For a router, call
     ``asyncio.run(router.connect())`` before calling this function.
+
+    TLS/mTLS: see ``create_http_server`` (``certfile``/``keyfile``/``cafile``).
     """
 
-    server = create_http_server(host, bind=bind, port=port)
+    server = create_http_server(host, bind=bind, port=port,
+                                certfile=certfile, keyfile=keyfile, cafile=cafile)
     install_sigterm_drain()  # no-op off the main thread (chp-host installs there)
     try:
         server.serve_forever()
@@ -1165,10 +1237,22 @@ class RemoteCapabilityHost:
 
     def __init__(self, base_url: str, *, timeout: int = 30, api_key: str | None = None,
                  retries: int = 0, retry_cap_s: float = 30.0,
-                 wire_version: str | None = None) -> None:
+                 wire_version: str | None = None,
+                 client_cert: str | None = None, client_key: str | None = None,
+                 cafile: str | None = None) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
         self._api_key = api_key  # never emitted in evidence or logs
+        # Mutual-TLS client credentials (§5, proposal 0031). When base_url is https
+        # and a client_cert is set, present it on every connection so the server can
+        # verify + bind the caller identity. cafile pins the server's CA (else the
+        # default trust store). Built once — reused across keep-alive connections.
+        self._ssl_context = None
+        if client_cert:
+            import ssl
+            ctx = ssl.create_default_context(cafile=cafile) if cafile else ssl.create_default_context()
+            ctx.load_cert_chain(certfile=client_cert, keyfile=client_key)
+            self._ssl_context = ctx
         # Selected wire version (spec §1.1). When set it is declared on every
         # request as X-CHP-Version; call negotiate() to select it from the host's
         # supported_versions. None → no negotiation (host uses its default).
@@ -1246,9 +1330,11 @@ class RemoteCapabilityHost:
             RemoteCapabilityHost._tls.conns = cache
         conn = cache.get(key)
         if conn is None:
-            cls = (http.client.HTTPSConnection if parts.scheme == "https"
-                   else http.client.HTTPConnection)
-            conn = cls(parts.netloc, timeout=self._timeout)
+            if parts.scheme == "https":
+                conn = http.client.HTTPSConnection(
+                    parts.netloc, timeout=self._timeout, context=self._ssl_context)
+            else:
+                conn = http.client.HTTPConnection(parts.netloc, timeout=self._timeout)
             cache[key] = conn
         return key, cache, conn
 
@@ -1263,7 +1349,8 @@ class RemoteCapabilityHost:
 
         if os.environ.get("CHP_HTTP_KEEPALIVE", "1") == "0":
             try:
-                with urlopen(req, timeout=self._timeout) as resp:
+                # Present the mTLS client cert on the one-shot path too (0031).
+                with urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
                     return resp.status, resp.read().decode("utf-8")
             except HTTPError as exc:
                 return exc.code, exc.read().decode("utf-8", errors="replace")

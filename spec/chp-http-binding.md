@@ -74,6 +74,17 @@ authority carrier that survives per-hop subject rebinding.
 If no keys are configured the host MAY accept all callers (local-first default).
 Network-layer confidentiality (e.g. a private mesh) MAY substitute for TLS.
 
+**Mutual TLS (proposal 0031).** A host MAY require a client certificate at the TLS
+layer, verified against a configured CA (`CERT_REQUIRED` + a CA bundle). A verified
+client cert authenticates the caller *before the pipeline* — an unknown-CA or absent
+cert is refused during the handshake (a connection-level failure, no HTTP response,
+no reserved code). The verified cert identity — subject commonName, else the first
+DNS `subjectAltName` — becomes the verified `subject` (`{id, type: "mtls", verified:
+true}`), overriding any client-asserted subject exactly like a key or token. mTLS is a
+third credential alongside `X-CHP-Key` and `X-CHP-Token` and, being verified by the
+transport itself, takes precedence when present. Certificate issuance/rotation and CA
+operation are deployment concerns outside this binding.
+
 **Version selection (`X-CHP-Version`).** A request MAY carry an optional
 **`X-CHP-Version`** header naming the wire version the caller selected from the
 host's `supported_versions` (chp-v0.2.md §1.1). When **absent**, the host

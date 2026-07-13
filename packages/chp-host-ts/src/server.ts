@@ -6,6 +6,8 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import type { TLSSocket } from 'node:tls';
 import { timingSafeEqual } from 'node:crypto';
 import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead, PROTOCOL_VERSION, CHP_STORE_HEAD_V2, storeHeadInclusionProof, storeHeadConsistencyProof } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
@@ -48,7 +50,7 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 export function createHostServer(
   host: LocalCapabilityHost,
-  opts: { apiKey?: string; namedKeys?: string } = {},
+  opts: { apiKey?: string; namedKeys?: string; tls?: { cert: string | Buffer; key: string | Buffer; ca?: string | Buffer } } = {},
 ): Server {
   const { apiKey } = opts;
   // Received chain-witness statements (§12) — in-memory for the conformance host.
@@ -72,9 +74,25 @@ export function createHostServer(
       scope: scope?.trim() ? scope.split('|').map((s) => s.trim()).filter(Boolean) : null,
     }));
 
-  interface Caller { name: string; scope: string[] | null }
+  interface Caller { name: string; scope: string[] | null; type?: string }
+
+  // Mutual TLS (§5, proposal 0031): on a CERT_REQUIRED https connection a peer
+  // cert here is already CA-verified. Bind its identity (CN, else first DNS SAN)
+  // as the VERIFIED caller — strongest credential, authenticated by the TLS layer
+  // before any byte reached the handler. Mirrors the Python _mtls_peer_identity.
+  const mtlsPeerIdentity = (req: IncomingMessage): string | null => {
+    const sock = req.socket as TLSSocket;
+    if (typeof sock.getPeerCertificate !== 'function') return null;
+    const cert = sock.getPeerCertificate();
+    if (!cert || Object.keys(cert).length === 0) return null;
+    if (cert.subject?.CN) return String(cert.subject.CN);
+    const dns = cert.subjectaltname?.split(',').map((s) => s.trim()).find((s) => s.startsWith('DNS:'));
+    return dns ? dns.slice(4) : null;
+  };
 
   const authenticate = (req: IncomingMessage): { ok: boolean; caller: Caller | null } => {
+    const peer = mtlsPeerIdentity(req);
+    if (peer !== null) return { ok: true, caller: { name: peer, scope: null, type: 'mtls' } };
     const presented = (req.headers['x-chp-key'] as string) ?? '';
     for (const entry of named) {
       if (constantTimeEqual(presented, entry.key)) {
@@ -88,9 +106,16 @@ export function createHostServer(
   const scopeAllows = (scope: string[], capabilityId: string): boolean =>
     scope.some((s) => capabilityId === s || (s.endsWith('*') && capabilityId.startsWith(s.slice(0, -1))));
 
-  return createServer((req, res) => {
+  const listener = (req: IncomingMessage, res: ServerResponse): void => {
     void handle(req, res).catch((e) => err(res, 500, 'internal_error', String((e as Error).message)));
-  });
+  };
+  // mTLS (0031): an https server that REQUIRES + verifies a client cert against
+  // the configured CA (rejectUnauthorized) — an unknown-CA client is refused at
+  // the handshake. Plain http otherwise.
+  return opts.tls
+    ? createHttpsServer({ cert: opts.tls.cert, key: opts.tls.key, ca: opts.tls.ca,
+                          requestCert: true, rejectUnauthorized: true }, listener) as unknown as Server
+    : createServer(listener);
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://x');
@@ -298,7 +323,7 @@ export function createHostServer(
       }
       // Verified caller REPLACES any client-asserted subject (binding §2).
       if (auth.caller) {
-        env.subject = { id: auth.caller.name, type: 'api_key', verified: true };
+        env.subject = { id: auth.caller.name, type: auth.caller.type ?? 'api_key', verified: true };
         // Capability scope: out-of-scope is a PROCESSED policy_blocked denial.
         if (auth.caller.scope && !scopeAllows(auth.caller.scope, String(env.capability_id ?? ''))) {
           const result = host.denyEnvelope(env, {

@@ -5,6 +5,31 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.1] — Mutual TLS for the HTTP transport over 0.8.0
+
+### Added
+- **Mutual TLS** (chp-v0.2.md §5 + chp-http-binding.md §2,
+  [proposals/0031](proposals/0031-mtls.md)): a host MAY require a CA-verified client
+  certificate at the TLS layer (`create_http_server(certfile, keyfile, cafile)`,
+  `CERT_REQUIRED`). A verified client cert authenticates the caller before the pipeline
+  — an unknown-CA/absent cert is refused at the handshake (connection-level, no reserved
+  code). The cert identity (subject CN, else first DNS SAN) binds to the verified
+  evidence `subject` (`type: "mtls"`) — a third credential beside `X-CHP-Key` and
+  `X-CHP-Token`, checked first. `RemoteCapabilityHost` gains client-cert options. stdlib
+  `ssl`, no new dependency.
+
+### Compatibility
+- Additive, **patch** bump. A host without TLS configured serves plain HTTP unchanged;
+  a client without a cert connects unchanged. No wire-object change, no reserved code —
+  the only evidence delta is the new `subject.type` value `"mtls"`. Honest boundary: CHP
+  specifies how a verified client cert binds to evidence, not a PKI (issuance/rotation/CA
+  out of scope).
+
+### Regression gate
+- Python `test_mtls.py` + TS `mtls.test.ts` (shared CA/server/client PEM fixtures:
+  verified client → subject, unknown-CA → handshake refusal, both impls); guard
+  `spec_defines_mtls`.
+
 ## [0.8.0] — Confidentiality depth: multi-recipient sealing + disclosure receipts over 0.7.4
 
 ### Added
