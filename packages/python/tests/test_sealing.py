@@ -92,6 +92,60 @@ def test_enc_public_key_binds_in_attestation(tmp_path):
     assert not signing.verify_attestation(att)
 
 
+def test_multi_recipient_v2_any_unseals_fourth_cannot(tmp_path):
+    """chp-sealed-v2 (proposal 0030): a payload sealed to 3 recipients — each
+    unseals independently; a 4th (not in the recipient set) cannot; the sealed
+    bundle still verifies offline with NO key."""
+    bundle = _signed_bundle(tmp_path)
+    r = [sealing.generate_enc_keypair(tmp_path / f"enc{i}") for i in range(3)]
+    pubs = [sealing.load_enc_public_key_b64(tmp_path / f"enc{i}") for i in range(3)]
+    outsider = sealing.generate_enc_keypair(tmp_path / "enc-out")
+
+    sealed = sealing.seal_payloads(bundle, pubs)  # a LIST → v2
+    sealed_evs = [e for e in sealed["events"] if isinstance(e.get("payload"), dict)
+                  and "chp_sealed" in e["payload"]]
+    assert sealed_evs
+    env = sealed_evs[0]["payload"]["chp_sealed"]
+    assert env["scheme"] == "chp-sealed-v2" and len(env["recipients"]) == 3
+    # the ct is a SINGLE envelope-encrypted body (encrypted once, not per recipient)
+    assert "hunter2" not in __import__("json").dumps(sealed)
+    # a third party with no key still verifies the chain/root/signature
+    assert signing.verify_bundle(sealed).valid
+    # EACH of the 3 recipients unseals back to the exact original bundle
+    for recipient in r:
+        assert sealing.unseal_bundle(sealed, recipient) == bundle
+    # the outsider cannot
+    with pytest.raises(Exception):
+        sealing.unseal_bundle(sealed, outsider)
+
+
+def test_disclosure_receipt_signed_and_verifies(tmp_path):
+    """A recipient's signed disclosure receipt (proposal 0030) verifies and binds
+    its own signer; tampering the disclosed commitment breaks it."""
+    sk = signing.generate_keypair(tmp_path / "sig")
+    r = signing.build_disclosure_receipt(
+        sk, content_hash="a" * 64, payload_commitment="b" * 64,
+        unsealed_at="2026-07-12T00:00:00Z")
+    assert r["kind"] == "disclosure-receipt" and r["who"] == sk.key_id
+    v = signing.verify_disclosure_receipt(r)
+    assert v.valid, v.reason
+    # tampering the disclosed commitment breaks the recipient's signature
+    r["payload_commitment"] = "c" * 64
+    assert not signing.verify_disclosure_receipt(r).valid
+
+
+def test_v1_single_recipient_unchanged(tmp_path):
+    """A single X25519 key still seals to chp-sealed-v1 — byte-identical scheme to
+    0025 (backward compatibility)."""
+    bundle = _signed_bundle(tmp_path)
+    sealing.generate_enc_keypair(tmp_path / "enc")
+    pub = sealing.load_enc_public_key_b64(tmp_path / "enc")
+    sealed = sealing.seal_payloads(bundle, pub)  # a bare STR → v1
+    env = next(e["payload"]["chp_sealed"] for e in sealed["events"]
+               if isinstance(e.get("payload"), dict) and "chp_sealed" in e["payload"])
+    assert env["scheme"] == "chp-sealed-v1" and "recipients" not in env
+
+
 def test_no_enc_key_is_byte_identical(tmp_path):
     # omit-when-empty: an attestation without enc_public_key is unchanged
     key = signing.generate_keypair(tmp_path / "k")

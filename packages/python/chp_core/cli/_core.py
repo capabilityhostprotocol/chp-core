@@ -1169,7 +1169,9 @@ def cmd_bundle_seal(args: argparse.Namespace) -> int:
     if caps or evids:
         def predicate(ev: dict) -> bool:  # noqa: F811
             return ev.get("capability_id") in caps or ev.get("event_id") in evids
-    sealed = sealing.seal_payloads(bundle, args.recipient, predicate)
+    # One --recipient stays chp-sealed-v1 (byte-identical to 0025); 2+ → v2 (0030).
+    recips = args.recipient if len(args.recipient) > 1 else args.recipient[0]
+    sealed = sealing.seal_payloads(bundle, recips, predicate)
     n = sum(1 for e in sealed.get("events", [])
             if isinstance(e.get("payload"), dict) and "chp_sealed" in e["payload"])
     rendered = json.dumps(sealed, indent=2)
@@ -1212,6 +1214,25 @@ def cmd_bundle_unseal(args: argparse.Namespace) -> int:
     bad = [e.get("event_id") for e in opened.get("events", [])
            if e.get("hash_scheme") == "chp-event-hash-v2" and e.get("payload_commitment")
            and _payload_commitment(e.get("payload")) != e["payload_commitment"]]
+    # Disclosure receipts (proposal 0030): sign one per event we just unsealed —
+    # a non-repudiable record of what THIS host disclosed, without the plaintext.
+    if getattr(args, "emit_receipt", None):
+        from ..signing import build_disclosure_receipt, load_host_key
+        from ..types import utc_now
+        sk = load_host_key(key_dir, prompt=True)
+        if sk is None or not sk.can_sign:
+            print(f"no signing key in {key_dir} — cannot emit disclosure receipts", file=sys.stderr)
+            return 1
+        sealed_ids = {e.get("event_id") for e in bundle.get("events", [])
+                      if isinstance(e.get("payload"), dict) and "chp_sealed" in e["payload"]}
+        now = utc_now()
+        receipts = [build_disclosure_receipt(sk, content_hash=e.get("content_hash"),
+                                             payload_commitment=e.get("payload_commitment"),
+                                             unsealed_at=now)
+                    for e in opened.get("events", []) if e.get("event_id") in sealed_ids]
+        with open(args.emit_receipt, "w") as fh:
+            fh.write(json.dumps(receipts, indent=2) + "\n")
+        print(f"wrote {len(receipts)} disclosure receipt(s) -> {args.emit_receipt}", file=sys.stderr)
     rendered = json.dumps(opened, indent=2)
     if args.out:
         with open(args.out, "w") as fh:

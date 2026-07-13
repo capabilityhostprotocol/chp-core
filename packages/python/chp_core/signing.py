@@ -1490,6 +1490,69 @@ def verify_auth_token(token: dict, *, aud: str, at_time: str,
     return BundleVerification(valid, "signed", checks, reason)
 
 
+_DISCLOSURE_RECEIPT_FIELDS = ("kind", "who", "content_hash", "payload_commitment",
+                              "unsealed_at", "canonicalization")
+
+
+def disclosure_receipt_header(receipt: dict) -> dict:
+    """The recipient-signed header of a disclosure receipt (§16, proposal 0030)."""
+    return {k: receipt.get(k) for k in _DISCLOSURE_RECEIPT_FIELDS}
+
+
+def build_disclosure_receipt(recipient_key: HostKey, *, content_hash: str,
+                             payload_commitment: str, unsealed_at: str) -> dict:
+    """A recipient's ed25519-signed record that they unsealed a specific sealed
+    event (§16, proposal 0030): *"I, ``who``, disclosed the payload committed at
+    ``payload_commitment`` in event ``content_hash`` at ``unsealed_at``."* Emitted
+    at the unseal seam (host-emit-on-unseal) and persisted alongside the recipient;
+    a signed, non-repudiable disclosure trail over a confidential payload without
+    revealing the plaintext. The signature covers the canonical header, mirroring
+    the auth-token / mandate signed-record shape."""
+    if not recipient_key.can_sign:
+        raise SigningUnavailable("recipient key has no private component; cannot sign a receipt")
+    receipt: dict = {
+        "kind": "disclosure-receipt",
+        "who": recipient_key.key_id,
+        "content_hash": content_hash,
+        "payload_commitment": payload_commitment,
+        "unsealed_at": unsealed_at,
+        "canonicalization": CANONICALIZATION,
+    }
+    receipt["recipient"] = {
+        "host_id": recipient_key.key_id,
+        "public_key": recipient_key.public_key_b64,
+    }
+    receipt["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": recipient_key.key_id,
+        "signature": _sign(recipient_key._private, _canon(disclosure_receipt_header(receipt))),
+    }
+    return receipt
+
+
+def verify_disclosure_receipt(receipt: dict) -> BundleVerification:
+    """Verify a disclosure receipt is internally valid (§16, proposal 0030):
+    structure, the header signature against the recipient's self-attested key, and
+    that ``who`` == the signing ``key_id`` (the receipt names its own signer). It
+    does NOT prove the named event exists — a caller cross-checks ``content_hash`` /
+    ``payload_commitment`` against the bundle."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = (receipt.get("kind") == "disclosure-receipt"
+                           and bool(receipt.get("who"))
+                           and bool(receipt.get("content_hash")))
+    rec = receipt.get("recipient") or {}
+    pub = str(rec.get("public_key") or "")
+    sig = receipt.get("signature") or {}
+    checks["binds_signer"] = (receipt.get("who") == sig.get("key_id"))
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM and bool(pub)
+                           and _verify_sig(pub, _canon(disclosure_receipt_header(receipt)),
+                                           str(sig.get("signature") or "")))
+    valid = all(checks.values())
+    reason = None if valid else "disclosure-receipt checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason)
+
+
 _MANDATE_HEADER_FIELDS = ("kind", "mandate_id", "delegate_id", "scope",
                           "valid_from", "valid_until", "created_at",
                           "canonicalization")

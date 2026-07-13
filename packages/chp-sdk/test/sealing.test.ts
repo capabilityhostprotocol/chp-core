@@ -51,3 +51,34 @@ describe('sealed payloads', () => {
     expect(opened).toEqual(src);                            // exact round trip
   });
 });
+
+// chp-sealed-v2 — multi-recipient envelope encryption (proposal 0030).
+describe('sealed payloads v2 (multi-recipient)', () => {
+  const vec = load('sealed-bundle-v2.json');
+
+  it('ANY of the 3 recipients unseals the Python v2 ciphertext; the bundle verifies keyless', () => {
+    expect(verifyBundle(vec.bundle as Record<string, JsonValue>).valid).toBe(true);
+    for (const privB64 of vec.recipient_enc_privates as string[]) {
+      const opened = unsealBundle(vec.bundle as Record<string, JsonValue>, Buffer.from(privB64, 'base64'));
+      for (const ev of opened.events as Array<Record<string, JsonValue>>) {
+        if (ev.hash_scheme === 'chp-event-hash-v2' && ev.payload_commitment) {
+          expect(payloadCommitment(ev.payload)).toBe(ev.payload_commitment);
+        }
+      }
+    }
+  });
+
+  it('an outsider key cannot unseal', () => {
+    const outsider = generateEncKeypair().privateRaw;
+    expect(() => unsealBundle(vec.bundle as Record<string, JsonValue>, outsider)).toThrow();
+  });
+
+  it('TS-native v2 round trip: seal to 2 keys, either unseals', () => {
+    const src = load('signed-bundle.json') as Record<string, JsonValue>;
+    const a = generateEncKeypair(), b = generateEncKeypair();
+    const sealed = sealPayloads(src, [a.publicB64, b.publicB64]);
+    expect(verifyBundle(sealed).valid).toBe(true);
+    expect(unsealBundle(sealed, a.privateRaw)).toEqual(src);
+    expect(unsealBundle(sealed, b.privateRaw)).toEqual(src);
+  });
+});

@@ -604,6 +604,45 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "sealed_vector_verifies", False, {"error": str(exc)})
 
+    # Confidentiality depth (proposal 0030): the spec must define chp-sealed-v2 +
+    # disclosure receipts; the v2 vector must verify keyless AND unseal under EACH
+    # of its recipient keys (multi-recipient envelope encryption).
+    add_check(
+        checks,
+        "spec_defines_confidentiality_depth",
+        "chp-sealed-v2" in spec_v02_mk and "disclosure-receipt" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §16 must define chp-sealed-v2 + disclosure receipts"},
+    )
+    sealed_v2 = repo_root / "spec" / "test-vectors" / "sealed-bundle-v2.json"
+    if sealed_v2.exists():
+        try:
+            import base64 as _b64v2
+
+            from cryptography.hazmat.primitives.asymmetric.x25519 import (
+                X25519PrivateKey as _X25519v2)
+
+            from . import sealing as _seal_v2
+            from .signing import verify_bundle as _verify_v2
+
+            sv2 = read_json(sealed_v2)
+            each_unseals = all(
+                _verify_v2(_seal_v2.unseal_bundle(
+                    sv2["bundle"], _X25519v2.from_private_bytes(_b64v2.b64decode(pk)))).valid
+                for pk in sv2["recipient_enc_privates"])
+            v2_env = next(e["payload"]["chp_sealed"] for e in sv2["bundle"]["events"]
+                          if isinstance(e.get("payload"), dict) and "chp_sealed" in e["payload"])
+            add_check(
+                checks,
+                "sealed_v2_vector_verifies",
+                _verify_v2(sv2["bundle"]).valid              # keyless integrity
+                and v2_env.get("scheme") == "chp-sealed-v2"
+                and len(v2_env.get("recipients") or []) >= 2
+                and each_unseals,                            # every recipient recovers it
+                {"hint": "regenerate sealed-bundle-v2.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "sealed_v2_vector_verifies", False, {"error": str(exc)})
+
     # Capability-version negotiation (proposal 0028): the spec must define it, and
     # the matcher vector's known-answers must all agree.
     add_check(

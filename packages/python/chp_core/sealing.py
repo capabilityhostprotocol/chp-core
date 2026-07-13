@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 SEALED_SCHEME = "chp-sealed-v1"
+SEALED_SCHEME_V2 = "chp-sealed-v2"  # multi-recipient envelope encryption (proposal 0030)
 _HKDF_INFO = b"chp-sealed-v1"
 _ENC_PRIVATE_NAME = "host_x25519"
 _ENC_PUBLIC_NAME = "host_x25519.pub"
@@ -130,31 +131,86 @@ def _seal_bytes(recipient_pub_b64: str, plaintext: bytes,
     }
 
 
+def _seal_bytes_multi(recipient_pub_b64s: list[str], plaintext: bytes, *,
+                      _cek: bytes | None = None, _content_nonce: bytes | None = None,
+                      _esk_seeds: list[bytes] | None = None,
+                      _wrap_nonces: list[bytes] | None = None) -> dict:
+    """Seal ``plaintext`` to N recipient X25519 public keys → a ``chp-sealed-v2``
+    envelope (envelope encryption). A single random 32-byte content key encrypts
+    the payload ONCE (one ``ct``); that key is then wrapped per recipient by
+    reusing ``_seal_bytes`` (a v1 seal of the 32-byte key). Any one recipient key
+    recovers the content key and decrypts. Test hooks (``_cek``/``_content_nonce``/
+    ``_esk_seeds``/``_wrap_nonces``) reproduce a fixed envelope for vectors — a real
+    seal MUST leave them None."""
+    import os
+
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+    cek = _cek if _cek is not None else os.urandom(32)
+    content_nonce = _content_nonce if _content_nonce is not None else os.urandom(12)
+    ct = ChaCha20Poly1305(cek).encrypt(content_nonce, plaintext, None)
+    recipients = []
+    for i, pub in enumerate(recipient_pub_b64s):
+        wrap = _seal_bytes(pub, cek,
+                           _esk_seed=(_esk_seeds[i] if _esk_seeds else None),
+                           _nonce=(_wrap_nonces[i] if _wrap_nonces else None))
+        # Drop the redundant per-recipient scheme (v2 parent implies the v1 wrap).
+        recipients.append({"epk": wrap["epk"], "nonce": wrap["nonce"],
+                           "wrapped_key": wrap["ct"]})
+    return {
+        "scheme": SEALED_SCHEME_V2,
+        "nonce": base64.b64encode(content_nonce).decode(),
+        "ct": base64.b64encode(ct).decode(),
+        "recipients": recipients,
+    }
+
+
 def _unseal_bytes(envelope: dict, enc_private_key) -> bytes:
-    """Recover the plaintext bytes from a ``chp-sealed-v1`` envelope with the
+    """Recover the plaintext bytes from a ``chp-sealed-v1`` (single-recipient) or
+    ``chp-sealed-v2`` (multi-recipient envelope encryption) envelope with the
     recipient X25519 private key. A wrong key or tampered ciphertext raises."""
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
     from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-    if envelope.get("scheme") != SEALED_SCHEME:
-        raise ValueError(f"unknown sealing scheme: {envelope.get('scheme')!r}")
-    epk = X25519PublicKey.from_public_bytes(base64.b64decode(envelope["epk"]))
-    key = _derive_key(enc_private_key.exchange(epk))
-    return ChaCha20Poly1305(key).decrypt(
-        base64.b64decode(envelope["nonce"]), base64.b64decode(envelope["ct"]), None)
+    scheme = envelope.get("scheme")
+    if scheme == SEALED_SCHEME:
+        epk = X25519PublicKey.from_public_bytes(base64.b64decode(envelope["epk"]))
+        key = _derive_key(enc_private_key.exchange(epk))
+        return ChaCha20Poly1305(key).decrypt(
+            base64.b64decode(envelope["nonce"]), base64.b64decode(envelope["ct"]), None)
+    if scheme == SEALED_SCHEME_V2:
+        cek = None
+        for r in envelope.get("recipients") or []:
+            try:  # trial-unwrap: reconstruct the v1 wrap of the content key
+                cek = _unseal_bytes({"scheme": SEALED_SCHEME, "epk": r["epk"],
+                                     "nonce": r["nonce"], "ct": r["wrapped_key"]},
+                                    enc_private_key)
+                break
+            except Exception:
+                continue  # not our wrap — try the next recipient
+        if cek is None:
+            raise ValueError("no recipient key unwraps this chp-sealed-v2 envelope")
+        return ChaCha20Poly1305(cek).decrypt(
+            base64.b64decode(envelope["nonce"]), base64.b64decode(envelope["ct"]), None)
+    raise ValueError(f"unknown sealing scheme: {scheme!r}")
 
 
 # ── Bundle-level seal / unseal (mirrors signing.withhold_payloads) ───────────
 
 
-def seal_payloads(bundle: dict, recipient_enc_pubkey: str,
+def seal_payloads(bundle: dict, recipient_enc_pubkey: str | list[str],
                   predicate: Callable[[dict], bool] | None = None) -> dict:
     """Return a copy of ``bundle`` with every selected chp-event-hash-v2 event's
-    ``payload`` replaced by a ``{"chp_sealed": <envelope>}`` marker encrypted to
-    ``recipient_enc_pubkey`` (§16, proposal 0025). The ``payload_commitment`` and
-    ``content_hash`` are untouched, so the root and the ORIGINAL signature still
-    verify — no re-signing, no store mutation, exactly like ``withhold_payloads``.
-    An already-withheld or already-sealed payload is left as-is (nothing to seal)."""
+    ``payload`` replaced by a ``{"chp_sealed": <envelope>}`` marker (§16). The
+    ``payload_commitment`` and ``content_hash`` are untouched, so the root and the
+    ORIGINAL signature still verify — no re-signing, no store mutation, exactly like
+    ``withhold_payloads``. An already-withheld or already-sealed payload is left
+    as-is.
+
+    ``recipient_enc_pubkey`` is a single X25519 public key (``chp-sealed-v1``,
+    byte-identical to proposal 0025) OR a **list** of keys → ``chp-sealed-v2``
+    envelope encryption (proposal 0030): the payload is encrypted once and readable
+    by ANY of the N recipients."""
     if predicate is None:
         predicate = lambda ev: True  # noqa: E731
     out = copy.deepcopy(bundle)
@@ -165,7 +221,11 @@ def seal_payloads(bundle: dict, recipient_enc_pubkey: str,
         if isinstance(payload, dict) and ("chp_withheld" in payload or "chp_sealed" in payload):
             continue  # already withheld/sealed
         if predicate(ev):
-            ev["payload"] = {"chp_sealed": _seal_bytes(recipient_enc_pubkey, _canon_bytes(payload))}
+            pt = _canon_bytes(payload)
+            env = (_seal_bytes_multi(recipient_enc_pubkey, pt)
+                   if isinstance(recipient_enc_pubkey, list)
+                   else _seal_bytes(recipient_enc_pubkey, pt))
+            ev["payload"] = {"chp_sealed": env}
     return out
 
 

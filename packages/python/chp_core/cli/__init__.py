@@ -872,7 +872,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seal chp-event-hash-v2 payloads to a recipient X25519 key (root + signature "
              "unchanged; verifies with no key; only the recipient unseals) (spec §16, proposal 0025).")
     b_seal.add_argument("bundle", help="Path to a signed bundle JSON.")
-    b_seal.add_argument("--recipient", required=True, help="Recipient base64 X25519 public key.")
+    b_seal.add_argument("--recipient", required=True, action="append", dest="recipient",
+                        help="Recipient base64 X25519 public key. Repeatable — 2+ recipients "
+                             "seal to chp-sealed-v2 (envelope encryption, readable by any one) (proposal 0030).")
     b_seal.add_argument("--out", default=None, help="Write the sealed bundle here (default stdout).")
     b_seal.add_argument("--capability", action="append", default=None,
                         help="Only seal events for this capability_id (repeatable). Default: all v2 events.")
@@ -887,6 +889,9 @@ def build_parser() -> argparse.ArgumentParser:
     b_unseal.add_argument("--key-dir", default=None, help="Host key dir (default resolved from --host-id).")
     b_unseal.add_argument("--host-id", default=None, help="Host id to resolve the key dir.")
     b_unseal.add_argument("--out", default=None, help="Write the unsealed bundle here (default stdout).")
+    b_unseal.add_argument("--emit-receipt", default=None, metavar="PATH",
+                          help="Write signed disclosure receipts (one per unsealed event) here — "
+                               "this host's signing key attests what it disclosed (proposal 0030).")
     b_unseal.set_defaults(func=cmd_bundle_unseal)
     b_ver = bundle_sub.add_parser(
         "verify",

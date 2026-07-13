@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/disclosure-receipt.schema.json",
+  "title": "DisclosureReceipt",
+  "description": "A recipient's ed25519-signed record that it unsealed a specific sealed event (chp-v0.2.md section 16.1, proposal 0030). The signature covers the canonical header {kind, who, content_hash, payload_commitment, unsealed_at, canonicalization}; the recipient block is the self-attested identity that signs. A non-repudiable disclosure trail over a confidential payload WITHOUT revealing the plaintext. Verification checks structure, the signature against the recipient's key, and who==signing key_id; a caller cross-checks content_hash / payload_commitment against the bundle.",
+  "type": "object",
+  "required": ["kind", "who", "content_hash", "payload_commitment", "unsealed_at", "canonicalization", "recipient", "signature"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "disclosure-receipt" },
+    "who": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The recipient key_id that unsealed the event (equals the signing key_id — the receipt names its own signer)."
+    },
+    "content_hash": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The chain content_hash of the sealed event that was disclosed."
+    },
+    "payload_commitment": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The committed hash of the disclosed plaintext (sha256(canon(plaintext)) under chp-event-hash-v2) — proves WHICH payload without revealing it."
+    },
+    "unsealed_at": {
+      "type": "string",
+      "description": "ISO-8601 time the recipient unsealed the event."
+    },
+    "canonicalization": {
+      "type": "string",
+      "description": "The canonicalization scheme for the signed header (e.g. chp-stable-v1)."
+    },
+    "recipient": {
+      "type": "object",
+      "required": ["host_id", "public_key"],
+      "description": "The recipient's self-attested identity — the key that signs the receipt.",
+      "properties": {
+        "host_id": { "type": "string" },
+        "public_key": { "type": "string" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["algorithm", "key_id", "signature"],
+      "properties": {
+        "algorithm": { "type": "string" },
+        "key_id": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    }
+  }
+}
