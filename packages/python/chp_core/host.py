@@ -251,8 +251,13 @@ class LocalCapabilityHost:
         metadata: JSON | None = None,
         policy: PolicyConfig | None = None,
         safety_evaluator: Any = None,
+        strict_output_schema: bool = False,
     ) -> None:
         self.host_id = host_id
+        # When True, a result violating a capability's output_schema is DENIED
+        # host-wide (proposal 0029); default validate-and-warn. A caller can also
+        # force strict per-invocation via envelope.require_output_schema.
+        self._strict_output = strict_output_schema
         self.version = version
         self.store = store or SQLiteEvidenceStore()
         self.metadata = metadata or {}
@@ -837,14 +842,18 @@ class LocalCapabilityHost:
                         data = item.data
             else:
                 data = await raw if inspect.isawaitable(raw) else raw
+            odeny, ometa = self._validate_output(descriptor, data, envelope)
+            if odeny is not None:
+                return self._deny(envelope, odeny)
             completed = self.emit_evidence(
                 "execution_completed",
                 envelope,
                 # Host-constructed payload only (uri + lifted usage ints) —
                 # unredacted so token accounting survives (the redactor would
-                # scrub *_tokens keys as secrets).
+                # scrub *_tokens keys as secrets). ometa records an output-schema
+                # violation in warn mode (proposal 0029).
                 payload={"capability_uri": descriptor.capability_uri,
-                         **_usage_of(data)},
+                         **_usage_of(data), **ometa},
                 outcome="success",
                 redacted=False,
             )
@@ -947,6 +956,10 @@ class LocalCapabilityHost:
             # deltas (omit-when-absent — a non-stream/zero-chunk completion is
             # byte-identical). The chunks themselves are serving state (recorded
             # below for replay/resume), never hashed into the chain.
+            odeny, ometa = self._validate_output(descriptor, data, envelope)
+            if odeny is not None:
+                yield {"result": self._deny(envelope, odeny)}
+                return
             stream_meta = ({"chunk_count": len(chunks),
                             "chunk_seq_digest": chunk_seq_digest(chunks)}
                            if chunks else {})
@@ -955,9 +968,10 @@ class LocalCapabilityHost:
                 envelope,
                 # Host-constructed payload only (uri + lifted usage ints) —
                 # unredacted so token accounting survives (the redactor would
-                # scrub *_tokens keys as secrets).
+                # scrub *_tokens keys as secrets). ometa records an output-schema
+                # violation in warn mode (proposal 0029).
                 payload={"capability_uri": descriptor.capability_uri,
-                         **_usage_of(data), **stream_meta},
+                         **_usage_of(data), **stream_meta, **ometa},
                 outcome="success",
                 redacted=False,
             )
@@ -1112,6 +1126,43 @@ class LocalCapabilityHost:
             if len(matches) == 1:
                 return matches[0]
             return None
+
+    def _validate_output(
+        self, descriptor: CapabilityDescriptor, data: JSON, envelope: InvocationEnvelope,
+    ) -> tuple[DenialReason | None, JSON]:
+        """Validate a handler result against ``descriptor.output_schema`` (proposal 0029).
+
+        Mirror of the input-schema gate (``_prepare``), but AFTER execution.
+        Returns ``(denial, meta)``:
+          - ``denial``: a DenialReason iff the result violates the schema AND
+            strict is requested (``envelope.require_output_schema`` or the host's
+            ``strict_output_schema``); the caller returns/yields ``_deny``.
+          - ``meta``: ``{"output_schema_valid": False, "output_schema_error": …}``
+            to fold into the ``execution_completed`` evidence in the default
+            validate-and-WARN mode (still a success, but the violation is on the
+            chain); ``{}`` when valid or no schema is declared.
+
+        Default is warn so existing capabilities with loose output_schema don't
+        start failing on a strict result contract they never enforced."""
+        if not descriptor.output_schema:
+            return None, {}
+        try:
+            import jsonschema
+            jsonschema.validate(data, descriptor.output_schema)
+            return None, {}
+        except jsonschema.ValidationError as exc:
+            msg: str = exc.message
+            path = list(exc.absolute_path) or None
+        except Exception as exc:  # invalid schema, etc. — treat as a violation
+            msg, path = f"Schema validation error: {exc}", None
+        if bool(envelope.require_output_schema) or self._strict_output:
+            return DenialReason(
+                code="output_schema_validation_failed",
+                message=msg,
+                retryable=False,
+                details={"schema_id": descriptor.output_schema.get("$id"), "path": path},
+            ), {}
+        return None, {"output_schema_valid": False, "output_schema_error": msg}
 
     def _deny(self, envelope: InvocationEnvelope, denial: DenialReason) -> InvocationResult:
         denied = self.emit_evidence(

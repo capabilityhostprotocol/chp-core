@@ -1,0 +1,48 @@
+{
+  "kind": "output-schema",
+  "description": "Proposal 0029: a capability result is validated against descriptor.output_schema post-execution. This KAT exercises the shared subset all three reference impls agree on — the required-keys dimension (a missing required key is a violation; Python's full jsonschema, the TS host's minimal check, and verify.mjs all agree). `valid:false` means the result violates the schema, so a strict/require call denies output_schema_validation_failed while the default warns.",
+  "cases": [
+    {
+      "note": "conforming: all required keys present",
+      "output_schema": {"type": "object", "required": ["ok"]},
+      "result": {"ok": true},
+      "valid": true
+    },
+    {
+      "note": "violation: missing required key",
+      "output_schema": {"type": "object", "required": ["ok"]},
+      "result": {"nope": 1},
+      "valid": false
+    },
+    {
+      "note": "conforming: extra keys are fine when only required is asserted",
+      "output_schema": {"type": "object", "required": ["ok"]},
+      "result": {"ok": false, "extra": 2},
+      "valid": true
+    },
+    {
+      "note": "violation: multiple required keys, one missing",
+      "output_schema": {"type": "object", "required": ["a", "b"]},
+      "result": {"a": 1},
+      "valid": false
+    },
+    {
+      "note": "conforming: multiple required keys all present",
+      "output_schema": {"type": "object", "required": ["a", "b"]},
+      "result": {"a": 1, "b": 2},
+      "valid": true
+    },
+    {
+      "note": "violation: non-object result satisfies no required key",
+      "output_schema": {"type": "object", "required": ["ok"]},
+      "result": "a string",
+      "valid": false
+    },
+    {
+      "note": "no required constraint: any result conforms",
+      "output_schema": {"type": "object"},
+      "result": {"anything": 1},
+      "valid": true
+    }
+  ]
+}

@@ -77,6 +77,25 @@ describe('governed invocation pipeline (spec/chp-invocation-pipeline.md)', () =>
     expect(types(h.replay('c'))).toEqual(['execution_skipped']);
   });
 
+  it('output_schema: warn by default, deny when required (proposal 0029)', async () => {
+    const schema = { id: 'o.cap', version: '1.0.0', output_schema: { type: 'object', required: ['ok'] } };
+    // (a) warn-mode host: a violating result still succeeds, marker on evidence
+    const warn = new LocalCapabilityHost('t');
+    warn.register(schema, async () => ({ nope: 1 }));
+    const rw = await warn.ainvokeEnvelope({ capability_id: 'o.cap', correlation: { correlation_id: 'c' } });
+    expect(rw.success).toBe(true);
+    const done = warn.replay('c').find((e) => e.event_type === 'execution_completed')!;
+    expect((done.payload as Record<string, unknown>).output_schema_valid).toBe(false);
+    // (b) caller requires the shape → hard denial even on a warn host
+    const rd = await warn.ainvokeEnvelope({ capability_id: 'o.cap', require_output_schema: true, correlation: { correlation_id: 'c2' } });
+    expect(rd.outcome).toBe('denied');
+    expect(rd.denial!.code).toBe('output_schema_validation_failed');
+    // (c) conforming result passes even under require
+    warn.register({ ...schema, id: 'o.ok' }, async () => ({ ok: true }));
+    const rok = await warn.ainvokeEnvelope({ capability_id: 'o.ok', require_output_schema: true, correlation: { correlation_id: 'c3' } });
+    expect(rok.success).toBe(true);
+  });
+
   it('emits a verifiable hash chain', async () => {
     const h = buildFixtureHost();
     await h.ainvokeEnvelope({ capability_id: 'conformance.echo', payload: { value: 'x' }, correlation: { correlation_id: 'c' } });

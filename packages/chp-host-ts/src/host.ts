@@ -57,6 +57,9 @@ export class LocalCapabilityHost {
       signingKey?: HostKey;
       /** Domain anchor (spec §3 Anchors) — the trust root a never-met verifier resolves. */
       domain?: string;
+      /** When true, a result violating output_schema is denied host-wide
+       * (proposal 0029); default validate-and-warn. */
+      strictOutputSchema?: boolean;
     } = {},
   ) {
     // Built once — stable valid_from + anchors (never rebuilt per request).
@@ -368,7 +371,10 @@ export class LocalCapabilityHost {
         }
         data = terminal;
       }
-      const done = this.emit('execution_completed', env, { capability_uri: `${d.id}:${d.version}` }, 'success');
+      const [oDeny, oMeta] = this.checkOutputSchema(d, data as JsonValue, env);
+      if (oDeny) return this.recordResult(this.deny(env, oDeny));
+      const done = this.emit('execution_completed', env,
+        { capability_uri: `${d.id}:${d.version}`, ...oMeta }, 'success');
       return this.recordResult(this.result(env, {
         outcome: 'success', success: true, capability_version: d.version,
         data: data as JsonValue, evidence_ids: [started.event_id, done.event_id], started_at: started.timestamp,
@@ -418,9 +424,11 @@ export class LocalCapabilityHost {
       } else {
         data = raw as JsonValue;
       }
+      const [oDeny, oMeta] = this.checkOutputSchema(d, data, env);
+      if (oDeny) { yield { result: this.recordResult(this.deny(env, oDeny)) }; return; }
       // §13.1 chunk-sequence evidence: commit a digest of the delivered deltas
       // (omit-when-absent — a non-stream/zero-chunk completion is byte-identical).
-      const donePayload: Record<string, JsonValue> = { capability_uri: `${d.id}:${d.version}` };
+      const donePayload: Record<string, JsonValue> = { capability_uri: `${d.id}:${d.version}`, ...oMeta };
       if (chunks.length) {
         donePayload.chunk_count = chunks.length;
         donePayload.chunk_seq_digest = chunkSeqDigest(chunks);
@@ -511,6 +519,29 @@ export class LocalCapabilityHost {
       return { code: 'input_schema_validation_failed', message: `missing: ${missing.join(', ')}`, retryable: false };
     }
     return null;
+  }
+
+  /** Post-execution output validation (proposal 0029, gate 12). Mirror of
+   * checkInputSchema but over the RESULT. Returns [denial, meta]: a denial iff
+   * the result violates output_schema AND strict is requested (env.require_output_schema
+   * or host strictOutputSchema); else meta carries warn markers to fold into the
+   * completed evidence (default validate-and-warn). Narrow subset (required keys),
+   * matching checkInputSchema. */
+  private checkOutputSchema(
+    d: CapabilityDescriptor, data: JsonValue, env: InvocationEnvelope,
+  ): [DenialReason | null, Record<string, JsonValue>] {
+    const s = d.output_schema as { required?: string[] } | null | undefined;
+    if (!s || !Array.isArray(s.required)) return [null, {}];
+    const obj = (data ?? {}) as Record<string, JsonValue>;
+    const missing = (typeof data === 'object' && data !== null && !Array.isArray(data))
+      ? s.required.filter((f) => !(f in obj))
+      : s.required.slice();  // non-object result satisfies no required key
+    if (!missing.length) return [null, {}];
+    const msg = `missing: ${missing.join(', ')}`;
+    if (env.require_output_schema || this.opts.strictOutputSchema) {
+      return [{ code: 'output_schema_validation_failed', message: msg, retryable: false }, {}];
+    }
+    return [null, { output_schema_valid: false, output_schema_error: msg }];
   }
 
   private checkSafety(d: CapabilityDescriptor, env: InvocationEnvelope): DenialReason | null {

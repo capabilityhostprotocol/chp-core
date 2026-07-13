@@ -679,6 +679,7 @@ class DenialReason:
         "unsupported_mode",               # invoke mode the host doesn't support
         "policy_blocked",                 # PolicyConfig rule (pattern or risk tier) blocked it
         "input_schema_validation_failed", # payload failed the capability's input schema
+        "output_schema_validation_failed",# result violated the capability's output schema (strict/require, proposal 0029)
         "invariant_failed",               # a declared invariant did not hold
         "budget_exceeded",                # AutonomyProfile budget (calls/tokens/cost) exhausted
         "approval_required",              # human approval gate not satisfied
@@ -716,6 +717,11 @@ class InvocationEnvelope:
     # range the resolved capability's version MUST satisfy, else the resolution
     # gate denies capability_version_unsupported. None = today's exact resolution.
     requested_capability_version: str | None = None
+    # OPTIONAL output-shape requirement (chp-v0.2.md §1.1, proposal 0029): when
+    # True, a result that violates the capability's output_schema is DENIED
+    # (output_schema_validation_failed) instead of the default validate-and-warn.
+    # False (default) is omitted on the wire so existing envelopes are unchanged.
+    require_output_schema: bool = False
     invocation_id: str = field(default_factory=lambda: new_id("inv"))
     mode: str = "sync"
     correlation: CorrelationContext = field(default_factory=CorrelationContext)
@@ -733,6 +739,7 @@ class InvocationEnvelope:
             capability_id=value["capability_id"],
             version=value.get("version"),
             requested_capability_version=value.get("requested_capability_version"),
+            require_output_schema=bool(value.get("require_output_schema", False)),
             mode=value.get("mode", "sync"),
             correlation=CorrelationContext.from_mapping(value.get("correlation")),
             subject=dict(value.get("subject") or {"id": "local", "type": "user"}),
@@ -749,6 +756,8 @@ class InvocationEnvelope:
             del data["mandate"]  # additive field: absent stays absent on the wire
         if data.get("requested_capability_version") is None:
             del data["requested_capability_version"]  # additive (proposal 0028)
+        if not data.get("require_output_schema"):
+            del data["require_output_schema"]  # additive: default False absent (proposal 0029)
         return data
 
 

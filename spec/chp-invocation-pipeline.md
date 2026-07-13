@@ -70,6 +70,7 @@ replay never bypasses it. Streaming mode is excluded.
 | 9 | Input schema | `descriptor.input_schema` is set and the payload fails JSON-Schema validation | `denied` | `input_schema_validation_failed` | false | `execution_denied` (SHOULD carry `schema_id`, `path`) |
 | 10 | Safety | A safety evaluator is configured and a guardrail blocks (see §6) | `denied` | `safety_blocked` | false | assessment pair + guardrail/block events **then** `execution_denied` |
 | 11 | Execute | All gates passed | `success` \| `failure` | n/a | n/a | `execution_started` → `execution_completed` (success) \| `execution_failed` (handler raised) |
+| 12 | Output schema | `descriptor.output_schema` is set and the **result** fails JSON-Schema validation. POST-execution (proposal 0029). Strict only — host `strict_output_schema` or caller `require_output_schema`; default is validate-and-**warn** (the completed evidence carries `output_schema_valid:false` + `output_schema_error`, outcome stays `success`) | `denied` (strict) \| `success` (warn) | `output_schema_validation_failed` | false | `execution_denied` (SHOULD carry `schema_id`, `path`) in strict; else `execution_completed` with the warn markers |
 
 **Subtlety 1 — gate 3 is a skip, not a deny.** A disabled capability yields
 outcome **`skipped`** and event `execution_skipped`, *not* `denied`. It carries

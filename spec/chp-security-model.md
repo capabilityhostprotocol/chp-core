@@ -95,7 +95,8 @@ why"* is itself provable. The reserved codes are `approval_required`,
 `budget_exceeded`, `capability_disabled`, `capability_not_found`,
 `capability_version_unsupported`, `host_unreachable`,
 `input_schema_validation_failed`, `invariant_failed`,
-`mandate_exhausted`, `mandate_invalid`, `policy_blocked`, `safety_blocked`,
+`mandate_exhausted`, `mandate_invalid`, `output_schema_validation_failed`,
+`policy_blocked`, `safety_blocked`,
 `unsupported_mode`, `version_unsupported` (see [reserved-names.md](reserved-names.md); the source of
 truth is `DenialReason.RESERVED_CODES`). Residual risk: the codes standardize
 *which* refusal a host claims, not that the host is honest about having applied

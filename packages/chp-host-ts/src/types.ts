@@ -31,6 +31,7 @@ export interface CapabilityDescriptor {
   autonomy?: AutonomyProfile | null;
   invariants?: Invariant[];
   input_schema?: JsonValue | null;
+  output_schema?: JsonValue | null;
   enabled?: boolean;
 }
 
@@ -51,6 +52,10 @@ export interface InvocationEnvelope {
   /** OPTIONAL presented authority (chp-v0.2.md §10) — a principal-signed
    * mandate the host verifies before executing. Absent = today's behavior. */
   mandate?: Record<string, JsonValue> | null;
+  /** OPTIONAL output-shape requirement (chp-v0.2.md §1.1, proposal 0029): when
+   * true, a result violating the capability's output_schema is DENIED
+   * (output_schema_validation_failed) instead of the default validate-and-warn. */
+  require_output_schema?: boolean;
 }
 
 export interface DenialReason {

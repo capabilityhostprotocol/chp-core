@@ -18,6 +18,7 @@ export const RESERVED_DENIAL_CODES = [
   "invariant_failed",
   "mandate_exhausted",
   "mandate_invalid",
+  "output_schema_validation_failed",
   "policy_blocked",
   "safety_blocked",
   "unsupported_mode",
