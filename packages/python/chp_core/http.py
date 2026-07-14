@@ -685,6 +685,11 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = self._read_json()
+            # Trust boundary (proposal 0040): every POST route expects a JSON object.
+            # A valid but non-object body (array / string / number) would otherwise
+            # crash `body.get(...)` with AttributeError → a 500; reject it as a 400.
+            if not isinstance(body, dict):
+                raise ValueError("request body must be a JSON object")
             if path == "/invoke":
                 if body.get("mode") == "stream":
                     self._invoke_stream(body)
@@ -717,10 +722,13 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"Unknown route: {path}")
         except KeyError as exc:
             self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", f"Missing required field: {exc}")
-        except ValueError as exc:
-            self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
         except json.JSONDecodeError as exc:
             self._write_error(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc))
+        except (ValueError, TypeError, AttributeError) as exc:
+            # A malformed-shape body drove a type/attribute error while parsing —
+            # a client fault, not a server fault (0040). Capability handler
+            # exceptions never reach here (the host wraps them into a failure result).
+            self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 — stdlib signature
         # Quiet by default (evidence is the record); CHP_HTTP_LOG=1 turns on
