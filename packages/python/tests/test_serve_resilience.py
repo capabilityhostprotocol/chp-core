@@ -140,5 +140,85 @@ class SigtermDrainTests(unittest.TestCase):
             proc.kill()
 
 
+class ConcurrencyLimitTests(unittest.TestCase):
+    """Production hardening (proposal 0039): a bounded concurrency cap sheds excess
+    load with a fast 503 instead of spawning unbounded threads."""
+
+    def test_over_cap_sheds_503_and_recovers(self) -> None:
+        import http.client
+
+        started = threading.Event()
+        release = threading.Event()
+
+        async def slow(_ctx, _payload):
+            started.set()
+            release.wait(timeout=10)  # hold the one concurrency slot
+            return {"ok": True}
+
+        host = LocalCapabilityHost("cap-host", store=SQLiteEvidenceStore(":memory:"))
+        host.register(CapabilityDescriptor(id="slow.cap", version="1.0.0", description="."), slow)
+
+        prev = os.environ.get("CHP_HOST_MAX_CONCURRENCY")
+        os.environ["CHP_HOST_MAX_CONCURRENCY"] = "1"  # read at create_http_server time
+        try:
+            server, base = _serve(host)
+        finally:
+            if prev is None:
+                os.environ.pop("CHP_HOST_MAX_CONCURRENCY", None)
+            else:
+                os.environ["CHP_HOST_MAX_CONCURRENCY"] = prev
+
+        port = server.server_address[1]
+
+        def _post(path, body, timeout=10):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+            conn.request("POST", path, json.dumps(body),
+                         {"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            data = resp.read().decode()
+            conn.close()
+            return resp.status, data
+
+        try:
+            # Request A fills the single slot and blocks inside the handler.
+            a_result: list = []
+            a = threading.Thread(target=lambda: a_result.append(
+                _post("/invoke", {"capability_id": "slow.cap", "payload": {},
+                                  "correlation_id": "a"})), daemon=True)
+            a.start()
+            self.assertTrue(started.wait(timeout=5), "request A must reach the handler")
+
+            # Request B arrives at capacity → a fast 503 with the shed code.
+            st, body = _post("/invoke", {"capability_id": "slow.cap", "payload": {},
+                                         "correlation_id": "b"}, timeout=5)
+            self.assertEqual(st, 503, f"over-cap request must be shed with 503, got {st}")
+            self.assertEqual(json.loads(body)["error"]["code"], "server_at_capacity")
+
+            # Release A; the slot frees and a later request succeeds.
+            release.set()
+            a.join(timeout=5)
+            self.assertEqual(a_result[0][0], 200, "request A must complete once released")
+            st2, _ = _post("/invoke", {"capability_id": "slow.cap", "payload": {},
+                                       "correlation_id": "c"}, timeout=5)
+            self.assertEqual(st2, 200, "a request after the slot frees must succeed")
+        finally:
+            release.set()
+            server.shutdown(); server.server_close()
+
+    def test_cap_disabled_when_zero(self) -> None:
+        prev = os.environ.get("CHP_HOST_MAX_CONCURRENCY")
+        os.environ["CHP_HOST_MAX_CONCURRENCY"] = "0"
+        try:
+            host = LocalCapabilityHost("nocap", store=SQLiteEvidenceStore(":memory:"))
+            server = create_http_server(host, bind="127.0.0.1", port=0)
+            self.assertIsNone(server._concurrency, "cap=0 disables the semaphore")
+            server.server_close()
+        finally:
+            if prev is None:
+                os.environ.pop("CHP_HOST_MAX_CONCURRENCY", None)
+            else:
+                os.environ["CHP_HOST_MAX_CONCURRENCY"] = prev
+
+
 if __name__ == "__main__":
     unittest.main()
