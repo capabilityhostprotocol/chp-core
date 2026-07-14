@@ -5,6 +5,18 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.6] — Normative doc: verifier fail-closed robustness over 0.8.5
+
+### Added (normative doc — no wire change)
+- **Verifier robustness (fail-closed)** (chp-security-model.md, production hardening
+  proposal 0042): every evidence verifier (bundle, attestation, mandate, auth-token,
+  store-head/rekor anchor, disclosure receipt, chain-witness, monitor report,
+  continuity/revocation) is **fail-closed** against untrusted input — malformed input of
+  any shape yields a clean *invalid* verdict; a verifier never raises (a crash on a hostile
+  payload is a DoS) and never false-verifies garbage. Documents the property + its honest
+  boundary (no-crash/no-false-accept, not a proof of the crypto logic). Regression gate:
+  `test_verifier_robustness.py` (fuzz matrix over every verifier).
+
 ## [0.8.5] — Informative: per-caller rate limiting + load observability over 0.8.4
 
 ### Added (informative — no normative wire change)
