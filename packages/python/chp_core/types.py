@@ -245,13 +245,16 @@ class CorrelationContext:
     def from_mapping(cls, value: JSON | None) -> "CorrelationContext":
         if not value:
             return cls()
+        if not isinstance(value, dict):  # trust boundary: reject a wrong-shape correlation (0040)
+            raise ValueError("correlation must be a JSON object")
         correlation_id = value.get("correlation_id") or new_id("corr")
+        baggage = value.get("baggage")
         return cls(
             correlation_id=str(correlation_id),
             causation_id=value.get("causation_id"),
             parent_correlation_id=value.get("parent_correlation_id"),
             trace_id=value.get("trace_id"),
-            baggage=dict(value.get("baggage") or {}),
+            baggage=dict(baggage) if isinstance(baggage, dict) else {},
         )
 
     def to_dict(self) -> JSON:
@@ -734,19 +737,38 @@ class InvocationEnvelope:
 
     @classmethod
     def from_mapping(cls, value: JSON) -> "InvocationEnvelope":
+        # Deserialization is a trust boundary: a hostile client may send valid JSON
+        # of the wrong shape. Validate + reject with a clean ValueError (→ HTTP 400)
+        # rather than letting dict(non-dict) raise a TypeError (→ 500) — proposal 0040.
+        if not isinstance(value, dict):
+            raise ValueError("invocation envelope must be a JSON object")
+        cap = value.get("capability_id")
+        if not isinstance(cap, str) or not cap:
+            raise ValueError("capability_id must be a non-empty string")
+
+        def _obj(v: JSON, field: str) -> JSON:
+            if v is None:
+                return {}
+            if not isinstance(v, dict):
+                raise ValueError(f"{field} must be a JSON object")
+            return dict(v)
+
+        payload_src = value.get("payload")
+        if payload_src is None:
+            payload_src = value.get("arguments")
         return cls(
             invocation_id=value.get("invocation_id") or new_id("inv"),
-            capability_id=value["capability_id"],
+            capability_id=cap,
             version=value.get("version"),
             requested_capability_version=value.get("requested_capability_version"),
             require_output_schema=bool(value.get("require_output_schema", False)),
             mode=value.get("mode", "sync"),
             correlation=CorrelationContext.from_mapping(value.get("correlation")),
-            subject=dict(value.get("subject") or {"id": "local", "type": "user"}),
-            payload=dict(value.get("payload") or value.get("arguments") or {}),
+            subject=_obj(value.get("subject"), "subject") or {"id": "local", "type": "user"},
+            payload=_obj(payload_src, "payload"),
             requested_at=value.get("requested_at") or utc_now(),
-            metadata=dict(value.get("metadata") or {}),
-            mandate=dict(value["mandate"]) if value.get("mandate") else None,
+            metadata=_obj(value.get("metadata"), "metadata"),
+            mandate=(_obj(value.get("mandate"), "mandate") if value.get("mandate") else None),
         )
 
     def to_dict(self) -> JSON:

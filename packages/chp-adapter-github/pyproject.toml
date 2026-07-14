@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-github"
-version = "0.42.1"
+version = "0.42.2"
 description = "CHP capability adapter — GitHub repository, pull request, issue, and CI inspection as governed CHP capabilities"
 readme = "README.md"
 requires-python = ">=3.10"
