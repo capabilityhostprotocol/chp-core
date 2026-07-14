@@ -25,7 +25,7 @@ from typing import Any, Callable
 
 from . import merkle
 from .dsse import bundle_to_attestation
-from .signing import BundleVerification, _canon_jcs
+from .signing import BundleVerification, _canon_jcs, _fail_closed_bv
 
 REKOR_ANCHOR_TYPE = "rekor"
 _INTOTO_KIND = "intoto"
@@ -127,6 +127,7 @@ def set_message(anchor: dict) -> bytes:
     })
 
 
+@_fail_closed_bv
 def verify_rekor_anchor(statement: dict, *, log_public_key_pem: str | bytes) -> BundleVerification:
     """Offline-verify a ``store-head-anchor`` of ``anchor.type = "rekor"`` against a
     pinned Rekor log public key. Four independent checks:

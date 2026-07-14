@@ -102,6 +102,21 @@ truth is `DenialReason.RESERVED_CODES`). Residual risk: the codes standardize
 *which* refusal a host claims, not that the host is honest about having applied
 the gate — that honesty is what witnessing and completeness make checkable.
 
+## Verifier robustness (fail-closed)
+
+Every verifier — bundle, attestation, mandate, auth-token, store-head-anchor, rekor
+anchor, disclosure receipt, chain-witness, monitor report, continuity/revocation — is
+**fail-closed** against untrusted input (proposal 0042): given input of *any* shape
+(a non-object, missing/wrong-typed/truncated fields, nonsense nesting), a verifier
+returns a clean **invalid** verdict. It never raises (a crash on a hostile payload would
+be a denial-of-service — an unauthenticated client could topple a host by POSTing a
+malformed bundle) and never *falsely verifies* garbage. This is enforced structurally
+(an input-shape guard + a catch that converts any residual error to "invalid") and
+regression-tested by a fuzz matrix over every verifier. Residual risk: the property is
+"no crash / no false-accept on malformed input," not a proof of the cryptographic
+verification logic itself — that rests on the underlying ed25519/ECDSA primitives and
+the canonicalization being correct.
+
 ## What moved from v0.1 non-goal → shipped
 
 The v0.1 threat model ([docs/security/threat-model-v0.1.md](../docs/security/threat-model-v0.1.md))

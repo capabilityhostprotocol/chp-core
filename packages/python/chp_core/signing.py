@@ -496,6 +496,43 @@ def sign_bundle(bundle: dict, host_key: HostKey, *, valid_until: str | None = No
     return signed
 
 
+# Verifiers must FAIL CLOSED (proposal 0042): given untrusted input of any shape, a
+# verifier returns a clean *invalid* verdict — it must never raise (a non-dict input
+# would otherwise crash `x.get(...)` → an unhandled 500 / DoS) and never falsely verify.
+# These decorators guard the input shape + convert any residual crash into "invalid".
+# `BundleVerification` is referenced lazily (only at call time), so it may be defined
+# further down the module.
+def _fail_closed_bv(fn: Any) -> Any:
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(value: Any, *args: Any, **kwargs: Any) -> "BundleVerification":
+        if not isinstance(value, dict):
+            return BundleVerification(False, "signed", {"structure": False},
+                                      "verifier input is not a JSON object")
+        try:
+            return fn(value, *args, **kwargs)
+        except Exception:  # noqa: BLE001 — a verifier fails closed, never crashes
+            return BundleVerification(False, "signed", {"structure": False},
+                                      "malformed verifier input rejected")
+    return wrapper
+
+
+def _fail_closed_bool(fn: Any) -> Any:
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(value: Any, *args: Any, **kwargs: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        try:
+            return fn(value, *args, **kwargs)
+        except Exception:  # noqa: BLE001 — fail closed
+            return False
+    return wrapper
+
+
+@_fail_closed_bool
 def verify_attestation(
     attestation: dict,
     *,
@@ -558,6 +595,7 @@ def did_anchor_message(chp_public_key_b64: str, host_id: str) -> bytes:
     return _canon({"chp_public_key": chp_public_key_b64, "host_id": host_id})
 
 
+@_fail_closed_bool
 def verify_did_anchor(anchor: dict, chp_public_key_b64: str, host_id: str) -> bool:
     """Offline-verify a ``did`` anchor: the DID's ed25519 key (decoded from
     did:key) must have countersigned THIS CHP key + host_id via SSHSIG."""
@@ -606,6 +644,7 @@ def build_store_head_anchor(host_id: str, sequence: int, store_head: str, *,
     return stmt
 
 
+@_fail_closed_bv
 def verify_store_head_anchor(
     statement: dict, *, rekor_log_public_key_pem: str | bytes | None = None,
 ) -> BundleVerification:
@@ -702,6 +741,7 @@ def rotate_keypair(
     return new, statement
 
 
+@_fail_closed_bool
 def verify_continuity(statement: dict) -> bool:
     """Verify a rotation continuity statement: signed by the OLD key it names.
     Self-contained — but a verifier holding an independently-pinned old key
@@ -750,6 +790,7 @@ def revoke_key(key_dir: str | Path = DEFAULT_KEY_DIR, *, reason: str = "") -> di
     return statement
 
 
+@_fail_closed_bool
 def verify_revocation(statement: dict) -> bool:
     """A revocation statement is self-signed by the key it revokes (a signed
     'do not trust me' — unforgeable by a third party, and an attacker gains
@@ -891,6 +932,7 @@ class BundleVerification:
     anchored_did: str | None = None
 
 
+@_fail_closed_bv
 def verify_bundle(bundle: dict, *, expected_key_id: str | None = None,
                   resolve: bool = False) -> BundleVerification:
     """Offline-verify an exported bundle: per-event hashes, chain continuity,
@@ -1150,6 +1192,7 @@ def build_provenance_statement(package: str, version: str, wheel_sha256: str,
     return stmt
 
 
+@_fail_closed_bv
 def verify_provenance_statement(stmt: dict, *,
                                 expected_key_id: str | None = None,
                                 wheel_sha256: str | None = None) -> BundleVerification:
@@ -1258,6 +1301,7 @@ def build_chain_witness(witnessed_host_id: str, sequence: int, store_head: str,
     return statement
 
 
+@_fail_closed_bv
 def verify_chain_witness(statement: dict, *,
                          expected_host_id: str | None = None,
                          expected_witness_key: str | None = None) -> BundleVerification:
@@ -1370,6 +1414,7 @@ def build_store_head_monitor_report(host_id: str, *, verdict: str,
     return report
 
 
+@_fail_closed_bv
 def verify_store_head_monitor_report(
         report: dict, *, expected_host_id: str | None = None,
         expected_monitor_key: str | None = None) -> BundleVerification:
@@ -1466,6 +1511,7 @@ def build_auth_token(caller_key: HostKey, *, sub: str, aud: str, iat: str, exp: 
     return token
 
 
+@_fail_closed_bv
 def verify_auth_token(token: dict, *, aud: str, at_time: str,
                       expected_caller_key: str | None = None) -> BundleVerification:
     """Verify an auth-token is internally valid (§5, proposal 0027): structure,
@@ -1543,6 +1589,7 @@ def build_disclosure_receipt(recipient_key: HostKey, *, content_hash: str,
     return receipt
 
 
+@_fail_closed_bv
 def verify_disclosure_receipt(receipt: dict) -> BundleVerification:
     """Verify a disclosure receipt is internally valid (§16, proposal 0030):
     structure, the header signature against the recipient's self-attested key, and
@@ -1729,6 +1776,7 @@ def mandate_root_principal(mandate: dict) -> str | None:
     return (node.get("principal") or {}).get("host_id")
 
 
+@_fail_closed_bv
 def verify_mandate(mandate: dict, *, at_time: str | None = None,
                    capability_id: str | None = None,
                    delegate_id: str | None = None,
@@ -1873,6 +1921,7 @@ def build_mandate_revocation(mandate: dict, host_key: HostKey, *,
     return statement
 
 
+@_fail_closed_bv
 def verify_mandate_revocation(statement: dict, *,
                               expected_principal_key: str | None = None) -> BundleVerification:
     """Offline-verify a mandate-revocation statement: structure, header
