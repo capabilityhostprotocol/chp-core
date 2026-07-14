@@ -22,6 +22,7 @@ never became a governed invocation (bad JSON, unknown route, unauthenticated).
 | Missing or invalid `X-CHP-Key` | `401` | error envelope |
 | Unknown route | `404` | error envelope |
 | Host shedding load at its concurrency cap (informative — a host MAY) | `503` | error envelope (`code: "server_at_capacity"`) + `Retry-After` |
+| Per-caller rate limit exceeded on a work request (informative — a host MAY) | `429` | error envelope (`code: "rate_limited"`) + `Retry-After` |
 
 This is deliberate: a `denied` invocation is a **successful governance
 decision**, not a transport failure — it produces evidence and MUST be returned
