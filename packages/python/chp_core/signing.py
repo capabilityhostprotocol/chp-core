@@ -606,7 +606,9 @@ def build_store_head_anchor(host_id: str, sequence: int, store_head: str, *,
     return stmt
 
 
-def verify_store_head_anchor(statement: dict) -> BundleVerification:
+def verify_store_head_anchor(
+    statement: dict, *, rekor_log_public_key_pem: str | bytes | None = None,
+) -> BundleVerification:
     """Offline-verify a store-head anchor: the external did:key's ed25519 key
     must have SSHSIG-countersigned THIS (host_id, sequence, store_head,
     anchored_at) under namespace ``chp-store-head-anchor``. Independent of the
@@ -614,12 +616,23 @@ def verify_store_head_anchor(statement: dict) -> BundleVerification:
     colludes."""
     from . import sshsig  # noqa: PLC0415
 
+    anchor = statement.get("anchor") or {}
+    # Rekor transparency-log anchor (proposal 0033): a different proof shape (an
+    # RFC 6962 inclusion proof + an ECDSA SET, not an SSHSIG over the message), so
+    # it dispatches to the rekor verifier — which needs the log's pinned public key.
+    if anchor.get("type") == "rekor":
+        from . import rekor  # noqa: PLC0415
+        if rekor_log_public_key_pem is None:
+            return BundleVerification(
+                False, "signed", {"rekor_key_pinned": False},
+                "a rekor anchor requires the log's pinned public key to verify")
+        return rekor.verify_rekor_anchor(statement, log_public_key_pem=rekor_log_public_key_pem)
+
     checks: dict[str, bool] = {}
     checks["structure"] = (statement.get("kind") == "store-head-anchor"
                            and bool(statement.get("host_id"))
                            and isinstance(statement.get("sequence"), int)
                            and bool(statement.get("store_head")))
-    anchor = statement.get("anchor") or {}
     anchored_did: str | None = None
     try:
         raw_pub = sshsig.did_key_to_raw(str(anchor.get("did", "")))

@@ -19,6 +19,7 @@ from ._core import (
     cmd_witness_verify,
     cmd_witness_quorum,
     cmd_witness_anchor_verify,
+    cmd_witness_anchor_rekor,
     cmd_provenance_sign,
     cmd_provenance_verify,
     cmd_revoke_key,
@@ -792,7 +793,19 @@ def build_parser() -> argparse.ArgumentParser:
     wa_verify = wit_anchor_sub.add_parser(
         "verify", help="Offline-verify a store-head-anchor statement's external SSHSIG countersignature.")
     wa_verify.add_argument("file", help="Path to a store-head-anchor JSON.")
+    wa_verify.add_argument("--rekor-key", default=None,
+                           help="Rekor log public-key PEM — required to verify a rekor anchor (proposal 0033).")
     wa_verify.set_defaults(func=cmd_witness_anchor_verify)
+    wa_rekor = wit_anchor_sub.add_parser(
+        "rekor", help="Submit a bundle to a Rekor transparency log → a rekor store-head-anchor "
+                      "(NETWORK, opt-in, permanent public record; spec §12, proposal 0033).")
+    wa_rekor.add_argument("bundle", help="Path to a signed bundle JSON.")
+    wa_rekor.add_argument("--url", required=True, help="Rekor base URL (e.g. https://rekor.sigstore.dev).")
+    wa_rekor.add_argument("--sequence", default=0, help="The store sequence this anchor pins.")
+    wa_rekor.add_argument("--host-id", default=None, help="Host id (default: the bundle's host_id).")
+    wa_rekor.add_argument("--key-dir", default=None, help="Signing key dir (default resolved from --host-id).")
+    wa_rekor.add_argument("--out", default=None, help="Write the rekor anchor here (default stdout).")
+    wa_rekor.set_defaults(func=cmd_witness_anchor_rekor)
 
     revocation_p = subcommands.add_parser(
         "revocation",
