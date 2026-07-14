@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, buildCompleteness, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, buildCompleteness, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, bestSatisfying, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import { StreamResult } from './types.js';
@@ -38,7 +38,10 @@ interface Registered { descriptor: CapabilityDescriptor; handler: Handler; enabl
 
 export class LocalCapabilityHost {
   readonly store = new InMemoryEvidenceStore();
-  private readonly caps = new Map<string, Registered>();
+  // id → all registered versions of that capability (proposal 0028: a host may
+  // run several versions of an id; the resolution gate picks the one satisfying
+  // a requested semver range).
+  private readonly caps = new Map<string, Registered[]>();
   private readonly attestation: JsonValue | null;
   /** Received mandate revocations (§10 Revocation) — in-memory for this
    * conformance host; gate 5 consults them under the issuer-only rule. */
@@ -109,7 +112,12 @@ export class LocalCapabilityHost {
   }
 
   register(descriptor: CapabilityDescriptor, handler: Handler): void {
-    this.caps.set(descriptor.id, { descriptor, handler, enabled: descriptor.enabled !== false });
+    const reg: Registered = { descriptor, handler, enabled: descriptor.enabled !== false };
+    const versions = this.caps.get(descriptor.id) ?? [];
+    // Replace a same-version re-registration; otherwise add the new version.
+    const at = versions.findIndex((r) => r.descriptor.version === descriptor.version);
+    if (at >= 0) versions[at] = reg; else versions.push(reg);
+    this.caps.set(descriptor.id, versions);
   }
 
   discover(): Record<string, JsonValue> {
@@ -121,7 +129,7 @@ export class LocalCapabilityHost {
       // Wire versions this host speaks, for negotiation (§1.1, proposal 0016).
       supported_versions: versionsUpto(PROTOCOL_VERSION),
       kind: 'local',
-      capabilities: [...this.caps.values()].map((c) => ({
+      capabilities: [...this.caps.values()].flat().map((c) => ({
         id: c.descriptor.id,
         version: c.descriptor.version,
         description: c.descriptor.description ?? '',
@@ -246,8 +254,7 @@ export class LocalCapabilityHost {
       return decided(this.deny(env, { code: 'capability_not_found', message: 'capability_id must be non-empty', retryable: false }));
     }
     // Gate 2: resolution
-    const entry = this.caps.get(env.capability_id);
-    if (!entry || (env.version && env.version !== entry.descriptor.version)) {
+    const notFound = (): { env: InvocationEnvelope; entry: null; early: InvocationResult } => {
       // Teach, don't just deny: closest registered ids ride in details
       // (wire-safe — conformance asserts the code, not details).
       const wanted = env.capability_id.toLowerCase();
@@ -270,7 +277,36 @@ export class LocalCapabilityHost {
         retryable: false,
         details: { suggestions, hint: 'GET /capabilities lists every registered capability' },
       }));
+    };
+    const entries = this.caps.get(env.capability_id) ?? [];
+    if (entries.length === 0) return notFound();  // id not registered at all
+    let entry: Registered | undefined;
+    const reqRange = env.requested_capability_version;
+    if (reqRange != null && reqRange !== '') {
+      // Capability-version negotiation (§1.1, proposal 0028): resolve the highest
+      // registered version satisfying the range, else capability_version_unsupported
+      // (the id EXISTS — distinct from capability_not_found).
+      const available = entries.map((r) => r.descriptor.version);
+      const best = bestSatisfying(available, String(reqRange));
+      if (best === null) {
+        return decided(this.deny(env, {
+          code: 'capability_version_unsupported',
+          message: `no registered version of '${env.capability_id}' satisfies '${String(reqRange)}'`,
+          retryable: false,
+          details: { requested: reqRange, available },
+        }));
+      }
+      entry = entries.find((r) => r.descriptor.version === best);
+    } else if (env.version) {
+      entry = entries.find((r) => r.descriptor.version === env.version);  // exact
+      if (!entry) return notFound();
+    } else {
+      // No range, no explicit version: a single registration resolves; an
+      // ambiguous unversioned match does NOT (parity with Python).
+      entry = entries.length === 1 ? entries[0] : undefined;
+      if (!entry) return notFound();
     }
+    if (!entry) return notFound();
     const d = entry.descriptor;
     env.version = d.version;
     // Gate 3: enabled → SKIP (not deny)

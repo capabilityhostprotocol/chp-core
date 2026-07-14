@@ -45,6 +45,9 @@ export interface InvocationEnvelope {
   capability_id: string;
   payload?: JsonValue;
   version?: string | null;
+  /** OPTIONAL capability-version range (§1.1, proposal 0028): a semver range the
+   * resolved capability's version must satisfy, else capability_version_unsupported. */
+  requested_capability_version?: string | null;
   invocation_id?: string;
   mode?: string;
   correlation?: Correlation;
