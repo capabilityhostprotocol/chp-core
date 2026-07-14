@@ -33,6 +33,9 @@ export interface CapabilityDescriptor {
   input_schema?: JsonValue | null;
   output_schema?: JsonValue | null;
   enabled?: boolean;
+  /** OPTIONAL policy surface (proposal 0034): `allowed_actors` restricts which
+   * actors may invoke this capability. Mirrors the Python PolicyDescriptor. */
+  policy?: { allowed_actors?: string[]; [k: string]: JsonValue | undefined } | null;
 }
 
 export interface Correlation {
@@ -55,6 +58,10 @@ export interface InvocationEnvelope {
   /** OPTIONAL presented authority (chp-v0.2.md §10) — a principal-signed
    * mandate the host verifies before executing. Absent = today's behavior. */
   mandate?: Record<string, JsonValue> | null;
+  /** OPTIONAL first-class actor (chp-application-contract.md §3.1, proposal 0034):
+   * a structured, caller-asserted identity driving per-actor policy. Absent =
+   * today's behavior (omit-when-absent → byte-identical). */
+  actor?: Record<string, JsonValue> | null;
   /** OPTIONAL output-shape requirement (chp-v0.2.md §1.1, proposal 0029): when
    * true, a result violating the capability's output_schema is DENIED
    * (output_schema_validation_failed) instead of the default validate-and-warn. */

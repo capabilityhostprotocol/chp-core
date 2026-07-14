@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/actor.schema.json",
+  "title": "Actor",
+  "type": "object",
+  "description": "A first-class actor identity (chp-application-contract.md section 3.1, proposal 0034). An OPTIONAL, structured, caller-asserted identity enriching an invocation beyond the free-form subject (which stays the host's verified accountability record). Every field but id is omit-when-empty.",
+  "required": ["id"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier for the actor."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["human", "agent", "service", "workflow", "device", "organization"],
+      "default": "agent",
+      "description": "The kind of actor. Spans the CHP actor breadth."
+    },
+    "owner": {
+      "type": "string",
+      "description": "The actor that owns/operates this actor (e.g. the human behind an agent)."
+    },
+    "organization": {
+      "type": "string",
+      "description": "The provider/organization security-domain boundary this actor belongs to."
+    },
+    "trust_level": {
+      "type": "string",
+      "description": "Deployment-defined trust classification (configuration concern, not prescribed)."
+    },
+    "status": {
+      "type": "string",
+      "description": "Lifecycle status (e.g. active, suspended, revoked)."
+    },
+    "credentials_ref": {
+      "type": "string",
+      "description": "A reference (never the secret) to the actor's credential material."
+    },
+    "authority_refs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "References to authority (e.g. mandate ids) the actor holds."
+    }
+  }
+}

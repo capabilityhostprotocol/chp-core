@@ -74,6 +74,7 @@ from .decorators import adapt_callable, get_capability_descriptor
 from .policy import PolicyConfig, evaluate_policy, load_policy
 from .redaction import redact_payload
 from .types import (
+    Actor,
     AssuranceMetadata,
     AutonomyProfile,
     AUTONOMY_EVIDENCE_TYPES,
@@ -458,6 +459,7 @@ class LocalCapabilityHost:
         correlation_id: str | None = None,
         correlation: CorrelationContext | JSON | None = None,
         subject: JSON | None = None,
+        actor: JSON | None = None,
         mode: str = "sync",
         metadata: JSON | None = None,
     ) -> InvocationResult:
@@ -480,6 +482,7 @@ class LocalCapabilityHost:
                 version=version,
                 correlation=correlation,
                 subject=subject,
+                actor=actor,
                 mode=mode,
                 metadata=metadata,
             )
@@ -494,6 +497,7 @@ class LocalCapabilityHost:
         requested_capability_version: str | None = None,
         correlation: CorrelationContext | JSON | None = None,
         subject: JSON | None = None,
+        actor: JSON | None = None,
         mode: str = "sync",
         metadata: JSON | None = None,
     ) -> InvocationResult:
@@ -509,6 +513,9 @@ class LocalCapabilityHost:
             mode=mode,
             correlation=corr,
             subject=subject or {"id": "local", "type": "user"},
+            # First-class actor (proposal 0034): validate/normalize at construction
+            # so a wrong-shaped actor fails clean; None = today's behavior.
+            actor=(Actor.from_mapping(actor).to_dict() if actor else None),
             metadata=metadata or {},
         )
         _KNOWN_MODES = {"sync", "async", "stream", "fire_and_forget"}
@@ -710,6 +717,31 @@ class LocalCapabilityHost:
                 # authority. Equals `principal` for a single-hop mandate.
                 "root_principal": root,
             }
+
+        # Per-actor allowlist (proposal 0034): a capability MAY restrict which
+        # actors may invoke it via descriptor.policy.allowed_actors. Enforced
+        # after the mandate gate finalizes the subject. The EFFECTIVE actor is the
+        # verified subject id when the subject is verified (accountability wins),
+        # else the asserted actor.id, else the subject id. An empty/absent
+        # allowlist is open — today's behavior. Denies policy_blocked (no new code).
+        pol = descriptor.policy
+        allowed = pol.allowed_actors if pol is not None else None
+        if allowed:
+            subj = envelope.subject if isinstance(envelope.subject, dict) else {}
+            actor = envelope.actor if isinstance(envelope.actor, dict) else {}
+            effective = subj.get("id") if subj.get("verified") else (
+                actor.get("id") or subj.get("id"))
+            if effective not in allowed:
+                return envelope, None, self._deny(
+                    envelope,
+                    DenialReason(
+                        code="policy_blocked",
+                        message=f"actor {effective!r} is not in allowed_actors "
+                                f"for {descriptor.id!r}",
+                        retryable=False,
+                        details={"allowed_actors": list(allowed), "actor": effective},
+                    ),
+                )
 
         # Governance gate — enforced on every invocation path (host.invoke,
         # ctx.ainvoke, HTTP /invoke), not just the Claude Code hook. Blocks by
@@ -1058,6 +1090,7 @@ class LocalCapabilityHost:
             error=error,
             denial=denial,
             subject=envelope.subject,
+            actor=envelope.actor,  # first-class actor recorded in evidence (0034)
             assurance=AssuranceMetadata(),
             # Selective disclosure (chp-v0.2.md §14): new events are born under
             # chp-event-hash-v2 — the content_hash commits to sha256(payload) so

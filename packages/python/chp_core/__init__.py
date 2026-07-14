@@ -91,6 +91,7 @@ from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
 from .redaction import DEFAULT_SENSITIVE_KEYS, redact_payload
 from .types import (
+    Actor,
     AgentSessionDescriptor,
     AssuranceMetadata,
     AutonomyProfile,
@@ -174,6 +175,7 @@ from .types import (
 )
 
 __all__ = [
+    "Actor",
     "AgentSessionDescriptor",
     "AssuranceMetadata",
     "AutonomyTier",

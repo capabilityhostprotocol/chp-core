@@ -47,6 +47,10 @@
     "mandate": {
       "$ref": "https://chp.dev/schemas/v0.2/mandate.schema.json",
       "description": "OPTIONAL presented authority (chp-v0.2.md section 10): a principal-signed, expiring, capability-scoped grant naming the caller as delegate. The host verifies it before executing; when valid, the evidence subject becomes {type: 'mandate', id: delegate_id, principal, mandate_id, verified: true}. Omitted = today's behavior (additive)."
+    },
+    "actor": {
+      "$ref": "https://chp.dev/schemas/v0.2/actor.schema.json",
+      "description": "OPTIONAL first-class actor (chp-application-contract.md section 3.1, proposal 0034): a structured, caller-asserted identity. The verified subject remains the accountability record; actor enriches it and drives per-actor policy (descriptor.policy.allowed_actors). Omitted = today's behavior (additive)."
     }
   }
 }

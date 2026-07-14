@@ -152,6 +152,27 @@ export interface InvocationEnvelope {
    * principal-signed, expiring, capability-scoped mandate naming the caller
    * as delegate. Omitted on the wire when absent. */
   mandate?: JsonObject;
+  /** OPTIONAL first-class actor (chp-application-contract.md §3.1, proposal
+   * 0034, additive): a structured, caller-asserted identity. The verified
+   * `subject` stays the accountability record; `actor` enriches it and drives
+   * per-actor policy. Omitted on the wire when absent. */
+  actor?: JsonObject;
+}
+
+/**
+ * A first-class actor identity (chp-application-contract.md §3.1, proposal 0034).
+ * OPTIONAL, structured, caller-asserted identity spanning the CHP actor breadth.
+ * Every field but `id` is omit-when-empty on the wire.
+ */
+export interface Actor {
+  id: string;
+  type?: 'human' | 'agent' | 'service' | 'workflow' | 'device' | 'organization';
+  owner?: string;
+  organization?: string;
+  trust_level?: string;
+  status?: string;
+  credentials_ref?: string;
+  authority_refs?: string[];
 }
 
 export interface DenialReason {

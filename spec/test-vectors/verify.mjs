@@ -601,6 +601,25 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (output-schema: ${input.cases.length} result-validation cases agree)`
     : "INVALID");
+} else if (input.kind === "actor") {
+  // First-class actor + per-actor allowlist (proposal 0034): a capability's
+  // descriptor.policy.allowed_actors restricts who may invoke it. Effective actor
+  // = verified subject id (accountability wins), else asserted actor.id, else
+  // subject id. Empty allowlist = open. Cross-impl agreement on the decision.
+  const effective = (c) => {
+    const subj = c.subject ?? {};
+    const actor = c.actor ?? {};
+    return subj.verified ? String(subj.id ?? "") : String(actor.id ?? subj.id ?? "");
+  };
+  const decide = (c) => {
+    const allowed = Array.isArray(c.allowed_actors) ? c.allowed_actors : [];
+    if (!allowed.length) return true; // open
+    return allowed.includes(effective(c));
+  };
+  ok = (input.cases ?? []).every((c) => decide(c) === c.allowed);
+  console.log(ok
+    ? `VALID (actor: ${input.cases.length} allowlist-decision cases agree)`
+    : "INVALID");
 } else if (input.kind === "auth-token") {
   // Signed bearer token (chp-v0.2.md §5, proposal 0027): verify the caller's
   // ed25519 signature over the canonical header, the caller attestation
