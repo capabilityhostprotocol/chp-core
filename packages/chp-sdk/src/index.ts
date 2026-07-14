@@ -94,6 +94,7 @@ export {
   auditCompletenessViaAnchor,
   type CompletenessAudit,
   verifyStoreHeadAnchor,
+  verifyRekorAnchor,
   storeHeadAnchorMessage,
   evaluateWitnessQuorum,
   type BundleVerification,

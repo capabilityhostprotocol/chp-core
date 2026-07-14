@@ -5,12 +5,12 @@
  * spec/test-vectors/verify.mjs.
  */
 
-import { verify as edVerify } from 'node:crypto';
-import { canon, canonFor, type JsonValue } from './canon.js';
+import { verify as edVerify, createHash, createPublicKey } from 'node:crypto';
+import { canon, canonFor, canonJcs, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
 import { attenuates, bundleHeader, computeStoreHead, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader, COMPLETENESS_SCHEME } from './signing.js';
-import { verifyStoreHeadInclusion, verifyStoreHeadConsistency, CHP_STORE_HEAD_V2, type StoreHeadInclusion, type StoreHeadConsistency } from './merkle.js';
+import { verifyStoreHeadInclusion, verifyStoreHeadConsistency, verifyInclusion, CHP_STORE_HEAD_V2, type StoreHeadInclusion, type StoreHeadConsistency } from './merkle.js';
 import { didKeyToRaw, verifySshsig, STORE_HEAD_ANCHOR_NAMESPACE } from './sshsig.js';
 import { orderEvents } from './ordering.js';
 
@@ -25,6 +25,52 @@ export interface BundleVerification {
 
 function verifyCanon(pubB64: string, obj: JsonValue, sigB64: string): boolean {
   return edVerify(null, Buffer.from(canon(obj), 'utf8'), publicKeyFromB64(pubB64), Buffer.from(sigB64, 'base64'));
+}
+
+/** Offline-verify a store-head-anchor of `anchor.type === "rekor"` against a Rekor
+ * log's pinned public key (spec §12, proposal 0033) — the SDK form of the
+ * verify.mjs rekor-anchor branch + parity with Python `rekor.verify_rekor_anchor`.
+ * Four independent checks, no network: RFC 6962 inclusion of `SHA256(0x00‖entry_body)`
+ * under `tree_root`; the ECDSA-P256 SET over JCS(`{body,integratedTime,logIndex,logID}`);
+ * the entry records THIS DSSE (envelope hash); and the DSSE commits `store_head`. */
+export function verifyRekorAnchor(
+  anchor: Record<string, JsonValue>, logPublicKeyPem: string,
+): BundleVerification {
+  const a = (anchor.anchor ?? {}) as Record<string, JsonValue>;
+  const checks: Record<string, boolean> = {};
+  checks.structure = anchor.kind === 'store-head-anchor' && a.type === 'rekor' && !!anchor.store_head;
+
+  const entryBody = Buffer.from(String(a.entry_body ?? ''), 'base64');
+  try {  // a malformed audit path throws; treat as a failed proof (parity w/ Python)
+    const path = ((a.inclusion_hashes as string[]) ?? []).map((h) => Buffer.from(h, 'hex'));
+    checks.inclusion = Number(a.inclusion_index) >= 0 && Number(a.inclusion_index) < Number(a.tree_size)
+      && verifyInclusion(Buffer.from(String(a.tree_root ?? ''), 'hex'), entryBody,
+                         Number(a.inclusion_index), Number(a.tree_size), path);
+  } catch { checks.inclusion = false; }
+
+  const setMsg = canonJcs({ body: a.entry_body, integratedTime: a.integrated_time,
+                            logID: a.log_id, logIndex: a.log_index });
+  try {
+    const logPub = createPublicKey(logPublicKeyPem);
+    checks.set = edVerify('sha256', Buffer.from(setMsg, 'utf8'), logPub, Buffer.from(String(a.set ?? ''), 'base64'));
+  } catch { checks.set = false; }
+
+  try {
+    const envHash = createHash('sha256').update(canonJcs(a.dsse_envelope as JsonValue), 'utf8').digest('hex');
+    const body = JSON.parse(entryBody.toString('utf8'));
+    checks.entry_binds_dsse = body?.spec?.content?.hash?.value === envHash;
+  } catch { checks.entry_binds_dsse = false; }
+
+  try {
+    const env = a.dsse_envelope as Record<string, JsonValue>;
+    const stmt = JSON.parse(Buffer.from(String(env.payload), 'base64').toString('utf8'));
+    checks.root = (stmt.subject?.[0]?.digest?.sha256 ?? '') === anchor.store_head;
+  } catch { checks.root = false; }
+
+  const valid = Object.values(checks).every(Boolean);
+  return { valid, assurance: 'signed', checks,
+           reason: valid ? undefined : 'rekor-anchor checks failed: '
+             + Object.keys(checks).filter((k) => !checks[k]).join(', ') };
 }
 
 export function verifyBundle(
