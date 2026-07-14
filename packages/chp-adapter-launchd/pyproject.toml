@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-launchd"
-version = "0.42.0"
+version = "0.42.1"
 description = "CHP capability adapter — govern macOS launchd (LaunchAgent) services"
 readme = "README.md"
 requires-python = ">=3.10"
