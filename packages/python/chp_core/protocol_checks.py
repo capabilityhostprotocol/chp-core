@@ -715,6 +715,23 @@ def check_alignment(repo_root: Path) -> JSON:
         {"hint": "chp-v0.2.md §5 + chp-http-binding.md §2 must define mTLS; http.py must implement it"},
     )
 
+    # Zenoh binding (proposal 0032): a normative binding doc must exist with the
+    # key-expression table, and the downstream package must satisfy the Transport
+    # protocol (structural — no eclipse-zenoh import needed to check the shape).
+    zenoh_binding = read_text(repo_root / "spec" / "chp-zenoh-binding.md")
+    zenoh_pkg = read_text(repo_root / "packages" / "chp-transport-zenoh"
+                          / "chp_transport_zenoh" / "__init__.py")
+    add_check(
+        checks,
+        "spec_defines_zenoh_binding",
+        "chp/v1/invocations/{host_id}/requests" in zenoh_binding
+        and "chp/v1/evidence/{host_id}/stream" in zenoh_binding
+        and "class ZenohTransport" in zenoh_pkg and "class ZenohHostServer" in zenoh_pkg
+        and all(f"def {m}" in zenoh_pkg or f"async def {m}" in zenoh_pkg
+                for m in ("ainvoke_envelope", "discover", "replay_result", "health", "supports")),
+        {"hint": "chp-zenoh-binding.md must define the key table; ZenohTransport must satisfy Transport"},
+    )
+
     # Transport auth (proposal 0027): §5 must be normative + define signed tokens,
     # and the auth-token vector must verify (and reject a wrong audience).
     add_check(
