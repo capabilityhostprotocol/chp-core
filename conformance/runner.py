@@ -2574,10 +2574,158 @@ WIRE_CHECKS: list[tuple[str, Check]] = [
     ("remote monitor / served consistency (v0.6.3 §12, proposal 0024)", check_remote_monitor),
 ]
 
+# ── Transport-binding conformance (self-contained; each check stands up its own
+#    server + client, so it ignores the shared sample host) ────────────────────
+
+def _mtls_fixture(tmp: Any) -> tuple[str, str, str, str, str, str, str]:
+    """Generate a CA + a server cert (IP SAN 127.0.0.1) + a CA-signed client cert +
+    a rogue-CA client cert, all under ``tmp``. Returns file paths."""
+    import datetime
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.x509.oid import NameOID
+
+    def ca(name: str):
+        k = ed25519.Ed25519PrivateKey.generate()
+        s = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+        c = (x509.CertificateBuilder().subject_name(s).issuer_name(s).public_key(k.public_key())
+             .serial_number(x509.random_serial_number())
+             .not_valid_before(datetime.datetime(2020, 1, 1))
+             .not_valid_after(datetime.datetime(2040, 1, 1))
+             .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True).sign(k, None))
+        return k, c
+
+    def issue(ck, cc, cn, ip=None):
+        k = ed25519.Ed25519PrivateKey.generate()
+        b = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)]))
+             .issuer_name(cc.subject).public_key(k.public_key()).serial_number(x509.random_serial_number())
+             .not_valid_before(datetime.datetime(2020, 1, 1))
+             .not_valid_after(datetime.datetime(2040, 1, 1)))
+        if ip:
+            b = b.add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(ip))]), critical=False)
+        return k, b.sign(ck, None)
+
+    def wr(stem, k, c):
+        (tmp / f"{stem}.crt").write_bytes(c.public_bytes(serialization.Encoding.PEM))
+        (tmp / f"{stem}.key").write_bytes(k.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        return str(tmp / f"{stem}.crt"), str(tmp / f"{stem}.key")
+
+    ck, cc = ca("conformance-ca")
+    cafile, _ = wr("ca", ck, cc)
+    sk, sc = issue(ck, cc, "127.0.0.1", ip="127.0.0.1"); scrt, skey = wr("server", sk, sc)
+    clk, clc = issue(ck, cc, "conformance-client"); ccrt, ckey = wr("client", clk, clc)
+    rk, rc = ca("rogue-ca"); bk, bc = issue(rk, rc, "impostor"); bcrt, bkey = wr("rogue", bk, bc)
+    return cafile, scrt, skey, ccrt, ckey, bcrt, bkey
+
+
+async def check_mtls_binding(_host: Any) -> None:
+    """§5 + chp-http-binding §2 (proposal 0031): a host requiring a client cert
+    (CERT_REQUIRED) authenticates a CA-signed client and binds its cert identity to
+    the VERIFIED evidence subject; an unknown-CA client is refused at the handshake."""
+    import tempfile
+    import threading
+    from pathlib import Path
+
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core.http import RemoteCapabilityHost, create_http_server
+
+    tmp = Path(tempfile.mkdtemp())
+    cafile, scrt, skey, ccrt, ckey, bcrt, bkey = _mtls_fixture(tmp)
+    host = LocalCapabilityHost("mtls-conf", store=SQLiteEvidenceStore(":memory:"))
+
+    async def echo(_c, p):
+        return {"echo": p}
+
+    host.register(CapabilityDescriptor(id="conformance.echo", version="1.0.0", description="."), echo)
+    server = create_http_server(host, port=0, certfile=scrt, keyfile=skey, cafile=cafile)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"https://127.0.0.1:{server.server_port}"
+        ok = RemoteCapabilityHost(url, client_cert=ccrt, client_key=ckey, cafile=cafile)
+        # await the async client (this check already runs inside an event loop, so
+        # the sync .invoke() — which calls asyncio.run() — cannot be used here).
+        r = await ok.ainvoke("conformance.echo", {"v": 1}, correlation={"correlation_id": "mtls-conf"})
+        assert r.success, "a CA-signed client must authenticate over mTLS"
+        subj = host.replay("mtls-conf")[0]["subject"]
+        assert subj == {"id": "conformance-client", "type": "mtls", "verified": True}, \
+            f"the verified cert identity must bind to the subject, got {subj}"
+        rogue = RemoteCapabilityHost(url, client_cert=bcrt, client_key=bkey, cafile=cafile)
+        try:
+            await rogue.ainvoke("conformance.echo", {}, correlation={"correlation_id": "rogue"})
+            raise AssertionError("an unknown-CA client must be refused at the handshake")
+        except AssertionError:
+            raise
+        except Exception:
+            pass  # handshake refusal — expected
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+async def check_zenoh_binding(_host: Any) -> None:
+    """chp-zenoh-binding.md (proposal 0032): a ZenohHostServer + ZenohTransport
+    round-trip an invocation with a result byte-identical to the in-process path,
+    and evidence is delivered over the native pub/sub stream. Skips (passes) when
+    the optional chp-transport-zenoh binding is not installed."""
+    import asyncio as _asyncio
+    import time as _time
+
+    try:
+        from chp_transport_zenoh import ZenohHostServer, ZenohTransport
+    except Exception:
+        return  # the optional Zenoh binding isn't installed — nothing to conform
+
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core.types import InvocationEnvelope
+
+    host = LocalCapabilityHost("zenoh-conf", store=SQLiteEvidenceStore(":memory:"))
+
+    async def add(_c, p):
+        return {"sum": p["a"] + p["b"]}
+
+    host.register(CapabilityDescriptor(id="conformance.add", version="1.0.0", description="."), add)
+    server = ZenohHostServer(host)
+    transport = ZenohTransport("zenoh-conf")
+    received: list = []
+    sub = transport.subscribe_evidence(received.append)
+    _time.sleep(0.4)  # peer discovery
+    try:
+        env = InvocationEnvelope.from_mapping(
+            {"capability_id": "conformance.add", "payload": {"a": 2, "b": 3},
+             "correlation": {"correlation_id": "zenoh-conf"}})
+        r = await transport.ainvoke_envelope(env)
+        assert r.success and r.data == {"sum": 5}, "the Zenoh round-trip must return the result"
+        local = await host.ainvoke_envelope(InvocationEnvelope.from_mapping(
+            {"capability_id": "conformance.add", "payload": {"a": 2, "b": 3},
+             "correlation": {"correlation_id": "zenoh-local"}}))
+        rz, rl = r.to_dict(), local.to_dict()
+        for k in ("capability_id", "capability_version", "outcome", "success", "data"):
+            assert rz[k] == rl[k], f"Zenoh result must be byte-identical to in-process at {k}"
+        for _ in range(20):
+            if received:
+                break
+            _time.sleep(0.1)
+        assert any(e.get("event_type") == "execution_completed" for e in received), \
+            "the host must broadcast completed evidence over the pub/sub stream"
+    finally:
+        sub.undeclare(); transport.close(); server.close()
+
+
+TRANSPORT_CHECKS: list[tuple[str, Check]] = [
+    ("mTLS binding (v0.8.1 §5, proposal 0031)", check_mtls_binding),
+    ("Zenoh binding round-trip + evidence pub/sub (v0.8.2, proposal 0032)", check_zenoh_binding),
+]
+
+
 SUITES: dict[str, list[tuple[str, Check]]] = {
     "normative": NORMATIVE_CHECKS,
     "reference": REFERENCE_CHECKS,
     "wire": WIRE_CHECKS,
+    "transport": TRANSPORT_CHECKS,
     "all": NORMATIVE_CHECKS + REFERENCE_CHECKS,
 }
 
