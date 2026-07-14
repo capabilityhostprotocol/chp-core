@@ -5,6 +5,31 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.2] — Zenoh transport binding over 0.8.1
+
+### Added
+- **Zenoh transport binding** (`chp-zenoh-binding.md`,
+  [proposals/0032](proposals/0032-zenoh-binding.md)): a second normative transport
+  binding — a Zenoh query/reply + pub/sub data plane. The invoke query payload IS the
+  `InvocationEnvelope` JSON and the reply IS the `InvocationResult` JSON (byte-identical
+  to the HTTP binding — only the carrier differs). Key table: queryables for
+  invoke/discover/replay/health, an evidence put/subscribe stream (mesh-native evidence
+  broadcast HTTP lacks), optional liveliness presence. `ZenohTransport` satisfies the
+  same `Transport` protocol as `HttpTransport` (router composes it with zero changes);
+  `ZenohHostServer` serves a `LocalCapabilityHost`. Shipped as a downstream package
+  `chp-transport-zenoh` (own `eclipse-zenoh>=1.0` dep — **chp-core stays
+  dependency-free**); `chp-host` gains a `zenoh://` remote scheme.
+
+### Compatibility
+- Purely additive, **minor** bump. No chp-core code/object/schema/reserved-code change —
+  a host speaking only HTTP is unaffected; the Zenoh binding is opt-in by installing a
+  separate package.
+
+### Regression gate
+- `test_zenoh_transport.py` (byte-identical round-trip vs in-process; discover/health/
+  replay over Zenoh; evidence pub/sub delivers the completed event); guard
+  `spec_defines_zenoh_binding`.
+
 ## [0.8.1] — Mutual TLS for the HTTP transport over 0.8.0
 
 ### Added

@@ -176,11 +176,19 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
             )
             transports.append(LocalTransport(local_host, name=profile.host_id))
 
-        # Remote HTTP hosts from agent_remotes.
+        # Remote hosts from agent_remotes. A ``zenoh://<host_id>`` URL selects the
+        # Zenoh binding (downstream chp-transport-zenoh, lazy-imported so it — and
+        # its eclipse-zenoh dep — is required ONLY when actually used); anything
+        # else is the stdlib HTTP transport.
         for remote in env.resolve_remotes():
-            transports.append(HttpTransport(
-                remote.url, name=remote.url, api_key=remote.api_key,
-            ))
+            if remote.url.startswith("zenoh://"):
+                from chp_transport_zenoh import ZenohTransport  # lazy: optional dep
+                transports.append(ZenohTransport(
+                    remote.url[len("zenoh://"):], name=remote.url))
+            else:
+                transports.append(HttpTransport(
+                    remote.url, name=remote.url, api_key=remote.api_key,
+                ))
 
         if not transports:
             print("ERROR: environment defines no hosts (no local profiles and no agent_remotes)", file=sys.stderr)
