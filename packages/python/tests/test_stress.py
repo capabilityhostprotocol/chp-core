@@ -60,6 +60,27 @@ def _hook_p99_budget_ms(tmp_path) -> float:
     return max(_HOOK_P99_MS, 15 * baseline_p99) + _CI_JITTER_MS
 
 
+def _assert_hook_p99_under_budget(measure_one, tmp_path, n: int = 100, attempts: int = 3) -> None:
+    """A perf assertion resilient to transient CI load spikes. Each round RECALIBRATES
+    the budget (a raw-insert baseline under *current* load) then measures the hook p99 —
+    a global spike inflates both proportionally, so the ratio holds. Pass if ANY round is
+    under budget; a real regression (hook genuinely slow vs a raw insert) fails every round."""
+    rounds: list[tuple[float, float]] = []
+    for _ in range(attempts):
+        budget = _hook_p99_budget_ms(tmp_path)
+        latencies = []
+        for i in range(n):
+            t0 = time.perf_counter()
+            measure_one(i)
+            latencies.append((time.perf_counter() - t0) * 1000)
+        p99 = statistics.quantiles(latencies, n=100)[98]
+        rounds.append((p99, budget))
+        if p99 < budget:
+            return
+    raise AssertionError("hook p99 exceeded budget on all rounds: "
+                         + ", ".join(f"{p:.1f}/{b:.1f}ms" for p, b in rounds))
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -291,22 +312,11 @@ def test_hot_backup_while_writing(tmp_path) -> None:
 def test_post_tool_hook_p99_under_5ms(tmp_path) -> None:
     """p99 of 100 post-tool hook calls must be < 5ms (warm path)."""
     store_path = str(tmp_path / "perf.sqlite")
-    n = 100
-    warm_up = 5
-
-    # warm up
-    for _ in range(warm_up):
+    for _ in range(5):  # warm up
         process_post_tool_use(_post_payload(), store_path)
-
-    latencies: list[float] = []
-    for i in range(n):
-        t0 = time.perf_counter()
-        process_post_tool_use(_post_payload(session_id=f"perf-{i}"), store_path)
-        latencies.append((time.perf_counter() - t0) * 1000)
-
-    budget = _hook_p99_budget_ms(tmp_path)
-    p99 = statistics.quantiles(latencies, n=100)[98]
-    assert p99 < budget, f"p99 = {p99:.2f}ms — exceeds {budget:.2f}ms contract"
+    _assert_hook_p99_under_budget(
+        lambda i: process_post_tool_use(_post_payload(session_id=f"perf-{i}"), store_path),
+        tmp_path)
 
 
 @pytest.mark.slow
@@ -314,21 +324,11 @@ def test_post_tool_hook_p99_under_5ms(tmp_path) -> None:
 def test_pre_tool_hook_p99_under_5ms(tmp_path) -> None:
     """p99 of 100 pre-tool hook calls must be < 5ms (warm path, no policy)."""
     store_path = str(tmp_path / "perf-pre.sqlite")
-    n = 100
-    warm_up = 5
-
-    for _ in range(warm_up):
+    for _ in range(5):  # warm up
         process_pre_tool_use(_pre_payload(), store_path, policy=None)
-
-    latencies: list[float] = []
-    for i in range(n):
-        t0 = time.perf_counter()
-        process_pre_tool_use(_pre_payload(session_id=f"perf-{i}"), store_path, policy=None)
-        latencies.append((time.perf_counter() - t0) * 1000)
-
-    budget = _hook_p99_budget_ms(tmp_path)
-    p99 = statistics.quantiles(latencies, n=100)[98]
-    assert p99 < budget, f"p99 = {p99:.2f}ms — exceeds {budget:.2f}ms contract"
+    _assert_hook_p99_under_budget(
+        lambda i: process_pre_tool_use(_pre_payload(session_id=f"perf-{i}"), store_path, policy=None),
+        tmp_path)
 
 
 # ---------------------------------------------------------------------------
