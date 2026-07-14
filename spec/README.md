@@ -1,48 +1,84 @@
-# CHP Specification Index
+# CHP Specification Index — v0.9 protocol release candidate
 
-The Capability Host Protocol (CHP) specification is a set of layered documents.
-**Reading order for a new implementer:**
+The Capability Host Protocol (CHP) is a set of layered documents. This index is the
+**v0.9 release candidate for the *protocol*** — the consolidated normative surface as of
+**v0.8.3** (33 shipped proposals), frozen additive-only as the RC baseline.
 
-| # | Document | Layer | Version | Status |
-|---|---|---|---|---|
-| 1 | [chp-v0.1.md](chp-v0.1.md) | Core object model: capabilities, hosts, envelopes, evidence, correlation, replay, outcomes, denial semantics, conformance MUSTs | 0.1 | **stable** (2026-07-06) |
-| 2 | [chp-governance-v0.2.md](chp-governance-v0.2.md) | Governance vocabulary: reserved denial codes, risk tiers, autonomy/approval/safety/identity event families, namespacing | 0.2–0.2.2 (additive) | **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 2026-07-09) |
-| 3 | [chp-invocation-pipeline.md](chp-invocation-pipeline.md) | The normative 10-gate governed-invocation ordering + per-code trigger predicates | 0.2–0.2.2 (additive) | **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 2026-07-09) |
-| 4 | [chp-http-binding.md](chp-http-binding.md) | The HTTP wire binding: routes, auth, the 200-for-processed rule, conformance fixtures | 0.2–0.2.2 (additive) | **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 2026-07-09) |
-| 5 | [chp-v0.2.md](chp-v0.2.md) | Evidence integrity: assurance tiers, chp-stable-v1 canonicalization, hash chains, signed bundles, anchors (§3.1), key lifecycle (§3.2) | 0.2–0.2.2 (additive) | **released** (v0.2 2026-07-06; v0.2.1–v0.2.2 2026-07-09) |
-| 6 | [chp-security-model.md](chp-security-model.md) | The security model: a guarantee × adversary × residual-risk matrix over every mechanism; what CHP proves, against whom, and what it explicitly does not | 0.5.1 | **normative** (2026-07-12) |
-| 7 | [reserved-names.md](reserved-names.md) | Generated registry of reserved event types, denial codes, anchor types, prefixes | — | generated |
-| 8 | [test-vectors/](test-vectors/) | Byte-exact fixtures + `verify.mjs` (the stdlib reference verifier). Regenerate with `scripts/gen-test-vectors.py` | — | pinned |
+> ## ⚠️ This is a *protocol* RC, not a product v1.0 — read first
+>
+> "v0.9 RC" means the **wire protocol** is coherent, conformance-covered, and backed by
+> two independent implementations — it does **NOT** mean a public production **v1.0**. A
+> public v1.0 is a distant milestone gated on production maturity outside this spec: an
+> independent **security audit**, **operational hardening** validated under load / soak /
+> chaos at scale, a **stability track record** across real third-party deployments,
+> adopter-grade docs/SDKs/support, and end-to-end **release/supply-chain integrity**.
+> **Many 0.x versions remain.** The 0.x version number is an honest pre-production signal;
+> do not read "protocol RC" as "ready to ship 1.0."
 
-Supporting: [CHANGELOG.md](CHANGELOG.md) (protocol history) ·
-[proposals/](proposals/) (how the protocol evolves) ·
-[`schemas/`](../schemas/) (JSON Schemas for every protocol object) ·
-[`conformance/`](../conformance/) (the runner + [FIXTURES.md](../conformance/FIXTURES.md);
-`--suite wire` against a live host is the conformance claim).
+## Reading order for a new implementer
 
-## Versioning model
+| # | Document | Layer | Current version |
+|---|---|---|---|
+| 1 | [chp-v0.1.md](chp-v0.1.md) | Core object model: capabilities, hosts, envelopes, evidence, correlation, replay, outcomes, denial semantics, conformance MUSTs | 0.1 (stable base) |
+| 2 | [chp-v0.2.md](chp-v0.2.md) | Evidence integrity + everything additive since: assurance tiers, canonicalization, hash chains, signed bundles, anchors (§3), key lifecycle, selective disclosure (§14), sealed payloads (§16), mandates (§10), transport/auth + mTLS (§5), Merkle store head (§12), Rekor anchors (§12) | v0.2 → **v0.8.3** |
+| 3 | [chp-governance-v0.2.md](chp-governance-v0.2.md) | Governance vocabulary: the reserved denial codes, risk tiers, autonomy/approval/safety/identity event families, namespacing | v0.2 (additive) |
+| 4 | [chp-invocation-pipeline.md](chp-invocation-pipeline.md) | The normative **12-gate** governed-invocation ordering + per-code trigger predicates | v0.2 → v0.7.4 |
+| 5 | [chp-http-binding.md](chp-http-binding.md) | The **normative** HTTP wire binding: routes, auth (key / token / mTLS), the 200-for-processed rule | v0.2 → v0.8.1 |
+| 6 | [chp-transport-bindings.md](chp-transport-bindings.md) | Transport-binding overview: what any binding must preserve; HTTP (normative) + Zenoh (experimental) | overview |
+| 7 | [chp-zenoh-binding.md](chp-zenoh-binding.md) | The Zenoh query/reply + pub/sub binding (**experimental**) | v0.8.2 |
+| 8 | [chp-security-model.md](chp-security-model.md) | Guarantee × adversary × residual-risk matrix over every mechanism | v0.5.1 |
+| 9 | [reserved-names.md](reserved-names.md) | Generated registry of reserved event types, denial codes, anchor types, prefixes | generated |
+| 10 | [test-vectors/](test-vectors/) | Byte-exact fixtures + `verify.mjs` (the stdlib reference verifier) | pinned |
 
-**v0.2 is an additive superset of v0.1** — a v0.1-only host remains conformant
-at the `none` assurance tier; the v0.2 layers (integrity tiers, governance
-vocabulary, pipeline ordering, anchors, key lifecycle) extend without breaking.
-A host serving the v0.2 surface advertises `protocol_version: "0.2"` on `/host`;
-a bare v0.1 host advertises `"0.1"`. This additive pattern is *the* evolution
-rule — see [proposals/README.md](proposals/README.md).
+Supporting: [CHANGELOG.md](CHANGELOG.md) (protocol history, every entry names its
+regression gate) · [proposals/](proposals/) (the 33 numbered proposals + the evolution
+rule) · [`schemas/`](../schemas/) (JSON Schemas for every object) ·
+[`conformance/`](../conformance/) (the runner; `--suite wire` against a live host is the
+conformance claim; `--suite transport` adds live mTLS + Zenoh checks).
 
-**Wire-version negotiation** (v0.4.1, [proposals/0016]): a host declares
-`supported_versions` on `/host`; a client selects the highest mutually-supported
-wire version and MAY declare it via `X-CHP-Version`; a host rejects an
-unsupported explicit version with `version_unsupported` rather than silently
-degrading. Specified before it is needed — with one additive `0.1 ⊂ 0.2` lineage
-the negotiator always selects `0.2`, but the path exists so the first
-non-additive change (if ever) travels a proven route. Assurance-*tier*
-negotiation (a verifier MUST reject a tier lower than it requires) remains the
-other half of the compatibility decision.
+## The normative surface at v0.8.3 (one-screen map)
 
-## Known issues
+- **Objects:** `InvocationEnvelope`, `InvocationResult`, `ExecutionEvidence`, signed
+  `bundle`, `mandate`, `store-head` / `store-head-anchor`, `auth-token`,
+  `disclosure-receipt` — each with a JSON Schema in [`schemas/`](../schemas/).
+- **Pipeline:** **12 gates** (chp-invocation-pipeline.md) — id → resolution (+ capability
+  version negotiation) → enabled → mode → mandate (+ `max_invocations`) → policy →
+  invariants → autonomy → input schema → safety → execute → **output schema**.
+- **Reserved denial codes (15, closed set):** `capability_not_found`,
+  `capability_disabled`, `unsupported_mode`, `policy_blocked`,
+  `input_schema_validation_failed`, `output_schema_validation_failed`, `invariant_failed`,
+  `budget_exceeded`, `approval_required`, `safety_blocked`, `mandate_invalid`,
+  `mandate_exhausted`, `capability_version_unsupported`, `host_unreachable`,
+  `version_unsupported`. Source of truth: `DenialReason.RESERVED_CODES` (mirrored in the
+  schema + reserved-names.md; a guard enforces all three agree).
+- **Canonicalizations (2):** `chp-stable-v1` (default), `chp-jcs-v1` (RFC 8785) — the
+  `canonicalization` field dispatches.
+- **Evidence-hash schemes:** `chp-event-hash-v1` (inline), `chp-event-hash-v2` (payload
+  commitment — enables withhold / seal); **store head** `chp-store-head-v2` (RFC 6962
+  Merkle + inclusion/consistency proofs); **sealing** `chp-sealed-v1` (single recipient),
+  `chp-sealed-v2` (multi-recipient envelope encryption).
+- **Anchor types (open set):** `did` (did:key SSHSIG, offline), `domain` (Web-PKI),
+  `rekor` (public transparency-log inclusion). Unknown types = unverifiable provenance,
+  never a hard failure.
+- **Transport bindings:** **HTTP (normative)** · **Zenoh (experimental)** — both carry
+  the identical wire objects; only the carrier differs (chp-transport-bindings.md).
 
-- Schema `$id`s are now uniform on the canonical `https://chp.dev/schemas/v0.X/…`
-  base (v0.4.2, [proposals/0017] — the two off-domain `$id`s were normalized and a
-  `schema_ids_consistent` guard prevents drift). They still **resolve locally by
-  path**, not over the network; standing up `chp.dev/schemas/` to serve them is an
-  out-of-repo hosting task, tracked separately.
+## Versioning model — additive, frozen for the RC
+
+Every change since v0.1 has been **additive** (chp-event-hash-v2 was the one forward-only
+commitment change). A v0.1-only host stays conformant at the `none` assurance tier; each
+layer extends without breaking. For the v0.9 RC the object model is treated as **frozen —
+additive-only**; a non-additive change would be a deliberate major-version event travelling
+the wire-version-negotiation path (v0.4.1, [proposals/0016]). This additive discipline is
+*the* evolution rule — see [proposals/README.md](proposals/README.md).
+
+## Known issues / deferrals
+
+- **Schema hosting:** `$id`s are uniform on `https://chp.dev/schemas/v0.X/…` and resolve
+  locally by path; serving them over the network is an out-of-repo hosting task.
+- **Zenoh is experimental:** the Python binding is complete + conformance-checked, but a
+  TypeScript `ZenohTransport` (impl #2) is deferred pending a sound
+  `zenoh-bridge-remote-api` toolchain. HTTP is the normative binding for the RC.
+- **Conformance coverage:** the newer object-level features carry cross-impl *vectors*;
+  live `--suite transport` covers mTLS + Zenoh. Broadening live runner coverage of every
+  feature is ongoing.

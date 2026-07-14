@@ -56,6 +56,7 @@ ordering are normative in [chp-invocation-pipeline.md](chp-invocation-pipeline.m
 
 - `did` — Decentralized root: a did:key ed25519 identity countersigns the CHP key via SSHSIG (chp-v0.2.md §3.1)
 - `domain` — Web-PKI root: the domain serves /.well-known/chp-identity over TLS (chp-v0.2.md §3.1)
+- `rekor` — Public-log root: a Rekor transparency-log inclusion proof + signed entry timestamp anchors the store head (chp-v0.2.md §12, proposal 0033)
 
 ## Reserved prefixes / namespaces
 
