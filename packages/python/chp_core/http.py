@@ -105,6 +105,22 @@ def _host_assurance(host_id: str | None = None) -> JSON:
     return out
 
 
+def _build_503() -> bytes:
+    """A complete HTTP/1.1 503 written directly to the socket when shedding load
+    (before any handler exists) — a structured JSON error + Retry-After, connection
+    closed so the client doesn't reuse a half-served keep-alive."""
+    body = (b'{"error":{"code":"server_at_capacity",'
+            b'"message":"host at maximum concurrency; retry shortly"}}')
+    return (b"HTTP/1.1 503 Service Unavailable\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+            b"Retry-After: 1\r\n"
+            b"Connection: close\r\n\r\n" + body)
+
+
+_SERVICE_UNAVAILABLE_RESPONSE = _build_503()
+
+
 class CapabilityHostHTTPServer(ThreadingHTTPServer):
     """Threading HTTP server bound to a CHP host (LocalCapabilityHost or MultiHostRouter)."""
 
@@ -131,6 +147,14 @@ class CapabilityHostHTTPServer(ThreadingHTTPServer):
         # polls this counter instead.
         self._inflight = 0
         self._inflight_lock = threading.Lock()
+        # Concurrency cap (production hardening, proposal 0039). ThreadingHTTPServer
+        # spawns one thread per connection with no ceiling — a connection flood
+        # exhausts threads/memory. A bounded semaphore caps concurrently-processed
+        # requests; over the cap we SHED with a fast 503 + Retry-After and never
+        # spawn a worker, so a flood degrades gracefully instead of toppling the
+        # host. Default 128; CHP_HOST_MAX_CONCURRENCY=0 disables the cap.
+        cap = int(os.environ.get("CHP_HOST_MAX_CONCURRENCY", "128"))
+        self._concurrency = threading.BoundedSemaphore(cap) if cap > 0 else None
 
     def track_request(self, delta: int) -> None:
         with self._inflight_lock:
@@ -140,6 +164,27 @@ class CapabilityHostHTTPServer(ThreadingHTTPServer):
     def inflight(self) -> int:
         with self._inflight_lock:
             return self._inflight
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        """Shed load before spawning a worker: if the concurrency cap is reached,
+        write a 503 straight to the socket and close — no thread, O(1) per shed
+        request, so a flood cannot exhaust the thread pool."""
+        if self._concurrency is not None and not self._concurrency.acquire(blocking=False):
+            try:
+                request.sendall(_SERVICE_UNAVAILABLE_RESPONSE)
+            except Exception:  # noqa: BLE001 — best-effort; client may already be gone
+                pass
+            self.shutdown_request(request)  # type: ignore[attr-defined]
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        """Release the concurrency slot when the worker finishes (success or not)."""
+        try:
+            super().process_request_thread(request, client_address)  # type: ignore[misc]
+        finally:
+            if self._concurrency is not None:
+                self._concurrency.release()
 
 
 def _mtls_peer_identity(connection: Any) -> str | None:
