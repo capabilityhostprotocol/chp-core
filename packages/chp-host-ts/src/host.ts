@@ -48,6 +48,12 @@ export class LocalCapabilityHost {
   private readonly invocationResults = new Map<string, InvocationResult>();
   /** Recorded stream chunk deltas for §13.1 replay/resume — serving state. */
   private readonly invocationChunks = new Map<string, JsonValue[]>();
+  /** Per-mandate use counting for the max_invocations cap (§10, proposal 0026):
+   * mandate_id → the set of distinct invocation_ids charged to it. Keyed on
+   * invocation_id (the replay key), so a re-run of the same invocation does not
+   * consume a new use — the same replay-safe rule as the Python store. In-memory
+   * for this conformance host (Python persists it in a mandate_usage table). */
+  private readonly mandateUsage = new Map<string, Set<string>>();
 
   constructor(
     readonly hostId = 'ts-chp-host',
@@ -300,6 +306,28 @@ export class LocalCapabilityHost {
           message: `capability '${d.id}' is outside mandate '${String(env.mandate.mandate_id)}'s scope`,
           retryable: false,
         }));
+      }
+      // Use-count cap (§10, proposal 0026): count the distinct invocations already
+      // charged to this mandate_id and deny once the signed max_invocations is
+      // reached. Keyed on invocation_id (the replay key), so a re-run of the same
+      // invocation does not consume a new use. Parity with the Python store.
+      const maxInv = env.mandate.max_invocations;
+      if (maxInv !== undefined && maxInv !== null) {
+        const mid = String(env.mandate.mandate_id ?? '');
+        const invId = String(env.invocation_id ?? '');
+        const uses = this.mandateUsage.get(mid) ?? new Set<string>();
+        const already = uses.has(invId);
+        const used = uses.size;
+        if (!already && used >= Number(maxInv)) {
+          return decided(this.deny(env, {
+            code: 'mandate_exhausted',
+            message: `mandate '${mid}' exhausted (${used}/${Number(maxInv)} invocations used)`,
+            retryable: false,
+            details: { used, max_invocations: Number(maxInv), mandate_id: mid },
+          }));
+        }
+        uses.add(invId);
+        this.mandateUsage.set(mid, uses);
       }
       const principal = (env.mandate.principal ?? {}) as Record<string, JsonValue>;
       env.subject = {

@@ -420,6 +420,7 @@ export function buildMandate(
     validUntil: string;
     createdAt: string;
     mandateId?: string;
+    maxInvocations?: number | null;
     anchors?: JsonValue[] | null;
     keyHistory?: JsonValue[] | null;
   },
@@ -435,6 +436,10 @@ export function buildMandate(
     created_at: opts.createdAt,
     canonicalization: CANONICALIZATION,
   };
+  // Use-count cap (§10, proposal 0026): set BEFORE signing — max_invocations is in
+  // the signed header (mandateHeader), omit-when-absent so an uncapped mandate is
+  // byte-identical to pre-0026.
+  if (opts.maxInvocations != null) mandate.max_invocations = opts.maxInvocations;
   const principal: Record<string, JsonValue> = {
     host_id: principalId,
     public_key: key.publicKeyB64,
