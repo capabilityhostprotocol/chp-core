@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-smolagents"
-version = "0.43.1"
+version = "0.44.0"
 description = "CHP capability adapter — a code-writing meta-agent (smolagents) whose tools are CHP capabilities"
 readme = "README.md"
 requires-python = ">=3.10"

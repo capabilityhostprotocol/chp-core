@@ -702,6 +702,43 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "output_schema_vector_verifies", False, {"error": str(exc)})
 
+    # First-class actor (proposal 0034): the v0.2 spec must define the per-actor
+    # allowlist, and the matcher vector's allowlist decisions must all agree
+    # (effective actor = verified subject id, else asserted actor.id, else subject
+    # id; empty allowlist = open).
+    add_check(
+        checks,
+        "spec_defines_actor",
+        "allowed_actors" in spec_v02_mk and "actor" in spec_v02_mk,
+        {"hint": "chp-v0.2.md must define the first-class actor + allowed_actors gate"},
+    )
+    actor_vec = repo_root / "spec" / "test-vectors" / "actor.json"
+    if actor_vec.exists():
+        try:
+            actor_doc = read_json(actor_vec)
+
+            def _actor_effective(c: JSON) -> str:
+                subj = c.get("subject") or {}
+                actor = c.get("actor") or {}
+                if subj.get("verified"):
+                    return str(subj.get("id") or "")
+                return str(actor.get("id") or subj.get("id") or "")
+
+            def _actor_allowed(c: JSON) -> bool:
+                allowed = c.get("allowed_actors") or []
+                if not allowed:
+                    return True
+                return _actor_effective(c) in allowed
+
+            add_check(
+                checks,
+                "actor_vector_verifies",
+                all(_actor_allowed(c) is c["allowed"] for c in actor_doc.get("cases", [])),
+                {"hint": "regenerate actor.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "actor_vector_verifies", False, {"error": str(exc)})
+
     # Mutual TLS (proposal 0031): §5 + the HTTP binding must define mTLS, and the
     # reference must expose the server TLS knobs + client-cert path.
     http_binding_mtls = read_text(repo_root / "spec" / "chp-http-binding.md")

@@ -6,7 +6,7 @@
 > the v0.9 protocol release-candidate map. **v0.8.3 is a protocol pre-release, NOT a
 > product v1.0** (see the index's scope note).
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13; **v0.8.3 Rekor transparency-log submission** 2026-07-13; **v0.8.4 informative: HTTP host load-shedding (503)** 2026-07-14; **v0.8.5 informative: per-caller rate limiting (429) + load observability** 2026-07-14). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13; **v0.8.3 Rekor transparency-log submission** 2026-07-13; **v0.8.4 informative: HTTP host load-shedding (503)** 2026-07-14; **v0.8.5 informative: per-caller rate limiting (429) + load observability** 2026-07-14; **v0.8.6 normative-doc: verifier fail-closed robustness** 2026-07-14; **v0.8.7 first-class actor identity + per-actor allowlist** 2026-07-14). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -1267,3 +1267,34 @@ key, and that `who` equals the signing `key_id`; a caller cross-checks
 `content_hash` / `payload_commitment` against the bundle. Receipt revocation,
 threshold (k-of-n) unsealing, and per-recipient distinct plaintext remain out of
 scope.
+
+## 17. First-class actor identity (v0.8.7)
+
+The invocation `subject` is the host's **verified accountability record** — who
+authenticated (mTLS CN/SAN, a named API key, an `auth-token` `sub`, or a mandate
+`delegate_id`), bound by the host and not by client assertion. Proposal 0034 adds an
+OPTIONAL, additive **first-class `actor`** — a structured, caller-asserted identity
+that enriches the invocation beyond the free-form subject:
+
+```
+actor = { id, type, owner?, organization?, trust_level?, status?,
+          credentials_ref?, authority_refs? }
+```
+
+`type` spans the actor breadth (`human`/`agent`/`service`/`workflow`/`device`/
+`organization`). Every field but `id` is **omit-when-empty**; an envelope with no
+`actor` serializes byte-identically to a pre-0034 envelope (the additive guarantee,
+same rule as `mandate`). The `actor` transits the routing mesh unchanged (like the
+mandate); the executing host records it in evidence alongside the `subject` and
+enforces it.
+
+**Per-actor allowlist.** A capability MAY restrict who invokes it via
+`descriptor.policy.allowed_actors`. Enforced at the governance gate *after* the
+mandate gate finalizes the subject: the **effective actor** is the verified
+`subject.id` when the subject is verified (**accountability wins** — an asserted
+`actor` cannot override a host-verified caller), else the asserted `actor.id`, else
+`subject.id`. A non-empty `allowed_actors` that excludes the effective actor denies
+`policy_blocked`; an empty/absent list is open (today's behavior). Authorized
+*discovery* (catalog-filtering by actor) and a distinct `actor_unauthorized` denial
+code remain out of scope (a later proposal). The verified `subject` remains the
+accountability record; `actor` enriches it and drives per-actor policy.

@@ -1,0 +1,46 @@
+{
+  "kind": "actor",
+  "description": "Proposal 0034: first-class actor + per-actor allowlist enforcement (descriptor.policy.allowed_actors) at the invocation gate. The EFFECTIVE actor = the verified subject id when the subject is verified (accountability wins — an asserted actor cannot override a host-verified caller), else the asserted actor.id, else the subject id. A capability whose allowed_actors is non-empty denies (policy_blocked) any effective actor not in the list; an empty/absent list is open. All three reference impls agree on this decision.",
+  "cases": [
+    {
+      "note": "verified subject in list -> allowed",
+      "allowed_actors": ["alice"],
+      "subject": {"id": "alice", "verified": true},
+      "actor": {"id": "alice", "type": "human"},
+      "allowed": true
+    },
+    {
+      "note": "verified subject NOT in list -> denied",
+      "allowed_actors": ["alice"],
+      "subject": {"id": "mallory", "verified": true},
+      "allowed": false
+    },
+    {
+      "note": "unverified subject, asserted actor in list -> allowed (actor.id used)",
+      "allowed_actors": ["bob"],
+      "subject": {"id": "local"},
+      "actor": {"id": "bob", "type": "agent"},
+      "allowed": true
+    },
+    {
+      "note": "unverified subject, no actor, subject.id not in list -> denied",
+      "allowed_actors": ["alice"],
+      "subject": {"id": "local"},
+      "allowed": false
+    },
+    {
+      "note": "accountability wins: verified subject alice + asserted actor bob (a spoof attempt); bob is listed but the VERIFIED id alice is not -> denied",
+      "allowed_actors": ["bob"],
+      "subject": {"id": "alice", "verified": true},
+      "actor": {"id": "bob", "type": "agent"},
+      "allowed": false
+    },
+    {
+      "note": "empty allowlist -> open (any actor allowed)",
+      "allowed_actors": [],
+      "subject": {"id": "anyone"},
+      "actor": {"id": "whoever"},
+      "allowed": true
+    }
+  ]
+}

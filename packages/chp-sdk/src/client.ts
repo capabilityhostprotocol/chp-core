@@ -123,7 +123,7 @@ export class RemoteCapabilityHost {
   async invoke(
     capabilityId: string,
     payload: JsonValue = {},
-    opts: { correlation?: JsonValue; subject?: JsonValue; mode?: string; version?: string; mandate?: JsonValue } = {},
+    opts: { correlation?: JsonValue; subject?: JsonValue; mode?: string; version?: string; mandate?: JsonValue; actor?: JsonValue } = {},
   ): Promise<InvocationResult> {
     const body: Record<string, JsonValue> = {
       capability_id: capabilityId,
@@ -136,6 +136,9 @@ export class RemoteCapabilityHost {
     // Presented authority (§10): the delegate host verifies it; the evidence
     // subject becomes "delegate under principal's mandate".
     if (opts.mandate) body.mandate = opts.mandate;
+    // First-class actor (proposal 0034, additive): omit-when-absent so an
+    // envelope without an actor is byte-identical to today.
+    if (opts.actor) body.actor = opts.actor;
     return this.req('/invoke', {
       method: 'POST',
       headers: this.headers(true),
@@ -155,7 +158,7 @@ export class RemoteCapabilityHost {
   async *invokeStream(
     capabilityId: string,
     payload: JsonValue = {},
-    opts: { correlation?: JsonValue; subject?: JsonValue; version?: string; mandate?: JsonValue;
+    opts: { correlation?: JsonValue; subject?: JsonValue; version?: string; mandate?: JsonValue; actor?: JsonValue;
             invocationId?: string; resumeAttempts?: number } = {},
   ): AsyncGenerator<{ delta: JsonValue } | { result: InvocationResult }, void, unknown> {
     // Pin ONE invocation_id for the whole call (§13.1) so a dropped connection
@@ -171,6 +174,7 @@ export class RemoteCapabilityHost {
     };
     if (opts.version) body.version = opts.version;
     if (opts.mandate) body.mandate = opts.mandate;
+    if (opts.actor) body.actor = opts.actor;  // additive (proposal 0034)
     const rawBody = JSON.stringify(body);
     const resumeAttempts = opts.resumeAttempts ?? 5;
 

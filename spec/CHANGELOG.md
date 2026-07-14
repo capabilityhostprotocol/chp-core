@@ -5,6 +5,22 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.7] — First-class actor identity + per-actor allowlist over 0.8.6
+
+### Added (additive — no wire break)
+- **First-class actor** (chp-v0.2.md §17, chp-application-contract.md §3.1, proposal 0034):
+  an OPTIONAL `actor` object on the invocation envelope (`id` + `type` + `owner` /
+  `organization` / `trust_level` / `status` / `credentials_ref` / `authority_refs`) — a
+  structured, caller-asserted identity enriching the free-form `subject` (which stays the
+  host's verified accountability record). Omit-when-absent → an envelope with no `actor` is
+  **byte-identical** to a pre-0034 envelope. New `schemas/actor.schema.json`; the envelope
+  `$ref`s it. Recorded in evidence alongside `subject`; transits the mesh unchanged.
+- **Per-actor allowlist:** `descriptor.policy.allowed_actors` is now **enforced** (it was a
+  declared-but-dead field) at the governance gate. Effective actor = verified `subject.id`
+  (accountability wins over an asserted actor), else `actor.id`, else `subject.id`; not in a
+  non-empty list → `policy_blocked`. Authorized *discovery* + a distinct denial code deferred.
+  Regression gate: `test_actor.py` + `spec/test-vectors/actor.json` (3-impl agreement).
+
 ## [0.8.6] — Normative doc: verifier fail-closed robustness over 0.8.5
 
 ### Added (normative doc — no wire change)

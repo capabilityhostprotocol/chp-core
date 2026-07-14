@@ -712,6 +712,60 @@ class StreamResult:
 
 
 @dataclass(slots=True)
+class Actor:
+    """A first-class actor identity (chp-application-contract.md §3.1, proposal 0034).
+
+    An OPTIONAL, structured, caller-asserted identity that enriches an invocation
+    beyond the free-form ``subject`` — which stays the host's *verified accountability
+    record* (who authenticated). ``type`` spans the CHP actor breadth
+    (human/agent/service/workflow/device/organization). Additive: an envelope with
+    no ``actor`` serializes byte-identically to today. Every field but ``id`` is
+    omit-when-empty so a minimal ``{"id": ...}`` actor stays compact on the wire.
+    """
+
+    id: str
+    type: str = "agent"
+    owner: str | None = None
+    organization: str | None = None
+    trust_level: str | None = None
+    status: str | None = None
+    credentials_ref: str | None = None
+    authority_refs: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_mapping(cls, value: JSON) -> "Actor":
+        # Trust boundary: a hostile client may send a wrong-shaped actor. Validate
+        # + reject with a clean ValueError (→ HTTP 400), never a 500 (proposal 0040).
+        if not isinstance(value, dict):
+            raise ValueError("actor must be a JSON object")
+        aid = value.get("id")
+        if not isinstance(aid, str) or not aid:
+            raise ValueError("actor.id must be a non-empty string")
+        refs = value.get("authority_refs") or []
+        if not isinstance(refs, list):
+            raise ValueError("actor.authority_refs must be a list")
+        return cls(
+            id=aid,
+            type=value.get("type") or "agent",
+            owner=value.get("owner"),
+            organization=value.get("organization"),
+            trust_level=value.get("trust_level"),
+            status=value.get("status"),
+            credentials_ref=value.get("credentials_ref"),
+            authority_refs=[str(r) for r in refs],
+        )
+
+    def to_dict(self) -> JSON:
+        data = asdict(self)
+        for k in ("owner", "organization", "trust_level", "status", "credentials_ref"):
+            if not data.get(k):
+                del data[k]  # omit-when-empty (None or "") so a minimal actor stays compact
+        if not data.get("authority_refs"):
+            del data["authority_refs"]
+        return data
+
+
+@dataclass(slots=True)
 class InvocationEnvelope:
     capability_id: str
     payload: JSON = field(default_factory=dict)
@@ -734,6 +788,11 @@ class InvocationEnvelope:
     # OPTIONAL presented authority (chp-v0.2.md §10): a principal-signed
     # mandate the host verifies before executing. None = today's behavior.
     mandate: JSON | None = None
+    # OPTIONAL first-class actor (chp-application-contract.md §3.1, proposal 0034):
+    # a structured, caller-asserted identity (see Actor). The verified `subject`
+    # remains the accountability record; `actor` enriches it and drives per-actor
+    # policy. None = today's behavior (omit-when-absent → byte-identical).
+    actor: JSON | None = None
 
     @classmethod
     def from_mapping(cls, value: JSON) -> "InvocationEnvelope":
@@ -769,6 +828,9 @@ class InvocationEnvelope:
             requested_at=value.get("requested_at") or utc_now(),
             metadata=_obj(value.get("metadata"), "metadata"),
             mandate=(_obj(value.get("mandate"), "mandate") if value.get("mandate") else None),
+            # Normalize + validate the actor at the trust boundary; store the
+            # canonical (omit-when-empty) dict so wire bytes are stable (0034).
+            actor=(Actor.from_mapping(value["actor"]).to_dict() if value.get("actor") else None),
         )
 
     def to_dict(self) -> JSON:
@@ -776,6 +838,8 @@ class InvocationEnvelope:
         data["correlation"] = self.correlation.to_dict()
         if data.get("mandate") is None:
             del data["mandate"]  # additive field: absent stays absent on the wire
+        if data.get("actor") is None:
+            del data["actor"]  # additive (proposal 0034): absent stays absent
         if data.get("requested_capability_version") is None:
             del data["requested_capability_version"]  # additive (proposal 0028)
         if not data.get("require_output_schema"):
@@ -800,6 +864,9 @@ class ExecutionEvidence:
     error: JSON | None = None
     denial: DenialReason | None = None
     subject: JSON | None = None
+    # First-class actor recorded alongside the accountability subject (proposal
+    # 0034). Omit-when-None so pre-0034 events serialize byte-identically.
+    actor: JSON | None = None
     assurance: AssuranceMetadata = field(default_factory=AssuranceMetadata)
     # Selective disclosure (chp-v0.2.md §14, proposal 0011). Absent = the default
     # chp-event-hash-v1 (inline payload); both omit-when-None so v1 events serialize
@@ -815,6 +882,8 @@ class ExecutionEvidence:
             data["denial"] = self.denial.to_dict()
         if self.subject is None:
             data.pop("subject", None)
+        if self.actor is None:
+            data.pop("actor", None)  # omit-when-None (proposal 0034)
         if self.hash_scheme is None:
             data.pop("hash_scheme", None)
         if self.payload_commitment is None:

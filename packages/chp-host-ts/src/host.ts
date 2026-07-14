@@ -183,6 +183,9 @@ export class LocalCapabilityHost {
       ...(extra.denial ? { denial: extra.denial as unknown as JsonValue } : {}),
       ...(extra.error ? { error: extra.error } : {}),
       subject: env.subject ?? { id: 'local', type: 'user' },
+      // First-class actor recorded alongside the subject; omit-when-absent so
+      // pre-0034 events are byte-identical (proposal 0034).
+      ...(env.actor ? { actor: env.actor } : {}),
     };
     return this.store.append(ev);
   }
@@ -375,6 +378,26 @@ export class LocalCapabilityHost {
         // Sub-delegation (§10, proposal 0009): the chain's ultimate authority.
         root_principal: mandateRootPrincipal(env.mandate as Record<string, JsonValue>),
       };
+    }
+    // Per-actor allowlist (proposal 0034): descriptor.policy.allowed_actors,
+    // enforced after the mandate gate finalizes the subject. Effective actor =
+    // verified subject id (accountability wins), else asserted actor.id, else
+    // subject id. Empty/absent = open (today's behavior). Parity with Python.
+    const allowed = d.policy?.allowed_actors;
+    if (allowed && allowed.length > 0) {
+      const subj = (env.subject ?? {}) as Record<string, JsonValue>;
+      const actor = (env.actor ?? {}) as Record<string, JsonValue>;
+      const effective = subj.verified
+        ? String(subj.id ?? '')
+        : String(actor.id ?? subj.id ?? '');
+      if (!allowed.includes(effective)) {
+        return decided(this.deny(env, {
+          code: 'policy_blocked',
+          message: `actor '${effective}' is not in allowed_actors for '${d.id}'`,
+          retryable: false,
+          details: { allowed_actors: allowed, actor: effective },
+        }));
+      }
     }
     // Gate 6: policy
     const pd = this.checkPolicy(d);
