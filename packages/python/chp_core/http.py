@@ -108,6 +108,12 @@ def _host_assurance(host_id: str | None = None) -> JSON:
 class CapabilityHostHTTPServer(ThreadingHTTPServer):
     """Threading HTTP server bound to a CHP host (LocalCapabilityHost or MultiHostRouter)."""
 
+    # Listen backlog (production hardening, proposal 0041): the stdlib default of 5 is
+    # far too small — a burst of simultaneous connects overflows the accept queue and
+    # the OS refuses connections (a self-inflicted DoS). 128 absorbs bursts so the
+    # host's own concurrency cap (not the kernel) decides what to shed.
+    request_queue_size = 128
+
     def __init__(self, server_address: tuple[str, int], host: Any,
                  tls: dict | None = None) -> None:
         super().__init__(server_address, CapabilityHostRequestHandler)
