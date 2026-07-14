@@ -732,6 +732,32 @@ def check_alignment(repo_root: Path) -> JSON:
         {"hint": "chp-zenoh-binding.md must define the key table; ZenohTransport must satisfy Transport"},
     )
 
+    # Rekor transparency-log anchor (proposal 0033): §12 must define it, and the
+    # rekor-anchor vector must verify offline (inclusion + SET + bindings).
+    add_check(
+        checks,
+        "spec_defines_rekor_anchor",
+        'anchor.type = "rekor"' in spec_v02_mk or "anchor.type=rekor" in spec_v02_mk
+        or "Rekor" in spec_v02_mk,
+        {"hint": "chp-v0.2.md §12 must define the rekor transparency-log anchor"},
+    )
+    rekor_vec = repo_root / "spec" / "test-vectors" / "rekor-anchor.json"
+    if rekor_vec.exists():
+        try:
+            from . import rekor as _rekor
+
+            rk_doc = read_json(rekor_vec)
+            add_check(
+                checks,
+                "rekor_anchor_vector_verifies",
+                _rekor.verify_rekor_anchor(
+                    rk_doc["anchor"],
+                    log_public_key_pem=rk_doc["log_public_key_pem"]).valid,
+                {"hint": "regenerate rekor-anchor.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "rekor_anchor_vector_verifies", False, {"error": str(exc)})
+
     # Transport auth (proposal 0027): §5 must be normative + define signed tokens,
     # and the auth-token vector must verify (and reject a wrong audience).
     add_check(

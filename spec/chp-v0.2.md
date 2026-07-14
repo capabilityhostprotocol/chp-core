@@ -1,6 +1,6 @@
 # Capability Host Protocol — v0.2 (Evidence Integrity)
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13; **v0.8.3 Rekor transparency-log submission** 2026-07-13). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -279,6 +279,24 @@ the **signed attestation claim**:
   is offline and MUST run whenever a `did` anchor is present.
 - A host MAY carry multiple anchors so verifiers choose their preferred root;
   further anchor types extend the same list.
+- **Rekor transparency-log anchor** (`anchor.type = "rekor"`,
+  [proposal 0033](proposals/0033-rekor-submission.md)): instead of a countersignature
+  over the head message, the head is anchored by **public-log inclusion**. A host
+  exports the correlation as a DSSE-wrapped in-toto attestation (proposal 0021, whose
+  subject digest *is* the `store_head`/`root_hash`) and submits it to a
+  [Rekor](https://docs.sigstore.dev/logging/overview/) log; Rekor returns an RFC 6962
+  inclusion proof + a signed entry timestamp (SET). The anchor carries
+  `{log_id, log_index, tree_root, tree_size, inclusion_index, inclusion_hashes[], set,
+  entry_body, dsse_envelope}`, and a verifier checks — **offline**, against the log's
+  *pinned* public key — that (a) `SHA256(0x00‖entry_body)` is included under `tree_root`
+  (RFC 6962, the same Merkle math as `chp-store-head-v2`), (b) the SET is a valid
+  ECDSA-P256 signature over the canonical `{body, integratedTime, logIndex, logID}`,
+  (c) the entry records this DSSE, and (d) the DSSE commits `store_head`. **Honest
+  boundary:** CHP specifies the *carrier* and the *offline verification* of a Rekor
+  inclusion proof, **not** the operation of a log; submission is opt-in and reaches the
+  network (a permanent, public, append-only record), and a host that never submits stays
+  fully conformant. Gossip between monitors cross-checking each other's Rekor checkpoints
+  is a deferred multi-party extension.
 - **Stated tradeoff:** the `domain` anchor deliberately leans on Web-PKI
   (CA + DNS) as the buildable, standards-aligned floor-above-TOFU; the `did`
   anchor is the decentralized ceiling that removes that dependency.

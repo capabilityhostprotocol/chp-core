@@ -970,10 +970,49 @@ def cmd_witness_anchor_verify(args: argparse.Namespace) -> int:
 
     with open(args.file) as fh:
         anchor = json.load(fh)
-    v = signing.verify_store_head_anchor(anchor)
+    # A rekor anchor (proposal 0033) needs the log's pinned public key (offline).
+    pem = None
+    if getattr(args, "rekor_key", None):
+        with open(args.rekor_key) as fh:
+            pem = fh.read()
+    v = signing.verify_store_head_anchor(anchor, rekor_log_public_key_pem=pem)
     print(json.dumps({"valid": v.valid, "checks": v.checks,
                       "anchored_did": v.anchored_did, "reason": v.reason}, indent=2))
     return 0 if v.valid else 1
+
+
+def cmd_witness_anchor_rekor(args: argparse.Namespace) -> int:
+    """Submit a signed bundle to a Rekor transparency log and write the resulting
+    ``store-head-anchor`` (anchor.type="rekor") — proposal 0033. NETWORK + opt-in:
+    ``--url`` writes to a permanent, immutable, public log. Offline-verify the
+    written anchor with ``chp witness anchor verify --rekor-key <log.pem>``."""
+    import sys
+
+    from .. import rekor
+    from ..signing import load_host_key, resolve_key_dir
+    from ..types import utc_now
+
+    with open(args.bundle) as fh:
+        bundle = json.load(fh)
+    key = load_host_key(args.key_dir or resolve_key_dir(args.host_id), prompt=True)
+    if key is None or not key.can_sign:
+        print("no signing key — cannot build the DSSE attestation to submit", file=sys.stderr)
+        return 1
+    print(f"submitting DSSE attestation to Rekor at {args.url} "
+          f"(permanent public record)…", file=sys.stderr)
+    response = rekor.submit_bundle(bundle, key, rekor_url=args.url)
+    anchor = rekor.rekor_anchor_from_response(
+        bundle, key, response, host_id=(args.host_id or bundle.get("host_id", "")),
+        sequence=int(args.sequence), anchored_at=utc_now())
+    rendered = json.dumps(anchor, indent=2)
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(rendered + "\n")
+        print(f"wrote rekor anchor -> {args.out} (log_index "
+              f"{anchor['anchor'].get('log_index')})", file=sys.stderr)
+    else:
+        print(rendered)
+    return 0
 
 
 def cmd_revocation_verify(args: argparse.Namespace) -> int:

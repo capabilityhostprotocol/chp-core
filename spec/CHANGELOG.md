@@ -5,6 +5,33 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.3] — Rekor / Sigstore transparency-log submission over 0.8.2
+
+### Added
+- **Rekor transparency-log anchor** (chp-v0.2.md §12 `anchor.type="rekor"`,
+  [proposals/0033](proposals/0033-rekor-submission.md)): a signed bundle's DSSE export
+  (proposal 0021) IS Rekor's native intoto/dsse entry body — submit it to a Rekor log and
+  fold the returned RFC 6962 inclusion proof + signed entry timestamp (SET) into a
+  `store-head-anchor` (anchor.type="rekor"). `verify_rekor_anchor` (dispatched from
+  `verify_store_head_anchor`) checks OFFLINE against the log's pinned public key:
+  inclusion of `SHA256(0x00‖entry_body)` under `tree_root` (RFC 6962, via `merkle` — the
+  same verifier as `chp-store-head-v2`), the ECDSA-P256 SET over the canonical entry
+  metadata, that the entry records this DSSE, and that the DSSE commits `store_head`.
+  `rekor.py` (submit/build/verify); CLI `chp witness anchor rekor` (network, opt-in) +
+  `chp witness anchor verify --rekor-key`.
+
+### Compatibility
+- Additive, **patch** bump. New `anchor.type` in the open anchor list; no wire-object or
+  reserved-code change; no new chp-core dependency (stdlib urllib + the present
+  `cryptography`). Submission is opt-in + network (a permanent public record); a host that
+  never submits stays conformant. Honest boundary: CHP specifies the carrier + offline
+  verification of a Rekor proof, not the operation of a log.
+
+### Regression gate
+- `rekor-anchor.json` vector verifies in Python + `verify.mjs` (2-impl offline agreement);
+  `test_rekor.py` (offline verify + dispatch + tamper breaks each check); guards
+  `spec_defines_rekor_anchor` + `rekor_anchor_vector_verifies`.
+
 ## [0.8.2] — Zenoh transport binding over 0.8.1
 
 ### Added

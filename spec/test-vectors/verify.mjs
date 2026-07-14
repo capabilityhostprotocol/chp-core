@@ -558,6 +558,34 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (version-negotiation: ${input.cases.length} semver cases agree)`
     : "INVALID");
+} else if (input.kind === "rekor-anchor") {
+  // Rekor transparency-log anchor (§12, proposal 0033): a third party verifies —
+  // OFFLINE, in any language — that the logged DSSE (committing store_head) is in
+  // the log. Four checks: RFC 6962 inclusion of SHA256(0x00‖entry_body); the ECDSA
+  // SET over JCS({body,integratedTime,logIndex,logID}) under the pinned log key;
+  // the entry records THIS DSSE (envelope hash); the DSSE commits store_head.
+  const a = input.anchor.anchor;
+  const entryBody = Buffer.from(a.entry_body, "base64");
+  const path = (a.inclusion_hashes ?? []).map((h) => Buffer.from(h, "hex"));
+  const inclusionOk = a.inclusion_index >= 0 && a.inclusion_index < a.tree_size
+    && _walk(a.tree_size, a.inclusion_index, path, _leafHash(entryBody)).toString("hex") === a.tree_root
+    && path.length === 0;
+  const setMsg = canonJcs({ body: a.entry_body, integratedTime: a.integrated_time,
+                            logID: a.log_id, logIndex: a.log_index });
+  let setOk = false;
+  try {
+    const logPub = createPublicKey(input.log_public_key_pem);
+    setOk = edVerify("sha256", Buffer.from(setMsg, "utf8"), logPub, Buffer.from(a.set, "base64"));
+  } catch { setOk = false; }
+  const envHash = sha256hex(canonJcs(a.dsse_envelope));
+  const body = JSON.parse(entryBody.toString("utf8"));
+  const bindsOk = body?.spec?.content?.hash?.value === envHash;
+  const stmt = JSON.parse(Buffer.from(a.dsse_envelope.payload, "base64").toString("utf8"));
+  const rootOk = (stmt.subject?.[0]?.digest?.sha256 ?? "") === input.anchor.store_head;
+  ok = inclusionOk && setOk && bindsOk && rootOk;
+  console.log(ok
+    ? `VALID (rekor-anchor: inclusion @${a.inclusion_index}/${a.tree_size} + SET + DSSE binds root ${input.anchor.store_head.slice(0,12)}…)`
+    : `INVALID (inclusion=${inclusionOk} set=${setOk} binds=${bindsOk} root=${rootOk})`);
 } else if (input.kind === "output-schema") {
   // Output-schema validation matcher (pipeline gate 12, proposal 0029): a
   // capability result is validated against descriptor.output_schema post-
