@@ -5,6 +5,18 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.5] — Informative: per-caller rate limiting + load observability over 0.8.4
+
+### Added (informative — no normative wire change)
+- **Per-caller rate limiting** (chp-http-binding.md §1, production hardening proposal 0041):
+  a host **MAY** rate-limit *work* requests (POST) per verified caller (else client IP) with
+  a `429` (`code: "rate_limited"`) + `Retry-After`, so one caller cannot monopolize the
+  concurrency cap. Operational reads (`/health`, `/metrics`, discovery) are exempt.
+  `CHP_HOST_RATE_LIMIT` per `CHP_HOST_RATE_WINDOW_S` (0 = disabled).
+- **Load observability:** the `/metrics` exposition adds `chp_http_load_shed_total` (503s)
+  and `chp_http_rate_limited_total` (429s) so operators can see + alert on shedding.
+  Operational-robustness behavior; the object model and pipeline are unchanged.
+
 ## [0.8.4] — Informative: HTTP host load-shedding over 0.8.3
 
 ### Added (informative — no normative wire change)

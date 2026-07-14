@@ -257,6 +257,30 @@ def format_internal_error_prometheus() -> str:
     ]) + "\n"
 
 
+# Load-management counters (production hardening, proposal 0039/0041) — a host under
+# pressure sheds (503) and rate-limits (429); operators must SEE it to alert.
+_LOAD_COUNTERS = {"shed": 0, "rate_limited": 0}
+
+
+def record_shed() -> None:
+    _LOAD_COUNTERS["shed"] += 1
+
+
+def record_rate_limited() -> None:
+    _LOAD_COUNTERS["rate_limited"] += 1
+
+
+def format_load_prometheus() -> str:
+    return "\n".join([
+        "# HELP chp_http_load_shed_total Requests shed at the concurrency cap (HTTP 503).",
+        "# TYPE chp_http_load_shed_total counter",
+        f"chp_http_load_shed_total {_LOAD_COUNTERS['shed']}",
+        "# HELP chp_http_rate_limited_total Requests rejected by the per-caller rate limit (HTTP 429).",
+        "# TYPE chp_http_rate_limited_total counter",
+        f"chp_http_rate_limited_total {_LOAD_COUNTERS['rate_limited']}",
+    ]) + "\n"
+
+
 # Process-lifetime replay counter (spec §13): served-from-cache invocations.
 _REPLAYS = {"count": 0}
 

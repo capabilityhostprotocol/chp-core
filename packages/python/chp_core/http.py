@@ -139,6 +139,30 @@ class CapabilityHostHTTPServer(ThreadingHTTPServer):
         # response — unlike an abrupt socket close). Default 128; 0 disables the cap.
         cap = int(os.environ.get("CHP_HOST_MAX_CONCURRENCY", "128"))
         self._concurrency = threading.BoundedSemaphore(cap) if cap > 0 else None
+        # Per-caller rate limit (production hardening, proposal 0041). A token bucket
+        # keyed on the verified caller (else client IP) so one caller cannot monopolize
+        # the concurrency cap. CHP_HOST_RATE_LIMIT requests per CHP_HOST_RATE_WINDOW_S
+        # (default 1s); 0 (default) disables. Refills continuously; bursts up to the cap.
+        self._rate_limit = int(os.environ.get("CHP_HOST_RATE_LIMIT", "0"))
+        window = float(os.environ.get("CHP_HOST_RATE_WINDOW_S", "1") or "1")
+        self._rate_per_sec = self._rate_limit / window if window > 0 else 0.0
+        self._rate_buckets: dict[str, tuple[float, float]] = {}
+        self._rate_lock = threading.Lock()
+
+    def allow_request(self, caller: str) -> bool:
+        """Token-bucket admission for ``caller`` (proposal 0041). True = allowed.
+        Continuously refills at ``rate_limit/window`` tokens/sec, capacity = rate_limit."""
+        if self._rate_limit <= 0:
+            return True
+        now = time.monotonic()
+        with self._rate_lock:
+            tokens, last = self._rate_buckets.get(caller, (float(self._rate_limit), now))
+            tokens = min(float(self._rate_limit), tokens + (now - last) * self._rate_per_sec)
+            if tokens >= 1.0:
+                self._rate_buckets[caller] = (tokens - 1.0, now)
+                return True
+            self._rate_buckets[caller] = (tokens, now)
+            return False
 
     def track_request(self, delta: int) -> None:
         with self._inflight_lock:
@@ -362,15 +386,34 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
 
     def _write_503(self) -> None:
         """A clean 503 load-shed response with a Retry-After (proposal 0039)."""
-        raw = json.dumps({"error": {"code": "server_at_capacity",
-                                    "message": "host at maximum concurrency; retry shortly"}},
+        from .metrics import record_shed
+        record_shed()
+        self._write_retryable(HTTPStatus.SERVICE_UNAVAILABLE, "server_at_capacity",
+                              "host at maximum concurrency; retry shortly")
+
+    def _write_retryable(self, status: HTTPStatus, code: str, message: str) -> None:
+        """A JSON error carrying a Retry-After (used for 503 shed + 429 rate-limit)."""
+        raw = json.dumps({"error": {"code": code, "message": message}},
                          sort_keys=True).encode("utf-8")
-        self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Retry-After", "1")
         self.end_headers()
         self.wfile.write(raw)
+
+    def _rate_ok(self) -> bool:
+        """Per-caller rate-limit admission (proposal 0041). On rejection, writes a 429
+        + Retry-After, records the metric, and returns False. Call after _check_auth so
+        the verified caller is known (falls back to the client IP for anonymous callers)."""
+        caller = getattr(self, "_caller", None) or self.client_address[0]
+        if self.server.allow_request(caller):
+            return True
+        from .metrics import record_rate_limited
+        record_rate_limited()
+        self._write_retryable(HTTPStatus.TOO_MANY_REQUESTS, "rate_limited",
+                              f"caller {caller!r} exceeded the rate limit; retry shortly")
+        return False
 
     def _internal_error(self) -> None:
         """An unhandled exception was about to become a silently dropped
@@ -664,8 +707,9 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if hasattr(store, "size_info"):
             from .metrics import format_store_prometheus
             body += b"\n" + format_store_prometheus(store.size_info()).encode("utf-8")
-        from .metrics import format_ops_prometheus
+        from .metrics import format_load_prometheus, format_ops_prometheus
         body += b"\n" + format_ops_prometheus().encode("utf-8")
+        body += b"\n" + format_load_prometheus().encode("utf-8")  # shed + rate-limit (0041)
         # Routing reliability (spec §11) — only a router has an _unhealthy map.
         unhealthy = getattr(host, "_unhealthy", None)
         if unhealthy is not None:
@@ -681,6 +725,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if self._reject_unsupported_version():
             return
         if not self._check_auth():
+            return
+        if not self._rate_ok():
             return
         path = urlparse(self.path).path
         try:

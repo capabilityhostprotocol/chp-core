@@ -220,5 +220,121 @@ class ConcurrencyLimitTests(unittest.TestCase):
                 os.environ["CHP_HOST_MAX_CONCURRENCY"] = prev
 
 
+class RateLimitTests(unittest.TestCase):
+    """Per-caller rate limiting (proposal 0041): a token bucket keyed on the caller
+    returns 429 over the limit, and the shed/limit counters are observable."""
+
+    def _serve_with_env(self, host, **env):
+        prev = {k: os.environ.get(k) for k in env}
+        os.environ.update({k: str(v) for k, v in env.items()})
+        try:
+            return _serve(host)
+        finally:
+            for k, v in prev.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_over_limit_is_429_and_counted_and_recovers(self) -> None:
+        import http.client
+
+        host = LocalCapabilityHost("rl-host", store=SQLiteEvidenceStore(":memory:"))
+
+        async def echo(_c, p):
+            return {"ok": True}
+
+        host.register(CapabilityDescriptor(id="ok.cap", version="1.0.0", description="."), echo)
+        # 3 requests / 60s window → refill is negligible during the test (deterministic).
+        server, base = self._serve_with_env(host, CHP_HOST_RATE_LIMIT=3, CHP_HOST_RATE_WINDOW_S=60)
+        port = server.server_address[1]
+
+        def _post():
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("POST", "/invoke", json.dumps(
+                {"capability_id": "ok.cap", "payload": {}, "correlation_id": "x"}),
+                {"Content-Type": "application/json"})
+            r = conn.getresponse(); body = r.read().decode(); conn.close()
+            return r.status, body
+
+        try:
+            statuses = [_post()[0] for _ in range(4)]  # same caller (127.0.0.1)
+            self.assertEqual(statuses[:3], [200, 200, 200], f"first 3 within limit: {statuses}")
+            self.assertEqual(statuses[3], 429, f"4th over the limit must be 429: {statuses}")
+            last = _post()
+            self.assertEqual(last[0], 429)
+            self.assertEqual(json.loads(last[1])["error"]["code"], "rate_limited")
+            # the rejection is observable on /metrics
+            m = urllib.request.urlopen(f"{base}/metrics", timeout=5).read().decode()
+            self.assertRegex(m, r"chp_http_rate_limited_total [1-9]")
+        finally:
+            server.shutdown(); server.server_close()
+
+
+class LoadBurstTests(unittest.TestCase):
+    """Load harness (proposal 0041): a burst far exceeding the concurrency cap is
+    answered entirely with 200/503 — never a 500 or a hang — and the host survives."""
+
+    def test_burst_beyond_cap_stays_healthy(self) -> None:
+        import http.client
+
+        host = LocalCapabilityHost("burst-host", store=SQLiteEvidenceStore(":memory:"))
+
+        async def work(_c, p):
+            return {"n": p.get("n", 0)}
+
+        host.register(CapabilityDescriptor(id="w.cap", version="1.0.0", description="."), work)
+        prev = os.environ.get("CHP_HOST_MAX_CONCURRENCY")
+        os.environ["CHP_HOST_MAX_CONCURRENCY"] = "5"
+        try:
+            server, base = _serve(host)
+        finally:
+            if prev is None:
+                os.environ.pop("CHP_HOST_MAX_CONCURRENCY", None)
+            else:
+                os.environ["CHP_HOST_MAX_CONCURRENCY"] = prev
+        port = server.server_address[1]
+
+        results: list[int] = []
+        lock = threading.Lock()
+
+        def _fire(i: int) -> None:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                conn.request("POST", "/invoke", json.dumps(
+                    {"capability_id": "w.cap", "payload": {"n": i}, "correlation_id": f"b{i}"}),
+                    {"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                st = resp.status
+                resp.read()
+                conn.close()
+            except Exception:
+                st = -1
+            with lock:
+                results.append(st)
+
+        try:
+            N = 60  # 12× the cap
+            threads = [threading.Thread(target=_fire, args=(i,)) for i in range(N)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=15)
+            # every request got a definitive answer; none was a 500 or a dropped conn
+            self.assertEqual(len(results), N, "every request must return")
+            self.assertTrue(all(st in (200, 503) for st in results),
+                            f"burst answered only with 200/503, got {sorted(set(results))}")
+            self.assertNotIn(-1, results, "no dropped connections")
+            # the host survives the burst and still serves a fresh request
+            fresh = urllib.request.urlopen(
+                urllib.request.Request(f"{base}/invoke", method="POST",
+                    data=json.dumps({"capability_id": "w.cap", "payload": {},
+                                     "correlation_id": "fresh"}).encode(),
+                    headers={"Content-Type": "application/json"}), timeout=5)
+            self.assertEqual(fresh.status, 200)
+        finally:
+            server.shutdown(); server.server_close()
+
+
 if __name__ == "__main__":
     unittest.main()
