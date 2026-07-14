@@ -54,5 +54,8 @@ do not change.
 
 - **HTTP** — Python (`chp_core.http`) + TypeScript (`@capabilityhostprotocol/host`),
   wire-conformant both ways.
-- **Zenoh** — Python (`chp-transport-zenoh`); a TypeScript `ZenohTransport` is a planned
-  follow-up (the TS runtime already speaks Zenoh over `@eclipse-zenoh/zenoh-ts`).
+- **Zenoh** — Python (`chp-transport-zenoh`), complete and conformance-checked. Currently
+  an **experimental** binding: **HTTP is the normative binding**. A TypeScript
+  `ZenohTransport` is a planned follow-up — `@eclipse-zenoh/zenoh-ts` is a WebSocket client
+  to `zenoh-bridge-remote-api`, so the TS side follows once that bridge toolchain is stood
+  up.
