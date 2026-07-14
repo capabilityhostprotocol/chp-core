@@ -5,6 +5,15 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.4] — Informative: HTTP host load-shedding over 0.8.3
+
+### Added (informative — no normative wire change)
+- **HTTP host load-shedding** (chp-http-binding.md §1, production hardening proposal 0039):
+  a host **MAY** shed load at a concurrency cap with a `503` (`code: "server_at_capacity"`)
+  + `Retry-After` instead of spawning unbounded threads. Documented as a transport-level
+  response a client should honor; it is *not* a governance denial and carries no evidence.
+  Purely an operational-robustness behavior — the object model and pipeline are unchanged.
+
 ## [0.8.3] — Rekor / Sigstore transparency-log submission over 0.8.2
 
 ### Added

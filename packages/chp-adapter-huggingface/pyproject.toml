@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-huggingface"
-version = "0.42.0"
+version = "0.42.1"
 description = "CHP adapter for local HuggingFace artifact consumption — pull, pipeline, embed, tokenize, dataset, cache"
 requires-python = ">=3.11"
 dependencies = [
