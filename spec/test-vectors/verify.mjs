@@ -620,6 +620,19 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (actor: ${input.cases.length} allowlist-decision cases agree)`
     : "INVALID");
+} else if (input.kind === "authorized-discovery") {
+  // Authorized discovery (proposal 0035): a host hides capabilities the caller may
+  // not invoke. Visible iff allowed_actors is empty/absent OR includes the caller;
+  // an anonymous caller (null) sees everything. Cross-impl agreement on visibility.
+  const visible = (c) => {
+    if (c.caller == null) return true; // unfiltered
+    const allowed = Array.isArray(c.allowed_actors) ? c.allowed_actors : [];
+    return !allowed.length || allowed.includes(c.caller);
+  };
+  ok = (input.cases ?? []).every((c) => visible(c) === c.visible);
+  console.log(ok
+    ? `VALID (authorized-discovery: ${input.cases.length} visibility cases agree)`
+    : "INVALID");
 } else if (input.kind === "auth-token") {
   // Signed bearer token (chp-v0.2.md §5, proposal 0027): verify the caller's
   // ed25519 signature over the canonical header, the caller attestation
