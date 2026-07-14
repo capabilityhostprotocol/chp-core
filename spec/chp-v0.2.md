@@ -1,4 +1,10 @@
-# Capability Host Protocol — v0.2 (Evidence Integrity)
+# Capability Host Protocol — v0.2 Evidence-Integrity layer (current surface: v0.8.3)
+
+> This document is the **v0.2 evidence-integrity layer**, extended additively through
+> **v0.8.3** (the version list below traces every addition). For the complete normative
+> surface as of v0.8.3 and a reading order, see the **[specification index](README.md)** —
+> the v0.9 protocol release-candidate map. **v0.8.3 is a protocol pre-release, NOT a
+> product v1.0** (see the index's scope note).
 
 Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13; **v0.8.3 Rekor transparency-log submission** 2026-07-13). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
