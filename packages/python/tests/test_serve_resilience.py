@@ -340,5 +340,157 @@ class LoadBurstTests(unittest.TestCase):
             server.shutdown(); server.server_close()
 
 
+class SoakTests(unittest.TestCase):
+    """Sustained load (proposal 0043): a burst proves *momentary* crash-freedom;
+    a soak proves the host survives *continuous* load — no 500, no hang, no
+    unbounded growth — and every recorded correlation's SHA256 chain stays intact
+    afterward. Kept short (~2s) so it's a CI regression gate, not a stress rig."""
+
+    def test_sustained_load_stays_healthy_and_chain_intact(self) -> None:
+        import http.client
+        import time
+
+        store = SQLiteEvidenceStore(":memory:")
+        host = LocalCapabilityHost("soak-host", store=store)
+
+        async def work(_c, p):
+            return {"n": p.get("n", 0)}
+
+        host.register(CapabilityDescriptor(id="w.cap", version="1.0.0", description="."), work)
+        server, base = _serve(host)
+        port = server.server_address[1]
+
+        statuses: list[int] = []
+        latencies: list[float] = []
+        lock = threading.Lock()
+        stop = threading.Event()
+        counter = {"i": 0}
+
+        def _worker() -> None:
+            while not stop.is_set():
+                with lock:
+                    i = counter["i"]; counter["i"] += 1
+                t0 = time.monotonic()
+                try:
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                    conn.request("POST", "/invoke", json.dumps(
+                        {"capability_id": "w.cap", "payload": {"n": i},
+                         "correlation_id": f"s{i}"}), {"Content-Type": "application/json"})
+                    resp = conn.getresponse(); st = resp.status; resp.read(); conn.close()
+                except Exception:
+                    st = -1
+                with lock:
+                    statuses.append(st); latencies.append(time.monotonic() - t0)
+
+        try:
+            workers = [threading.Thread(target=_worker) for _ in range(8)]
+            for w in workers:
+                w.start()
+            time.sleep(2.0)  # sustained load window
+            stop.set()
+            for w in workers:
+                w.join(timeout=10)
+
+            self.assertGreater(len(statuses), 50, "soak should push meaningful volume")
+            crashes = [st for st in statuses if st == 500]
+            self.assertEqual(crashes, [], f"no 500 under sustained load; got {sorted(set(statuses))}")
+            self.assertTrue(all(st == 200 for st in statuses),
+                            f"no cap set → every soak request should 200; got {sorted(set(statuses))}")
+            # bounded tail latency — a wedged/leaking host shows up as a blown p99
+            latencies.sort()
+            p99 = latencies[int(len(latencies) * 0.99)]
+            self.assertLess(p99, 2.0, f"p99 latency {p99:.3f}s under soak is unbounded")
+            # every recorded correlation verifies (strict: an unhashed event fails)
+            ok = sum(1 for i in range(counter["i"])
+                     if store.verify_chain(f"s{i}", strict=True).valid)
+            self.assertGreaterEqual(ok, len([s for s in statuses if s == 200]),
+                                    "every acked invocation's chain must verify strictly")
+        finally:
+            server.shutdown(); server.server_close()
+
+
+_CHAOS_CHILD = textwrap.dedent("""
+    import sys, time
+    sys.path.insert(0, sys.argv[1])
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
+    from chp_core.http import create_http_server
+
+    host = LocalCapabilityHost("chaos-host", store=SQLiteEvidenceStore(sys.argv[2]))
+
+    async def work(_c, p):
+        return {"n": p.get("n", 0)}
+
+    host.register(CapabilityDescriptor(id="w.cap", version="1.0.0", description="."), work)
+    server = create_http_server(host, bind="127.0.0.1", port=0)
+    print(server.server_address[1], flush=True)
+    server.serve_forever()
+""")
+
+
+class ChaosRecoveryTests(unittest.TestCase):
+    """Crash recovery (proposal 0043): SIGKILL the host mid-load, then reopen its
+    file-backed store — SQLite replays the WAL (0.15.0 busy_timeout + WAL). The
+    guarantee: every invocation that got a 200 (committed) survives the unclean
+    kill with an intact chain — no acked-evidence loss. (Process crash, not power
+    loss; synchronous=NORMAL means an OS crash could still lose the un-fsynced WAL
+    tail — SIGKILL keeps the WAL file, so acked commits are durable.)"""
+
+    def test_sigkill_midload_preserves_acked_evidence(self) -> None:
+        import http.client
+        import tempfile
+
+        pkg_dir = str(Path(__file__).resolve().parents[1])
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "chaos.sqlite")
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _CHAOS_CHILD, pkg_dir, db_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                assert proc.stdout is not None
+                port = int(proc.stdout.readline().strip())
+
+                acked: list[int] = []
+                lock = threading.Lock()
+
+                def _fire(i: int) -> None:
+                    try:
+                        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                        conn.request("POST", "/invoke", json.dumps(
+                            {"capability_id": "w.cap", "payload": {"n": i},
+                             "correlation_id": f"k{i}"}), {"Content-Type": "application/json"})
+                        st = conn.getresponse().status
+                        if st == 200:
+                            with lock:
+                                acked.append(i)
+                        conn.close()
+                    except Exception:
+                        pass
+
+                threads = [threading.Thread(target=_fire, args=(i,)) for i in range(40)]
+                for t in threads:
+                    t.start()
+                import time as _t
+                _t.sleep(0.35)  # let a batch commit, leave some in flight
+                proc.kill()      # SIGKILL — unclean, no drain
+                for t in threads:
+                    t.join(timeout=5)
+            finally:
+                proc.kill()
+            proc.wait(timeout=10)
+
+            # Reopen the store from scratch — this IS the recovery path (WAL replay
+            # on open). ponytail: reopening the store exercises the same recovery as
+            # a full server restart, without the second subprocess.
+            self.assertTrue(acked, "some invocations must have been acked before the kill")
+            recovered = SQLiteEvidenceStore(db_path)
+            try:
+                for i in acked:
+                    res = recovered.verify_chain(f"k{i}", strict=True)
+                    self.assertTrue(res.valid and res.event_count > 0,
+                                    f"acked invocation k{i} lost or corrupt after SIGKILL: {res}")
+            finally:
+                recovered.close()
+
+
 if __name__ == "__main__":
     unittest.main()
