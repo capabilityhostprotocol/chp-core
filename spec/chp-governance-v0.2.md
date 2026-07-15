@@ -40,7 +40,9 @@ accompanies a **`skipped`** outcome, not `denied` (pipeline gate 3).
 | `capability_not_found` | No capability with that id (or version) is registered. | false |
 | `capability_disabled` | Registered but disabled by the host. | false |
 | `unsupported_mode` | The requested invoke `mode` isn't supported. | false |
-| `policy_blocked` | A `PolicyConfig` rule blocked it — a block-pattern match **or** the capability's risk tier exceeding `max_risk_tier` (§3). `details` SHOULD name the rule. | false |
+| `policy_blocked` | A `PolicyConfig` rule blocked it — a block-pattern match **or** the capability's risk tier exceeding `max_risk_tier` (§3), i.e. a policy decision of `deny` (and `sandbox_only` fail-closed when no sandbox mode is available). `details` SHOULD carry the decision record (`decision`, `matched_rule`, `policy_version`, `explanation`, `required_next_action`). | false |
+| `escalation_required` | A policy decision of `requires_escalation` — a higher authority must decide before the invocation may proceed (proposal 0036). `details` SHOULD carry the decision record. Retryable once escalation is resolved. | true |
+| `evidence_required` | A policy decision of `requires_more_evidence` — the caller must supply additional evidence/context before the invocation may proceed (proposal 0036). `details` SHOULD carry the decision record. Retryable once the evidence is provided. | true |
 | `input_schema_validation_failed` | The payload failed the capability's declared input schema. | false |
 | `output_schema_validation_failed` | The result violated the capability's declared `output_schema`. Emitted only in strict mode — host `strict_output_schema` or a caller's `require_output_schema`; the default is validate-and-warn (the violation is recorded on the `execution_completed` evidence, still a success). `details` SHOULD carry `schema_id`, `path`. | false |
 | `invariant_failed` | A declared invariant did not hold. `invariant_id` SHOULD be set. | false |
@@ -83,6 +85,29 @@ The tiers denote **blast radius if the invocation misbehaves**, not likelihood:
 
 `high`/`critical` are the tiers a host SHOULD gate behind autonomy budgets or
 human approval (§4.1).
+
+### 3.1 Policy decision vocabulary (proposal 0036)
+
+The policy gate (gate 6) renders a **decision** from a fixed vocabulary rather than a
+bare block/allow. A capability's block-pattern rule MAY declare which decision it
+renders (default `deny`), letting a policy express *how* to refuse, not merely *that* it
+refuses:
+
+| Decision | Meaning | Reserved code | Retryable |
+|---|---|---|---|
+| `allow` | proceed to the next gate | — | — |
+| `deny` | refuse outright | `policy_blocked` | false |
+| `requires_approval` | a human must approve first | `approval_required` | true |
+| `requires_escalation` | a higher authority must decide | `escalation_required` | true |
+| `requires_more_evidence` | the caller must supply more evidence/context | `evidence_required` | true |
+| `sandbox_only` | permit only in a sandbox | `policy_blocked` (fail-closed) | false |
+
+Every non-`allow` decision carries a **decision record** in the denial `details` —
+`{decision, matched_rule, policy_version, explanation, required_next_action}` — so a
+refusal is attributable to a *named, versioned* rule and states what the caller must do
+to proceed. `sandbox_only` is defined for forward compatibility but, absent a sandboxed
+execution mode, **fails closed** to `policy_blocked` (a decision the host cannot honor
+must not silently proceed). `audit_only` records the decision but never blocks (advisory).
 
 ## 4. Governance Event Vocabulary
 

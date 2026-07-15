@@ -46,6 +46,23 @@ class PolicyError(ValueError):
 
 RISK_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
+# The policy decision vocabulary (chp-governance-v0.2.md §2, proposal 0036). ALLOW
+# proceeds; the rest block the invocation at the governance gate, each mapping to a
+# reserved denial code (see host.py DECISION_CODE). SANDBOX_ONLY is a constrained-
+# allow, but with no sandbox execution mode it fails closed to a deny (policy_blocked).
+POLICY_DECISIONS: frozenset[str] = frozenset({
+    "allow", "deny", "requires_approval", "requires_escalation",
+    "requires_more_evidence", "sandbox_only",
+})
+
+# What the caller must do to unblock a non-allow, non-deny decision.
+REQUIRED_NEXT_ACTION: dict[str, str] = {
+    "requires_approval": "obtain human approval and retry",
+    "requires_escalation": "escalate to a higher authority to decide",
+    "requires_more_evidence": "provide the required additional evidence and retry",
+    "sandbox_only": "run in a sandbox (no sandbox execution mode available — denied)",
+}
+
 
 @dataclass
 class BlockPattern:
@@ -53,6 +70,9 @@ class BlockPattern:
     field: str
     pattern: str
     reason: str
+    # The decision this rule renders when it matches (proposal 0036). Default "deny"
+    # keeps every pre-0036 policy file behaving exactly as before.
+    decision: str = "deny"
 
 
 @dataclass
@@ -63,6 +83,8 @@ class PolicyConfig:
     max_risk_tier: str | None = None
     audit_only: bool = False
     allowed_capability_ids: list[str] | None = None
+    # Policy file version, threaded into every decision record (proposal 0036).
+    version: str | None = None
 
 
 @dataclass
@@ -70,6 +92,13 @@ class PreToolResult:
     should_block: bool
     capability_id: str
     reason: str | None = None
+    # Decision record (proposal 0036): the outcome, the rule that produced it, the
+    # policy version, and the caller's required next action. `should_block` stays the
+    # block signal (derived: True unless decision == "allow", and never when audit_only).
+    decision: str = "allow"
+    matched_rule: str | None = None
+    policy_version: str | None = None
+    required_next_action: str | None = None
 
 
 def load_policy(path: str | None = None) -> PolicyConfig | None:
@@ -100,22 +129,27 @@ def load_policy(path: str | None = None) -> PolicyConfig | None:
 
 
 def _parse_policy(data: dict[str, Any]) -> PolicyConfig:
-    patterns = [
-        BlockPattern(
+    patterns = []
+    for p in data.get("block_patterns", []):
+        decision = p.get("decision", "deny")
+        if decision not in POLICY_DECISIONS:
+            raise PolicyError(f"unknown policy decision {decision!r} (allowed: {sorted(POLICY_DECISIONS)})")
+        patterns.append(BlockPattern(
             capability_id=p["capability_id"],
             field=p["field"],
             pattern=p["pattern"],
             reason=p.get("reason", "blocked by policy pattern"),
-        )
-        for p in data.get("block_patterns", [])
-    ]
+            decision=decision,
+        ))
     allowed = data.get("allowed_capability_ids")
+    version = data.get("version")
     return PolicyConfig(
         block_capability_ids=list(data.get("block_capability_ids", [])),
         block_patterns=patterns,
         max_risk_tier=data.get("max_risk_tier"),
         audit_only=bool(data.get("audit_only", False)),
         allowed_capability_ids=list(allowed) if allowed is not None else None,
+        version=str(version) if version is not None else None,
     )
 
 
@@ -135,38 +169,46 @@ def evaluate_policy(
         capability_risk: Optional risk tier of the capability (low/medium/high/critical).
             Required for max_risk_tier evaluation.
     """
-    should_block = False
+    # decision is "allow" until a rule fires; the coarse rules (allowlist, block-id,
+    # risk tier) always render "deny", while a block-pattern may render any decision
+    # in the vocabulary (proposal 0036). matched_rule names the rule that fired.
+    decision = "allow"
     reason: str | None = None
+    matched_rule: str | None = None
 
     # Allowlist: if set, block anything NOT in the list
     if policy.allowed_capability_ids is not None:
         if capability_id not in policy.allowed_capability_ids:
-            should_block = True
+            decision = "deny"
             reason = f"capability not in allowlist: {capability_id}"
+            matched_rule = "allowed_capability_ids"
 
     # Exact capability ID block
-    if not should_block and capability_id in policy.block_capability_ids:
-        should_block = True
+    if decision == "allow" and capability_id in policy.block_capability_ids:
+        decision = "deny"
         reason = f"capability blocked by policy: {capability_id}"
+        matched_rule = f"block_capability_ids:{capability_id}"
 
     # Risk tier: block if capability risk exceeds the configured maximum.
     # Unmapped/unknown capability risk defaults to "medium" so the gate still
     # bites rather than silently passing an uncharacterised capability.
-    if not should_block and policy.max_risk_tier is not None:
+    if decision == "allow" and policy.max_risk_tier is not None:
         effective_risk = capability_risk if capability_risk in RISK_ORDER else "medium"
         cap_order = RISK_ORDER.get(effective_risk, 1)
         max_order = RISK_ORDER.get(policy.max_risk_tier, 99)
         if cap_order > max_order:
-            should_block = True
+            decision = "deny"
             reason = (
                 f"capability risk '{effective_risk}' exceeds "
                 f"max_risk_tier '{policy.max_risk_tier}'"
             )
+            matched_rule = f"max_risk_tier:{policy.max_risk_tier}"
 
     # Pattern match on tool input fields. Case-insensitive so trivial casing
     # ("RM -RF /") can't slip past a lowercase rule; patterns are
-    # defense-in-depth, not a sandbox.
-    if not should_block:
+    # defense-in-depth, not a sandbox. A matched pattern renders its declared
+    # decision (default "deny").
+    if decision == "allow":
         for bp in policy.block_patterns:
             if bp.capability_id != capability_id:
                 continue
@@ -176,12 +218,19 @@ def evaluate_policy(
             except re.error:
                 matched = bp.pattern.lower() in value.lower()
             if matched:
-                should_block = True
+                decision = bp.decision
                 reason = bp.reason
+                matched_rule = f"block_pattern:{bp.capability_id}.{bp.field}"
                 break
 
-    # audit_only overrides any block decision
-    if policy.audit_only:
-        return PreToolResult(should_block=False, capability_id=capability_id, reason=reason)
-
-    return PreToolResult(should_block=should_block, capability_id=capability_id, reason=reason)
+    # audit_only records the decision but never blocks — the decision is advisory.
+    should_block = (decision != "allow") and not policy.audit_only
+    return PreToolResult(
+        should_block=should_block,
+        capability_id=capability_id,
+        reason=reason,
+        decision=decision,
+        matched_rule=matched_rule,
+        policy_version=policy.version,
+        required_next_action=REQUIRED_NEXT_ACTION.get(decision),
+    )

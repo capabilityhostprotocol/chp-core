@@ -1,0 +1,67 @@
+{
+  "kind": "policy-decision",
+  "description": "Proposal 0036: the policy engine renders a decision from the 6-outcome vocabulary (allow/deny/requires_approval/requires_escalation/requires_more_evidence/sandbox_only). A matching block-pattern renders its declared decision (default deny); each blocking decision maps to a reserved denial code at the governance gate — deny→policy_blocked, requires_approval→approval_required, requires_escalation→escalation_required, requires_more_evidence→evidence_required, sandbox_only→policy_blocked (fail-closed, no sandbox execution mode). allow does not block. All three reference impls agree on the decision + code.",
+  "cases": [
+    {
+      "note": "deny pattern -> policy_blocked",
+      "block_patterns": [{"capability_id": "w.cap", "field": "cmd", "pattern": "danger", "decision": "deny"}],
+      "capability_id": "w.cap",
+      "input": {"cmd": "danger"},
+      "decision": "deny",
+      "code": "policy_blocked",
+      "blocks": true
+    },
+    {
+      "note": "requires_escalation -> escalation_required",
+      "block_patterns": [{"capability_id": "w.cap", "field": "cmd", "pattern": "prod", "decision": "requires_escalation"}],
+      "capability_id": "w.cap",
+      "input": {"cmd": "deploy prod"},
+      "decision": "requires_escalation",
+      "code": "escalation_required",
+      "blocks": true
+    },
+    {
+      "note": "requires_more_evidence -> evidence_required",
+      "block_patterns": [{"capability_id": "w.cap", "field": "cmd", "pattern": "refund", "decision": "requires_more_evidence"}],
+      "capability_id": "w.cap",
+      "input": {"cmd": "refund"},
+      "decision": "requires_more_evidence",
+      "code": "evidence_required",
+      "blocks": true
+    },
+    {
+      "note": "requires_approval -> approval_required",
+      "block_patterns": [{"capability_id": "w.cap", "field": "cmd", "pattern": "send", "decision": "requires_approval"}],
+      "capability_id": "w.cap",
+      "input": {"cmd": "send email"},
+      "decision": "requires_approval",
+      "code": "approval_required",
+      "blocks": true
+    },
+    {
+      "note": "sandbox_only fails closed -> policy_blocked (no sandbox execution mode)",
+      "block_patterns": [{"capability_id": "w.cap", "field": "cmd", "pattern": "risky", "decision": "sandbox_only"}],
+      "capability_id": "w.cap",
+      "input": {"cmd": "risky"},
+      "decision": "sandbox_only",
+      "code": "policy_blocked",
+      "blocks": true
+    },
+    {
+      "note": "no match -> allow, does not block",
+      "block_patterns": [{"capability_id": "w.cap", "field": "cmd", "pattern": "danger", "decision": "deny"}],
+      "capability_id": "w.cap",
+      "input": {"cmd": "safe"},
+      "decision": "allow",
+      "blocks": false
+    },
+    {
+      "note": "pattern for a different capability does not match",
+      "block_patterns": [{"capability_id": "other.cap", "field": "cmd", "pattern": "danger", "decision": "deny"}],
+      "capability_id": "w.cap",
+      "input": {"cmd": "danger"},
+      "decision": "allow",
+      "blocks": false
+    }
+  ]
+}

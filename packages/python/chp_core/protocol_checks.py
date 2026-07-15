@@ -739,6 +739,48 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "actor_vector_verifies", False, {"error": str(exc)})
 
+    # Policy decision vocabulary (proposal 0036): the governance spec must define the
+    # 6 decisions + the two new reserved codes, and the matcher vector's decision+code
+    # results must all agree. (The reserved-code registry guards already ensure
+    # escalation_required/evidence_required are synced across runtime/schema/spec.)
+    gov_pd = read_text(repo_root / "spec" / "chp-governance-v0.2.md")
+    add_check(
+        checks,
+        "spec_defines_policy_decisions",
+        "escalation_required" in gov_pd and "evidence_required" in gov_pd
+        and "requires_escalation" in gov_pd,
+        {"hint": "chp-governance-v0.2.md must define the policy decision vocabulary + new codes"},
+    )
+    pd_vec = repo_root / "spec" / "test-vectors" / "policy-decision.json"
+    if pd_vec.exists():
+        try:
+            from .policy import BlockPattern, PolicyConfig, evaluate_policy
+
+            _PD_CODE = {"deny": "policy_blocked", "requires_approval": "approval_required",
+                        "requires_escalation": "escalation_required",
+                        "requires_more_evidence": "evidence_required",
+                        "sandbox_only": "policy_blocked"}
+            pd_doc = read_json(pd_vec)
+
+            def _pd_ok(c: JSON) -> bool:
+                pol = PolicyConfig(block_patterns=[
+                    BlockPattern(p["capability_id"], p["field"], p["pattern"],
+                                 p.get("reason", "."), p.get("decision", "deny"))
+                    for p in c.get("block_patterns", [])])
+                r = evaluate_policy(c["capability_id"], c.get("input", {}), pol)
+                if r.decision != c["decision"] or r.should_block is not c["blocks"]:
+                    return False
+                return not c["blocks"] or _PD_CODE[r.decision] == c["code"]
+
+            add_check(
+                checks,
+                "policy_decision_vector_verifies",
+                all(_pd_ok(c) for c in pd_doc.get("cases", [])),
+                {"hint": "regenerate policy-decision.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "policy_decision_vector_verifies", False, {"error": str(exc)})
+
     # Authorized discovery (proposal 0035): the v0.2 spec must define catalog
     # filtering by caller authority, and the matcher vector's visibility decisions
     # must all agree (visible iff allowed_actors empty/absent or includes caller;

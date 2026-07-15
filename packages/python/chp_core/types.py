@@ -681,6 +681,8 @@ class DenialReason:
         "capability_disabled",            # registered but disabled by the host
         "unsupported_mode",               # invoke mode the host doesn't support
         "policy_blocked",                 # PolicyConfig rule (pattern or risk tier) blocked it
+        "escalation_required",            # policy decision requires_escalation — a higher authority must decide (proposal 0036)
+        "evidence_required",              # policy decision requires_more_evidence before proceeding (proposal 0036)
         "input_schema_validation_failed", # payload failed the capability's input schema
         "output_schema_validation_failed",# result violated the capability's output schema (strict/require, proposal 0029)
         "invariant_failed",               # a declared invariant did not hold
