@@ -51,17 +51,6 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: DEBUG sdk resolution
-        run: |
-          echo "--- workspace sdk dist/index.d.ts verifyApprovalGrant count ---"
-          grep -c verifyApprovalGrant packages/chp-sdk/dist/index.d.ts || echo "0 in workspace dist"
-          echo "--- node_modules sdk symlink or dir? ---"
-          ls -la node_modules/@capabilityhostprotocol/sdk | head -1
-          echo "--- what host resolves: node_modules/.../sdk/dist/index.d.ts count ---"
-          grep -c verifyApprovalGrant node_modules/@capabilityhostprotocol/sdk/dist/index.d.ts 2>/dev/null || echo "0 or missing in resolved copy"
-          echo "--- host src/host.ts import line 8 ---"
-          sed -n '8p' packages/chp-host-ts/src/host.ts
-
       - name: Build host
         run: npm run build --workspace @capabilityhostprotocol/host
 
