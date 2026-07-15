@@ -693,6 +693,17 @@ class SQLiteEvidenceStore:
                 (invocation_id, json.dumps(result), utc_now()))
             self._conn.commit()
 
+    def delete_result(self, invocation_id: str) -> None:
+        """Remove a recorded result so a subsequent execution can re-record under the
+        same invocation_id (proposal 0037). The replay cache is otherwise first-writer-
+        wins (INSERT OR IGNORE), so a cached `approval_required` denial can never be
+        superseded by the real terminal result. The resume gate deletes the stale denial
+        row ONLY after verifying a valid approval grant, then executes exactly once."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM invocation_results WHERE invocation_id = ?", (invocation_id,))
+            self._conn.commit()
+
     def lookup_result(self, invocation_id: str) -> JSON | None:
         """The recorded result for *invocation_id*, or None. Piggybacks the
         TTL sweep (bounded DELETE) so the cache stays window-sized without a

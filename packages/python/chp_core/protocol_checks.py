@@ -702,6 +702,31 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "output_schema_vector_verifies", False, {"error": str(exc)})
 
+    # Resumable invocation + approval grants (proposal 0037): the v0.2 spec must
+    # define approval grants, and the crypto vector's per-case verdicts must all agree
+    # (valid grant verifies; expired + tampered fail).
+    add_check(
+        checks,
+        "spec_defines_approval_grant",
+        "approval-grant" in spec_v02_mk and "resumable" in spec_v02_mk.lower(),
+        {"hint": "chp-v0.2.md §20 must define approval grants + resumable invocation"},
+    )
+    ag_vec = repo_root / "spec" / "test-vectors" / "approval-grant.json"
+    if ag_vec.exists():
+        try:
+            from .signing import verify_approval_grant
+
+            ag_doc = read_json(ag_vec)
+            add_check(
+                checks,
+                "approval_grant_vector_verifies",
+                all(verify_approval_grant(c["grant"], at_time=c["at_time"]).valid is c["valid"]
+                    for c in ag_doc.get("cases", [])),
+                {"hint": "regenerate approval-grant.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "approval_grant_vector_verifies", False, {"error": str(exc)})
+
     # First-class actor (proposal 0034): the v0.2 spec must define the per-actor
     # allowlist, and the matcher vector's allowlist decisions must all agree
     # (effective actor = verified subject id, else asserted actor.id, else subject

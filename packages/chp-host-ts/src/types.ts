@@ -62,6 +62,10 @@ export interface InvocationEnvelope {
    * a structured, caller-asserted identity driving per-actor policy. Absent =
    * today's behavior (omit-when-absent → byte-identical). */
   actor?: Record<string, JsonValue> | null;
+  /** OPTIONAL approver-signed grant (chp-v0.2.md §19, proposal 0037): a
+   * chp-approval-grant-v1 authorizing this invocation to resume past an
+   * approval_required gate. Absent = today's behavior. */
+  approval_ref?: Record<string, JsonValue> | null;
   /** OPTIONAL output-shape requirement (chp-v0.2.md §1.1, proposal 0029): when
    * true, a result violating the capability's output_schema is DENIED
    * (output_schema_validation_failed) instead of the default validate-and-warn. */

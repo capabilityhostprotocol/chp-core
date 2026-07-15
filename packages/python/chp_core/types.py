@@ -53,6 +53,7 @@ AUTONOMY_EVIDENCE_TYPES = {
     "approval_requested",
     "approval_granted",
     "approval_denied",
+    "approval_grant_verified",  # a valid approver-signed grant unblocked a resume (proposal 0037)
 }
 
 # Host-SELF evidence (spec §3.2 / governance §4.5): the host's own key/identity
@@ -795,6 +796,11 @@ class InvocationEnvelope:
     # remains the accountability record; `actor` enriches it and drives per-actor
     # policy. None = today's behavior (omit-when-absent → byte-identical).
     actor: JSON | None = None
+    # OPTIONAL approver-signed grant (chp-v0.2.md §19, proposal 0037): a
+    # chp-approval-grant-v1 that authorizes this invocation (bound to its
+    # invocation_id + payload commitment) to resume past an approval_required gate
+    # and execute exactly once. None = today's behavior (omit-when-absent).
+    approval_ref: JSON | None = None
 
     @classmethod
     def from_mapping(cls, value: JSON) -> "InvocationEnvelope":
@@ -833,6 +839,10 @@ class InvocationEnvelope:
             # Normalize + validate the actor at the trust boundary; store the
             # canonical (omit-when-empty) dict so wire bytes are stable (0034).
             actor=(Actor.from_mapping(value["actor"]).to_dict() if value.get("actor") else None),
+            # An approval grant is an opaque signed record; kept as-is (verified at
+            # the resume gate), omit-when-absent (proposal 0037).
+            approval_ref=(_obj(value.get("approval_ref"), "approval_ref")
+                          if value.get("approval_ref") else None),
         )
 
     def to_dict(self) -> JSON:
@@ -846,6 +856,8 @@ class InvocationEnvelope:
             del data["requested_capability_version"]  # additive (proposal 0028)
         if not data.get("require_output_schema"):
             del data["require_output_schema"]  # additive: default False absent (proposal 0029)
+        if data.get("approval_ref") is None:
+            del data["approval_ref"]  # additive (proposal 0037): absent stays absent
         return data
 
 

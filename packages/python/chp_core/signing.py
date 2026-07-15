@@ -1613,6 +1613,79 @@ def verify_disclosure_receipt(receipt: dict) -> BundleVerification:
     return BundleVerification(valid, "signed", checks, reason)
 
 
+_APPROVAL_GRANT_FIELDS = ("kind", "approval_id", "invocation_id", "decision",
+                          "approver", "valid_until", "payload_commitment",
+                          "canonicalization")
+
+
+def approval_grant_header(grant: dict) -> dict:
+    """The approver-signed header of an approval grant (§19, proposal 0037)."""
+    return {k: grant.get(k) for k in _APPROVAL_GRANT_FIELDS}
+
+
+def build_approval_grant(approver_key: HostKey, *, invocation_id: str,
+                         payload_commitment: str, approval_id: str, valid_until: str,
+                         decision: str = "granted") -> dict:
+    """An approver's ed25519-signed grant authorizing a specific invocation to resume
+    and execute (§19, proposal 0037): *"I, ``approver``, ``decision`` invocation
+    ``invocation_id`` committing payload ``payload_commitment``, valid until
+    ``valid_until``."* Binds the invocation id AND the payload commitment, so a resumed
+    invocation cannot swap the payload after approval. Verified offline like a mandate;
+    the durable approval-queue service (chp-platform, arc 4b) produces these. Mirrors the
+    disclosure-receipt / mandate signed-record shape."""
+    if not approver_key.can_sign:
+        raise SigningUnavailable("approver key has no private component; cannot sign a grant")
+    grant: dict = {
+        "kind": "approval-grant",
+        "approval_id": approval_id,
+        "invocation_id": invocation_id,
+        "decision": decision,
+        "approver": approver_key.key_id,
+        "valid_until": valid_until,
+        "payload_commitment": payload_commitment,
+        "canonicalization": CANONICALIZATION,
+    }
+    grant["approver_identity"] = {
+        "host_id": approver_key.key_id,
+        "public_key": approver_key.public_key_b64,
+    }
+    grant["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": approver_key.key_id,
+        "signature": _sign(approver_key._private, _canon(approval_grant_header(grant))),
+    }
+    return grant
+
+
+@_fail_closed_bv
+def verify_approval_grant(grant: dict, *, at_time: str,
+                          expected_approver_key: str | None = None) -> BundleVerification:
+    """Verify an approval grant offline (§19, proposal 0037): structure, the approver's
+    ed25519 signature over the canonical header, ``binds_signer`` (approver == signing
+    ``key_id``), the temporal window (not expired at ``at_time``), and an optional pinned
+    approver key. It does NOT prove the named invocation exists — the host cross-checks
+    ``invocation_id`` + ``payload_commitment`` against the envelope at the resume gate."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = (grant.get("kind") == "approval-grant"
+                           and bool(grant.get("approval_id"))
+                           and bool(grant.get("invocation_id"))
+                           and bool(grant.get("payload_commitment")))
+    ident = grant.get("approver_identity") or {}
+    pub = str(ident.get("public_key") or "")
+    sig = grant.get("signature") or {}
+    checks["binds_signer"] = (grant.get("approver") == sig.get("key_id"))
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM and bool(pub)
+                           and _verify_sig(pub, _canon(approval_grant_header(grant)),
+                                           str(sig.get("signature") or "")))
+    checks["temporal"] = bool(grant.get("valid_until")) and at_time <= str(grant.get("valid_until"))
+    if expected_approver_key is not None:
+        checks["approver_pinned"] = (grant.get("approver") == expected_approver_key)
+    valid = all(checks.values())
+    reason = None if valid else "approval-grant checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason)
+
+
 _MANDATE_HEADER_FIELDS = ("kind", "mandate_id", "delegate_id", "scope",
                           "valid_from", "valid_until", "created_at",
                           "canonicalization")

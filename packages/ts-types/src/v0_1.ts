@@ -157,6 +157,29 @@ export interface InvocationEnvelope {
    * `subject` stays the accountability record; `actor` enriches it and drives
    * per-actor policy. Omitted on the wire when absent. */
   actor?: JsonObject;
+  /** OPTIONAL approver-signed grant (chp-v0.2.md §19, proposal 0037, additive):
+   * a `chp-approval-grant-v1` authorizing this invocation (bound to its
+   * invocation_id + payload commitment) to resume past an approval_required gate
+   * and execute exactly once. Omitted on the wire when absent. */
+  approval_ref?: JsonObject;
+}
+
+/**
+ * chp-approval-grant-v1 (chp-v0.2.md §19, proposal 0037): an approver's
+ * ed25519-signed grant authorizing a specific invocation to resume. Verified
+ * offline like a mandate; produced by the durable approval-queue service.
+ */
+export interface ChpApprovalGrant {
+  kind: 'approval-grant';
+  approval_id: string;
+  invocation_id: string;
+  decision: 'granted';
+  approver: string;
+  valid_until: string;
+  payload_commitment: string;
+  canonicalization: string;
+  approver_identity: { host_id: string; public_key: string };
+  signature: { algorithm: 'ed25519'; key_id: string; signature: string };
 }
 
 /**

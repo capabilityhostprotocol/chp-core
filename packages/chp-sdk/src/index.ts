@@ -88,6 +88,7 @@ export {
   verifyChainWitness,
   verifyStoreHeadMonitorReport,
   verifyAuthToken,
+  verifyApprovalGrant,
   monitorAnchorHistoryRemote,
   type RemoteMonitorVerdict,
   auditCompleteness,

@@ -10,7 +10,7 @@ extensions MUST be reverse-DNS namespaced (`com.acme.…`) — see
 
 | Family | Reserved event types |
 |---|---|
-| `AUTONOMY_EVIDENCE_TYPES` | `approval_denied`, `approval_granted`, `approval_requested`, `budget_exceeded` |
+| `AUTONOMY_EVIDENCE_TYPES` | `approval_denied`, `approval_grant_verified`, `approval_granted`, `approval_requested`, `budget_exceeded` |
 | `COGNITION_EVIDENCE_TYPES` | `delegation_accepted`, `delegation_completed`, `delegation_created`, `delegation_reassigned`, `delegation_rejected`, `memory_deleted`, `memory_read`, `memory_written`, `outcome_scored`, `plan_completed`, `plan_created`, `plan_failed`, `plan_revised`, `plan_step_completed`, `plan_step_started`, `reflection_completed`, `reflection_started` |
 | `COMPLIANCE_EVIDENCE_TYPES` | `compliance_report_generated`, `evidence_purged`, `evidence_redacted`, `retention_policy_applied` |
 | `CORE_EVIDENCE_TYPES` | `execution_completed`, `execution_denied`, `execution_failed`, `execution_skipped`, `execution_started` |

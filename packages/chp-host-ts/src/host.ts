@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, buildCompleteness, signBundle, verifyMandate, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, bestSatisfying, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, buildCompleteness, signBundle, verifyMandate, verifyApprovalGrant, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, bestSatisfying, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import { StreamResult } from './types.js';
@@ -260,7 +260,16 @@ export class LocalCapabilityHost {
     // ainvokeStream re-streams the recorded chunks before yielding this result.
     const recorded = this.invocationResults.get(env.invocation_id!);
     if (recorded) {
-      return { env, entry: null, early: { ...recorded, replayed: true } as InvocationResult };
+      // Resume-aware replay (proposal 0037): a cached approval_required denial does
+      // NOT replay if the caller now presents a valid grant — drop it and fall through
+      // to execute exactly once. Any other cached result replays as usual.
+      const resuming = recorded.outcome === 'denied' && recorded.denial?.retryable === true
+        && recorded.denial?.code === 'approval_required' && this.validApprovalFor(env);
+      if (resuming) {
+        this.invocationResults.delete(env.invocation_id!);
+      } else {
+        return { env, entry: null, early: { ...recorded, replayed: true } as InvocationResult };
+      }
     }
 
     // Gate 1: non-empty id
@@ -649,10 +658,30 @@ export class LocalCapabilityHost {
       }
     }
     if (a.tier === 'approval_required') {
+      // Resumable invocation (proposal 0037): a valid approver-signed grant for THIS
+      // invocation + payload proceeds past the gate; else deny approval_required.
+      if (this.validApprovalFor(env)) {
+        const g = (env.approval_ref ?? {}) as Record<string, JsonValue>;
+        this.emit('approval_grant_verified', env, { approval_id: g.approval_id ?? null, approver: g.approver ?? null }, null);
+        return null;
+      }
       this.emit('approval_requested', env, { tier: a.tier }, 'denied');
       return { code: 'approval_required', message: `${d.id} requires approval`, retryable: true };
     }
     return null;
+  }
+
+  /** A presented approval grant (proposal 0037) authorizes THIS invocation to
+   * resume: verifies (approver signature, not expired), decision granted, and binds
+   * this exact invocation_id + payload commitment. Parity with Python
+   * `_valid_approval_for`. */
+  private validApprovalFor(env: InvocationEnvelope): boolean {
+    const grant = env.approval_ref;
+    if (!grant || typeof grant !== 'object') return false;
+    const g = grant as Record<string, JsonValue>;
+    if (!verifyApprovalGrant(g, { atTime: nowIso() }).valid) return false;
+    if (g.decision !== 'granted' || g.invocation_id !== env.invocation_id) return false;
+    return g.payload_commitment === payloadCommitment((env.payload ?? {}) as JsonValue);
   }
 
   private checkInputSchema(d: CapabilityDescriptor, env: InvocationEnvelope): DenialReason | null {
