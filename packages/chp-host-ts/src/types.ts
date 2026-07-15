@@ -36,6 +36,10 @@ export interface CapabilityDescriptor {
   /** OPTIONAL policy surface (proposal 0034): `allowed_actors` restricts which
    * actors may invoke this capability. Mirrors the Python PolicyDescriptor. */
   policy?: { allowed_actors?: string[]; [k: string]: JsonValue | undefined } | null;
+  /** Declared execution timeout in seconds — host-enforced (proposal 0038). */
+  timeout_s?: number | null;
+  /** Advisory retry policy a caller/gateway MAY honor (proposal 0038). */
+  retry?: { max_attempts?: number; backoff_s?: number; retry_on?: string[] } | null;
 }
 
 export interface Correlation {

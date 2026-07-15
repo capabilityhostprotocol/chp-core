@@ -5,6 +5,22 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.9.2] — Adapter operational contract (timeout, retry, health) over 0.9.1
+
+### Added (additive; no new reserved code)
+- **Host-enforced timeout** (chp-v0.2.md §20, proposal 0038): `descriptor.timeout_s` — the
+  host bounds the handler's result wait; exceeding it is an `execution_failed`
+  (`TimeoutError`), a failure not a denial. Enforced in both reference hosts. Omitted =
+  unbounded.
+- **Advisory retry** `descriptor.retry` (`RetryPolicy{max_attempts, backoff_s, retry_on}`):
+  a declared expectation a caller/gateway MAY honor; the host does not auto-retry.
+- **Per-adapter health** `BaseAdapter.health()` → `HealthStatus` (healthy/degraded/unavailable)
+  + `aggregate_health` (worst-wins, fail-safe on a raising `health()`) — an adapter self-report
+  distinct from mesh/routing host health.
+- Additive descriptor fields (`timeout_s`, `retry`) — omit-when-absent, byte-identical when
+  unused; capability-descriptor schema updated. The publisher-signed install gate (§9) is
+  unchanged (already normative). Regression gate: `test_adapter_contract.py`.
+
 ## [0.9.1] — Resumable invocation + provable approval grants over 0.9.0
 
 ### Added (additive; new signed record + envelope field + evidence type)

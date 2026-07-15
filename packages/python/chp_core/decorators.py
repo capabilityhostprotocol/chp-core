@@ -14,6 +14,7 @@ from .types import (
     InvariantDescriptor,
     JSON,
     PolicyDescriptor,
+    RetryPolicy,
 )
 
 
@@ -46,6 +47,9 @@ def capability(
     # structured optional sub-objects
     host_requirements: HostRequirements | None = None,
     policy: PolicyDescriptor | None = None,
+    # reliability (proposal 0038)
+    timeout_s: float | None = None,
+    retry: "RetryPolicy | None" = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Attach a CHP capability descriptor to a function.
 
@@ -83,6 +87,8 @@ def capability(
         metadata=metadata or {},
         host_requirements=host_requirements,
         policy=policy,
+        timeout_s=timeout_s,
+        retry=retry,
     )
 
     def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:

@@ -108,9 +108,26 @@
     "policy": {
       "$ref": "#/$defs/PolicyDescriptor",
       "description": "Structured policy surface: risk tier, auth, approval, and data classification."
+    },
+    "timeout_s": {
+      "type": ["number", "null"],
+      "description": "Declared execution timeout in seconds (proposal 0038). The host ENFORCES it — exceeding it yields an execution_failed (TimeoutError), not a governance denial. Omitted = no cap."
+    },
+    "retry": {
+      "$ref": "#/$defs/RetryPolicy",
+      "description": "ADVISORY retry policy a caller/gateway MAY honor (proposal 0038); the host does not auto-retry."
     }
   },
   "$defs": {
+    "RetryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1, "default": 1 },
+        "backoff_s": { "type": "number", "minimum": 0, "default": 0 },
+        "retry_on": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "InvariantDescriptor": {
       "type": "object",
       "required": ["id", "kind"],
