@@ -6,7 +6,7 @@
 > the v0.9 protocol release-candidate map. **v0.8.3 is a protocol pre-release, NOT a
 > product v1.0** (see the index's scope note).
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13; **v0.8.3 Rekor transparency-log submission** 2026-07-13; **v0.8.4 informative: HTTP host load-shedding (503)** 2026-07-14; **v0.8.5 informative: per-caller rate limiting (429) + load observability** 2026-07-14; **v0.8.6 normative-doc: verifier fail-closed robustness** 2026-07-14; **v0.8.7 first-class actor identity + per-actor allowlist** 2026-07-14; **v0.8.8 authorized discovery** 2026-07-14; **v0.9.0 richer policy decision vocabulary + versioned decision records (escalation_required, evidence_required)** 2026-07-15). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13; **v0.8.3 Rekor transparency-log submission** 2026-07-13; **v0.8.4 informative: HTTP host load-shedding (503)** 2026-07-14; **v0.8.5 informative: per-caller rate limiting (429) + load observability** 2026-07-14; **v0.8.6 normative-doc: verifier fail-closed robustness** 2026-07-14; **v0.8.7 first-class actor identity + per-actor allowlist** 2026-07-14; **v0.8.8 authorized discovery** 2026-07-14; **v0.9.0 richer policy decision vocabulary + versioned decision records (escalation_required, evidence_required)** 2026-07-15; **v0.9.1 resumable invocation + provable approval grants** 2026-07-15). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -1320,3 +1320,41 @@ or hidden entirely). Cross-host **delegated** discovery — a gateway forwarding
 end-caller's credential so each member host filters on the original caller's behalf —
 remains out of scope (a gateway serves its merged catalog under its own identity); a
 later proposal.
+
+## 19. Resumable invocation — provable approval grants (v0.9.1)
+
+A capability MAY require human approval (`descriptor.autonomy.tier == "approval_required"`);
+the autonomy gate then denies **`approval_required`** (retryable). Proposal 0037 makes that
+approval **provable** and the invocation **resumable**.
+
+**The grant.** `chp-approval-grant-v1` is an approver's ed25519-signed record —
+`{kind:"approval-grant", approval_id, invocation_id, decision:"granted", approver,
+valid_until, payload_commitment, canonicalization}` + a self-attested `approver_identity` +
+a `signature`. It is verified **offline** exactly like a mandate: structure + the approver
+signature over the canonical header + `binds_signer` (`approver == signature.key_id`) +
+temporal (not expired) + an optional pinned approver key. A third party thus learns *"an
+approver authorized this exact invocation."* The grant **binds** `invocation_id` **and**
+`payload_commitment` (= `sha256(chp-stable-v1(payload))` of the approved request), so it
+authorizes one specific invocation of one specific payload.
+
+**The resume, executed exactly once.** The caller re-invokes carrying the grant in the
+optional **`approval_ref`** envelope field (omit-when-absent → byte-identical when unused).
+Two gates cooperate, keeping **one `invocation_id`** through the whole lifecycle:
+
+- The **autonomy gate** accepts the invocation when `approval_ref` presents a grant that
+  verifies AND matches this `invocation_id` AND `payload_commitment` AND `decision ==
+  "granted"` (emitting `approval_grant_verified`); otherwise it denies `approval_required`
+  as before.
+- The **replay gate** (idempotency, §13) would otherwise replay the cached
+  `approval_required` denial for that id. When a valid grant is presented it instead
+  **supersedes** the stale denial and falls through to execute; the terminal result is then
+  recorded under the same id, so any later retry replays the *result*. The handler runs
+  **exactly once** — duplicate-execution protection is preserved across approve→execute.
+
+**Honest boundaries.** The grant does not prove the named invocation exists — the host
+cross-checks `invocation_id` + `payload_commitment` against the envelope at the resume gate;
+that cross-check also **prevents a payload swap** (approve payload A, resume with payload B
+→ the commitment mismatches → still denied). CHP specifies the *provable grant* + the
+*exactly-once resume*; the durable **approval-queue service** that holds pending approvals,
+runs the human decision state machine, and *produces* signed grants is an operational
+concern, out of scope here.

@@ -551,6 +551,46 @@ export function verifyAuthToken(
   };
 }
 
+// ── Approval grant (chp-v0.2.md §19, proposal 0037) ─────────────────────────
+
+/**
+ * Offline-verify a `chp-approval-grant-v1`: structure, the approver's ed25519
+ * signature over the canonical header, `binds_signer` (approver == signature.key_id),
+ * the temporal window (not expired at `atTime`), and an optional pinned approver key.
+ * Does NOT prove the named invocation exists — a host cross-checks invocation_id +
+ * payload_commitment against the envelope at the resume gate. Byte-parity with Python
+ * `verify_approval_grant`.
+ */
+export function verifyApprovalGrant(
+  grant: Record<string, JsonValue>,
+  opts: { atTime: string; expectedApproverKey?: string },
+): BundleVerification {
+  const checks: Record<string, boolean> = {};
+  checks.structure = grant.kind === 'approval-grant' && !!grant.approval_id
+    && !!grant.invocation_id && !!grant.payload_commitment;
+  const ident = (grant.approver_identity as Record<string, JsonValue> | undefined) ?? {};
+  const pub = String(ident.public_key ?? '');
+  const sig = (grant.signature as Record<string, JsonValue> | undefined) ?? {};
+  const header: Record<string, JsonValue> = {
+    kind: grant.kind, approval_id: grant.approval_id, invocation_id: grant.invocation_id,
+    decision: grant.decision, approver: grant.approver, valid_until: grant.valid_until,
+    payload_commitment: grant.payload_commitment, canonicalization: grant.canonicalization,
+  };
+  checks.binds_signer = grant.approver === sig.key_id;
+  checks.signature = sig.algorithm === 'ed25519' && !!pub
+    && verifyCanon(pub, header, String(sig.signature ?? ''));
+  checks.temporal = !!grant.valid_until && opts.atTime <= String(grant.valid_until);
+  if (opts.expectedApproverKey !== undefined) {
+    checks.approver_pinned = grant.approver === opts.expectedApproverKey;
+  }
+  const valid = Object.values(checks).every(Boolean);
+  return {
+    valid, assurance: 'signed', checks,
+    reason: valid ? undefined : 'approval-grant checks failed: '
+      + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
+  };
+}
+
 // ── Log monitor / fork detection (chp-v0.2.md §12, proposal 0023) ───────────
 
 const STORE_HEAD_MONITOR_HEADER_FIELDS = [

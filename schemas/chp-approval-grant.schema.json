@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.2/chp-approval-grant.schema.json",
+  "title": "ChpApprovalGrant",
+  "type": "object",
+  "description": "chp-approval-grant-v1 (chp-v0.2.md section 19, proposal 0037): an approver's ed25519-signed grant authorizing a specific invocation (bound to invocation_id + payload_commitment) to resume past an approval_required gate and execute exactly once. Verified offline like a mandate.",
+  "required": ["kind", "approval_id", "invocation_id", "decision", "approver", "valid_until", "payload_commitment", "canonicalization", "approver_identity", "signature"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {"const": "approval-grant"},
+    "approval_id": {"type": "string", "minLength": 1, "description": "Opaque id of this approval decision."},
+    "invocation_id": {"type": "string", "minLength": 1, "description": "The exact invocation this grant authorizes."},
+    "decision": {"type": "string", "enum": ["granted"], "description": "Only a granted decision authorizes a resume."},
+    "approver": {"type": "string", "minLength": 1, "description": "The approver's key_id (must equal signature.key_id)."},
+    "valid_until": {"type": "string", "format": "date-time", "description": "Expiry; a resume after this is rejected."},
+    "payload_commitment": {"type": "string", "minLength": 1, "description": "sha256(chp-stable-v1(payload)) of the approved request payload — binds the payload so a resume cannot swap it."},
+    "canonicalization": {"type": "string"},
+    "approver_identity": {
+      "type": "object",
+      "required": ["host_id", "public_key"],
+      "additionalProperties": true,
+      "properties": {
+        "host_id": {"type": "string"},
+        "public_key": {"type": "string"}
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["algorithm", "key_id", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {"type": "string", "const": "ed25519"},
+        "key_id": {"type": "string"},
+        "signature": {"type": "string"}
+      }
+    }
+  }
+}

@@ -578,9 +578,21 @@ class LocalCapabilityHost:
         # the recorded chunks before yielding this result.
         cached = self._lookup_recorded_result(envelope.invocation_id)
         if cached is not None:
-            from .metrics import record_idempotent_replay
-            record_idempotent_replay()
-            return envelope, None, cached
+            # Resume-aware replay (proposal 0037): a cached `approval_required` denial
+            # does NOT replay if the caller now presents a valid approver grant for this
+            # exact invocation + payload — delete the stale denial row (the cache is
+            # otherwise first-writer-wins) and fall through to execute exactly once (the
+            # gate-8 grant check accepts it). Any other cached result replays as usual.
+            resuming = (cached.outcome == "denied" and cached.denial is not None
+                        and cached.denial.retryable
+                        and cached.denial.code == "approval_required"
+                        and self._valid_approval_for(envelope))
+            if resuming:
+                self.store.delete_result(envelope.invocation_id)
+            else:
+                from .metrics import record_idempotent_replay
+                record_idempotent_replay()
+                return envelope, None, cached
 
         if not envelope.capability_id or not envelope.capability_id.strip():
             return envelope, None, self._deny(
@@ -1368,6 +1380,17 @@ class LocalCapabilityHost:
 
         # 3. tier == "approval_required" — gate every invocation
         if autonomy.tier == "approval_required":
+            # Resumable invocation (proposal 0037): a valid approver-signed grant for
+            # THIS invocation + payload lets it proceed past the approval gate. Record
+            # the verified grant on the chain, then execute (exactly once — the resume
+            # gate 0 cleared any prior approval_required denial).
+            if self._valid_approval_for(envelope):
+                grant = envelope.approval_ref or {}
+                self._emit_autonomy_event(
+                    "approval_grant_verified", envelope, descriptor,
+                    detail={"approval_id": grant.get("approval_id"),
+                            "approver": grant.get("approver")})
+                return None
             self._emit_autonomy_event(
                 "approval_requested", envelope, descriptor,
                 detail={
@@ -1383,6 +1406,30 @@ class LocalCapabilityHost:
             )
 
         return None
+
+    def _valid_approval_for(self, envelope: InvocationEnvelope) -> bool:
+        """A presented approval grant (proposal 0037) authorizes THIS invocation to
+        resume: it verifies (approver signature, not expired), its `decision` is
+        `granted`, and it binds this exact `invocation_id` AND the request's payload
+        commitment — so an approved invocation cannot swap its payload after approval.
+        An optional `CHP_HOST_APPROVER_KEYS` (comma-separated key_ids) pins which
+        approver keys the host trusts. Absent grant / any failure → False (fail-closed)."""
+        grant = envelope.approval_ref
+        if not isinstance(grant, dict):
+            return False
+        from .signing import verify_approval_grant
+        pinned = os.environ.get("CHP_HOST_APPROVER_KEYS")
+        approvers = {k.strip() for k in pinned.split(",") if k.strip()} if pinned else None
+        if approvers is not None and grant.get("approver") not in approvers:
+            return False
+        v = verify_approval_grant(grant, at_time=utc_now())
+        if not v.valid or grant.get("decision") != "granted":
+            return False
+        if grant.get("invocation_id") != envelope.invocation_id:
+            return False
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        commitment = _payload_commitment(_stringify_floats(payload))
+        return grant.get("payload_commitment") == commitment
 
     def _emit_safety_event(
         self,

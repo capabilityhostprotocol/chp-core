@@ -661,6 +661,35 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (authorized-discovery: ${input.cases.length} visibility cases agree)`
     : "INVALID");
+} else if (input.kind === "approval-grant") {
+  // Approval grant (chp-v0.2.md §19, proposal 0037): an approver-signed record
+  // authorizing a specific invocation to resume. Verify ed25519 over the canonical
+  // header + binds_signer (approver == signature.key_id) + temporal (not expired at
+  // at_time). Cross-impl agreement on the verdict per case.
+  const verifyGrant = (g, atTime) => {
+    const ident = g.approver_identity ?? {};
+    const sig = g.signature ?? {};
+    if (sig.algorithm !== "ed25519" || !ident.public_key) return false;
+    const pub = createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"),
+                          Buffer.from(ident.public_key, "base64")]),
+      format: "der", type: "spki",
+    });
+    const header = { kind: g.kind, approval_id: g.approval_id, invocation_id: g.invocation_id,
+                     decision: g.decision, approver: g.approver, valid_until: g.valid_until,
+                     payload_commitment: g.payload_commitment, canonicalization: g.canonicalization };
+    const sigOk = edVerify(null, Buffer.from(canon(header), "utf8"), pub,
+                           Buffer.from(sig.signature ?? "", "base64"));
+    const structure = g.kind === "approval-grant" && !!g.approval_id && !!g.invocation_id
+                      && !!g.payload_commitment;
+    const bindsSigner = g.approver === sig.key_id;
+    const temporal = !!g.valid_until && atTime <= g.valid_until;
+    return structure && sigOk && bindsSigner && temporal;
+  };
+  ok = (input.cases ?? []).every((c) => verifyGrant(c.grant, c.at_time) === c.valid);
+  console.log(ok
+    ? `VALID (approval-grant: ${input.cases.length} verification cases agree)`
+    : "INVALID");
 } else if (input.kind === "auth-token") {
   // Signed bearer token (chp-v0.2.md §5, proposal 0027): verify the caller's
   // ed25519 signature over the canonical header, the caller attestation

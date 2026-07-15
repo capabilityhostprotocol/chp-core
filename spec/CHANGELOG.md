@@ -5,6 +5,27 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.9.1] — Resumable invocation + provable approval grants over 0.9.0
+
+### Added (additive; new signed record + envelope field + evidence type)
+- **`chp-approval-grant-v1`** (chp-v0.2.md §19, proposal 0037): an approver's ed25519-signed
+  record — `{approval_id, invocation_id, decision, approver, valid_until, payload_commitment}`
+  + self-attested `approver_identity` + signature — verified **offline** like a mandate
+  (`build_approval_grant` / `verify_approval_grant`). Makes an approval **provable**: a third
+  party learns "an approver authorized this exact invocation + payload." New
+  `schemas/chp-approval-grant.schema.json`.
+- **`approval_ref` envelope field** (optional, omit-when-absent → byte-identical when unused):
+  the grant the caller presents to resume.
+- **Resumable invocation:** a capability with `autonomy.tier == "approval_required"` denies
+  `approval_required`; presenting a valid grant bound to that exact `invocation_id` +
+  `payload_commitment` lets it **resume and execute exactly once** — the autonomy gate accepts
+  the grant and the replay gate supersedes the cached denial, keeping one `invocation_id`
+  through the lifecycle (duplicate-execution protection preserved). A payload swap after
+  approval is rejected (the grant commits the payload). New evidence type
+  `approval_grant_verified`. Regression gate: `test_approval_grant.py` +
+  `spec/test-vectors/approval-grant.json` (3-impl). **The durable approval-queue service is
+  a separate, private concern (chp-platform); this is only the wire primitive.**
+
 ## [0.9.0] — Richer policy decision vocabulary + versioned decision records over 0.8.8
 
 ### Added (additive; two new reserved denial codes)

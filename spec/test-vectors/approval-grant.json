@@ -1,0 +1,78 @@
+{
+  "kind": "approval-grant",
+  "description": "Proposal 0037: an approver-signed chp-approval-grant authorizes a specific invocation (bound to invocation_id + payload_commitment) to resume past an approval_required gate. Verified offline: structure + ed25519 signature over the canonical header + binds_signer (approver == signature.key_id) + temporal (not expired at at_time). A tampered field breaks the signature; an at_time past valid_until fails temporal. All three impls agree.",
+  "cases": [
+    {
+      "note": "valid at at_time",
+      "grant": {
+        "kind": "approval-grant",
+        "approval_id": "ap-1",
+        "invocation_id": "inv-1",
+        "decision": "granted",
+        "approver": "afa75db5edb9c5c0",
+        "valid_until": "2099-01-01T00:00:00Z",
+        "payload_commitment": "pc-abc123",
+        "canonicalization": "chp-stable-v1",
+        "approver_identity": {
+          "host_id": "afa75db5edb9c5c0",
+          "public_key": "ZS6fJeT3ZYCqyhIa5DC0XfL7yppGRwSBXSdDHAnHA+Y="
+        },
+        "signature": {
+          "algorithm": "ed25519",
+          "key_id": "afa75db5edb9c5c0",
+          "signature": "m1ZtYyKnc4fFBZTjFOiIFLF+diLFCcYJTNZqxDcFct4IVCC4lTgxx5UwaxUKUawqInRjiT7yId1ALqtin1HVAQ=="
+        }
+      },
+      "at_time": "2026-07-15T00:00:00Z",
+      "valid": true
+    },
+    {
+      "note": "expired: at_time past valid_until",
+      "grant": {
+        "kind": "approval-grant",
+        "approval_id": "ap-1",
+        "invocation_id": "inv-1",
+        "decision": "granted",
+        "approver": "afa75db5edb9c5c0",
+        "valid_until": "2099-01-01T00:00:00Z",
+        "payload_commitment": "pc-abc123",
+        "canonicalization": "chp-stable-v1",
+        "approver_identity": {
+          "host_id": "afa75db5edb9c5c0",
+          "public_key": "ZS6fJeT3ZYCqyhIa5DC0XfL7yppGRwSBXSdDHAnHA+Y="
+        },
+        "signature": {
+          "algorithm": "ed25519",
+          "key_id": "afa75db5edb9c5c0",
+          "signature": "m1ZtYyKnc4fFBZTjFOiIFLF+diLFCcYJTNZqxDcFct4IVCC4lTgxx5UwaxUKUawqInRjiT7yId1ALqtin1HVAQ=="
+        }
+      },
+      "at_time": "2099-06-01T00:00:00Z",
+      "valid": false
+    },
+    {
+      "note": "tampered invocation_id breaks the signature",
+      "grant": {
+        "kind": "approval-grant",
+        "approval_id": "ap-1",
+        "invocation_id": "inv-EVIL",
+        "decision": "granted",
+        "approver": "afa75db5edb9c5c0",
+        "valid_until": "2099-01-01T00:00:00Z",
+        "payload_commitment": "pc-abc123",
+        "canonicalization": "chp-stable-v1",
+        "approver_identity": {
+          "host_id": "afa75db5edb9c5c0",
+          "public_key": "ZS6fJeT3ZYCqyhIa5DC0XfL7yppGRwSBXSdDHAnHA+Y="
+        },
+        "signature": {
+          "algorithm": "ed25519",
+          "key_id": "afa75db5edb9c5c0",
+          "signature": "m1ZtYyKnc4fFBZTjFOiIFLF+diLFCcYJTNZqxDcFct4IVCC4lTgxx5UwaxUKUawqInRjiT7yId1ALqtin1HVAQ=="
+        }
+      },
+      "at_time": "2026-07-15T00:00:00Z",
+      "valid": false
+    }
+  ]
+}

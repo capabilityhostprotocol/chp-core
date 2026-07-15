@@ -31,6 +31,7 @@ export type ReservedDenialCode = (typeof RESERVED_DENIAL_CODES)[number];
 
 export const AUTONOMY_EVIDENCE_TYPES = [
   "approval_denied",
+  "approval_grant_verified",
   "approval_granted",
   "approval_requested",
   "budget_exceeded",

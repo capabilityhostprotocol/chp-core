@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { contentHash, payloadCommitment, chunkSeqDigest, EVENT_HASH_V2, type EvidenceEvent } from '../src/hash.js';
-import { verifyBundle } from '../src/verify.js';
+import { verifyBundle, verifyApprovalGrant } from '../src/verify.js';
 import { withholdPayloads } from '../src/signing.js';
 import type { JsonValue } from '../src/canon.js';
 
@@ -113,5 +113,12 @@ describe('published test vectors', () => {
     expect(minimized.root_hash).toBe(rootBefore);
     expect(minimized.signature).toEqual(bundle.signature);
     expect(verifyBundle(minimized).valid).toBe(true);
+  });
+
+  it('verifies the approval-grant vector (proposal 0037)', () => {
+    const doc = load('approval-grant.json') as { cases: Array<{ grant: Record<string, JsonValue>; at_time: string; valid: boolean }> };
+    for (const c of doc.cases) {
+      expect(verifyApprovalGrant(c.grant, { atTime: c.at_time }).valid).toBe(c.valid);
+    }
   });
 });
