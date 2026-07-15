@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from ..decorators import adapt_callable, get_capability_descriptor
 from ..host import CapabilityHandler, LocalCapabilityHost
-from ..types import CapabilityDescriptor
+from ..types import CapabilityDescriptor, HealthStatus
 
 
 @dataclass(slots=True)
@@ -89,6 +89,16 @@ class BaseAdapter:
     def on_register(self, host: LocalCapabilityHost) -> None:
         """Called after all capabilities from this adapter are registered."""
 
+    def health(self) -> HealthStatus:
+        """Report the adapter's operational health (chp-v0.2.md §20, proposal 0038).
+
+        Override to check the backing system (a live connection, a reachable API, a
+        loaded model) and return ``degraded`` / ``unavailable`` with a ``detail``. The
+        default is ``healthy`` — an adapter with no external dependency is always up.
+        This is a self-report distinct from mesh/routing host health, so an operator
+        can tell a broken adapter from an unreachable host."""
+        return HealthStatus(status="healthy")
+
     def metadata(self) -> dict[str, Any]:
         """Return adapter identity metadata."""
         return {
@@ -99,6 +109,26 @@ class BaseAdapter:
             "adapter_tags": list(self.adapter_tags),
             "adapter_category": self.adapter_category,
         }
+
+
+def aggregate_health(adapters: "Iterable[BaseAdapter]") -> dict[str, Any]:
+    """Roll up ``health()`` across adapters (proposal 0038). Overall status is the
+    worst individual status (``unavailable`` > ``degraded`` > ``healthy``); an adapter
+    whose ``health()`` raises is reported ``unavailable`` (fail-safe, never crashes the
+    rollup). Suitable for an operator console / a host adapter-health surface."""
+    _ORDER = {"healthy": 0, "degraded": 1, "unavailable": 2}
+    per: dict[str, Any] = {}
+    worst = "healthy"
+    for a in adapters:
+        try:
+            hs = a.health()
+            entry = hs.to_dict()
+        except Exception as exc:  # noqa: BLE001 — a broken adapter is unavailable, not a crash
+            entry = {"status": "unavailable", "detail": f"health() raised: {exc}"}
+        per[a.adapter_id] = entry
+        if _ORDER.get(entry["status"], 2) > _ORDER.get(worst, 0):
+            worst = entry["status"]
+    return {"status": worst, "adapters": per}
 
 
 class SimpleAdapter(BaseAdapter):

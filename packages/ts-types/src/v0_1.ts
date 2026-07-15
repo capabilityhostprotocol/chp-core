@@ -114,6 +114,17 @@ export interface CapabilityDescriptor {
   metadata?: JsonObject;
   host_requirements?: HostRequirements;
   policy?: PolicyDescriptor;
+  /** Declared execution timeout in seconds — host-enforced (proposal 0038). */
+  timeout_s?: number | null;
+  /** Advisory retry policy a caller/gateway MAY honor (proposal 0038). */
+  retry?: RetryPolicy;
+}
+
+/** Advisory retry policy (chp-v0.2.md §20, proposal 0038). */
+export interface RetryPolicy {
+  max_attempts?: number;
+  backoff_s?: number;
+  retry_on?: string[];
 }
 
 export interface HostDescriptor {

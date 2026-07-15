@@ -350,6 +350,53 @@ class SafetyHint:
 
 
 @dataclass(slots=True)
+class RetryPolicy:
+    """Declared retry expectation for a capability (chp-v0.2.md §20, proposal 0038).
+
+    ADVISORY: a caller (or the routing gateway) MAY honor it; the host does not
+    auto-retry, since retrying is the caller's decision. ``retry_on`` names the
+    denial/failure conditions a retry is meaningful for (a subset of the reserved
+    codes, or ``["failure"]``)."""
+
+    max_attempts: int = 1
+    backoff_s: float = 0.0
+    retry_on: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+    @classmethod
+    def from_mapping(cls, value: JSON) -> "RetryPolicy":
+        if not isinstance(value, dict):
+            raise ValueError("retry must be a JSON object")
+        return cls(
+            max_attempts=int(value.get("max_attempts", 1)),
+            backoff_s=float(value.get("backoff_s", 0.0)),
+            retry_on=[str(c) for c in (value.get("retry_on") or [])])
+
+
+@dataclass(slots=True)
+class HealthStatus:
+    """A per-adapter operational health report (chp-v0.2.md §20, proposal 0038).
+    Distinct from mesh/routing host health (``host_marked_*``): this is an adapter
+    self-report, so an operator/host can tell an unhealthy adapter from an unreachable
+    host."""
+
+    status: Literal["healthy", "degraded", "unavailable"] = "healthy"
+    detail: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "healthy"
+
+    def to_dict(self) -> JSON:
+        data = asdict(self)
+        if data.get("detail") is None:
+            del data["detail"]
+        return data
+
+
+@dataclass(slots=True)
 class StateMachineDefinition:
     """Blueprint for a state machine instance (§6.3)."""
 
@@ -591,6 +638,13 @@ class CapabilityDescriptor:
     cost_hint: CostHint | None = None       # §7.2 agent interface
     safety_hint: SafetyHint | None = None   # §7.2 agent interface
 
+    # ── Reliability (proposal 0038) ───────────────────────────────────────
+    # A declared execution timeout the host ENFORCES (asyncio.wait_for → an
+    # execution_failed(TimeoutError), not a governance denial). None = no cap.
+    timeout_s: float | None = None
+    # An ADVISORY retry policy the caller/gateway MAY honor (see RetryPolicy).
+    retry: "RetryPolicy | None" = None
+
     @property
     def capability_uri(self) -> str:
         return f"{self.id}:{self.version}"
@@ -599,7 +653,8 @@ class CapabilityDescriptor:
         data = asdict(self)
         data["capability_uri"] = self.capability_uri
         # omit null optional sub-objects to keep serialised output lean
-        for key in ("depends_on", "host_requirements", "policy", "autonomy", "cost_hint", "safety_hint"):
+        for key in ("depends_on", "host_requirements", "policy", "autonomy",
+                    "cost_hint", "safety_hint", "timeout_s", "retry"):
             if data.get(key) is None:
                 data.pop(key, None)
         return data

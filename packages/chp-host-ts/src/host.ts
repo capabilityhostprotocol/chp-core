@@ -468,7 +468,9 @@ export class LocalCapabilityHost {
     const started = this.emit('execution_started', env, { capability_uri: `${d.id}:${d.version}` }, null);
     const ctx = this.executionContext(env);
     try {
-      let data = await entry!.handler(ctx, env.payload ?? {});
+      // Declared execution timeout (proposal 0038): exceed it → a TimeoutError
+      // caught below as execution_failed (a failure, not a governance denial).
+      let data = await this.withTimeout(entry!.handler(ctx, env.payload ?? {}), d.timeout_s);
       if (isAsyncGenerator(data)) {
         // A STREAMING handler invoked in sync mode: collect and return the
         // terminal StreamResult's data (graceful degrade — proposal 0006).
@@ -675,6 +677,25 @@ export class LocalCapabilityHost {
    * resume: verifies (approver signature, not expired), decision granted, and binds
    * this exact invocation_id + payload commitment. Parity with Python
    * `_valid_approval_for`. */
+  /** Race a handler against a declared timeout (proposal 0038). On timeout, reject
+   * with a TimeoutError → the execute try/catch records execution_failed. The handler
+   * promise keeps running (JS cannot cancel it); the timeout bounds the RESULT wait.
+   * Parity with Python's asyncio.wait_for. */
+  private async withTimeout<T>(p: Promise<T> | T, timeoutS?: number | null): Promise<T> {
+    if (!timeoutS) return await (p as Promise<T>);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(Object.assign(new Error(`execution exceeded ${timeoutS}s`), { name: 'TimeoutError' })),
+        timeoutS * 1000);
+    });
+    try {
+      return await Promise.race([Promise.resolve(p), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private validApprovalFor(env: InvocationEnvelope): boolean {
     const grant = env.approval_ref;
     if (!grant || typeof grant !== 'object') return false;

@@ -920,6 +920,11 @@ class LocalCapabilityHost:
                 async for item in raw:
                     if isinstance(item, StreamResult):
                         data = item.data
+            elif inspect.isawaitable(raw) and descriptor.timeout_s:
+                # Declared execution timeout (proposal 0038): exceed it → a
+                # TimeoutError caught below as execution_failed (a failure, not a
+                # governance denial — the capability didn't refuse, it ran too long).
+                data = await asyncio.wait_for(raw, descriptor.timeout_s)
             else:
                 data = await raw if inspect.isawaitable(raw) else raw
             odeny, ometa = self._validate_output(descriptor, data, envelope)

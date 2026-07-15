@@ -702,6 +702,27 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "output_schema_vector_verifies", False, {"error": str(exc)})
 
+    # Adapter operational contract (proposal 0038): the v0.2 spec must define the
+    # host-enforced timeout + per-adapter health, and the descriptor schema must carry
+    # the additive timeout_s + retry fields.
+    add_check(
+        checks,
+        "spec_defines_adapter_contract",
+        "timeout_s" in spec_v02_mk and "health" in spec_v02_mk.lower(),
+        {"hint": "chp-v0.2.md must define the adapter operational contract (timeout_s, health)"},
+    )
+    try:
+        cap_schema = read_json(repo_root / "schemas" / "capability-descriptor.schema.json")
+        props = cap_schema.get("properties", {})
+        add_check(
+            checks,
+            "capability_schema_has_reliability_fields",
+            "timeout_s" in props and "retry" in props,
+            {"hint": "capability-descriptor.schema.json must declare timeout_s + retry"},
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        add_check(checks, "capability_schema_has_reliability_fields", False, {"error": str(exc)})
+
     # Resumable invocation + approval grants (proposal 0037): the v0.2 spec must
     # define approval grants, and the crypto vector's per-case verdicts must all agree
     # (valid grant verifies; expired + tampered fail).

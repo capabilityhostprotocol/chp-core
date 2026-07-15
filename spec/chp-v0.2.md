@@ -6,7 +6,7 @@
 > the v0.9 protocol release-candidate map. **v0.8.3 is a protocol pre-release, NOT a
 > product v1.0** (see the index's scope note).
 
-Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13; **v0.8.3 Rekor transparency-log submission** 2026-07-13; **v0.8.4 informative: HTTP host load-shedding (503)** 2026-07-14; **v0.8.5 informative: per-caller rate limiting (429) + load observability** 2026-07-14; **v0.8.6 normative-doc: verifier fail-closed robustness** 2026-07-14; **v0.8.7 first-class actor identity + per-actor allowlist** 2026-07-14; **v0.8.8 authorized discovery** 2026-07-14; **v0.9.0 richer policy decision vocabulary + versioned decision records (escalation_required, evidence_required)** 2026-07-15; **v0.9.1 resumable invocation + provable approval grants** 2026-07-15). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
+Status: **released** (v0.2 2026-07-06; v0.2.1–v0.2.9 additions 2026-07-09/11; **v0.3.0 selective disclosure**; **v0.3.1 streaming completion**; **v0.3.2 witness quorum + anchoring**; **v0.3.3 gateway exactly-once**; **v0.4.0 chp-jcs-v1 second canonicalization** 2026-07-11; **v0.4.1 wire-version negotiation** 2026-07-12; **v0.4.2 key custody at rest** 2026-07-12; **v0.4.3 non-omission / completeness** 2026-07-12; **v0.5.0 Merkle store head + inclusion proofs** 2026-07-12; **v0.5.1 security model** 2026-07-12; **v0.6.0 in-toto/DSSE attestation bridge** 2026-07-12; **v0.6.1 Merkle consistency proofs** 2026-07-12; **v0.6.2 log monitor / fork detection** 2026-07-12; **v0.6.3 remote monitor** 2026-07-12; **v0.7.0 sealed payloads / confidentiality** 2026-07-12; **v0.7.1 max_invocations enforcement** 2026-07-12; **v0.7.2 normative transport/auth + signed tokens** 2026-07-12; **v0.7.3 capability-version negotiation** 2026-07-12; **v0.7.4 output-schema validation** 2026-07-12; **v0.8.0 confidentiality depth — multi-recipient sealing + disclosure receipts** 2026-07-12; **v0.8.1 mutual TLS** 2026-07-12; **v0.8.2 Zenoh transport binding** 2026-07-13; **v0.8.3 Rekor transparency-log submission** 2026-07-13; **v0.8.4 informative: HTTP host load-shedding (503)** 2026-07-14; **v0.8.5 informative: per-caller rate limiting (429) + load observability** 2026-07-14; **v0.8.6 normative-doc: verifier fail-closed robustness** 2026-07-14; **v0.8.7 first-class actor identity + per-actor allowlist** 2026-07-14; **v0.8.8 authorized discovery** 2026-07-14; **v0.9.0 richer policy decision vocabulary + versioned decision records (escalation_required, evidence_required)** 2026-07-15; **v0.9.1 resumable invocation + provable approval grants** 2026-07-15; **v0.9.2 adapter operational contract (timeout, retry, health)** 2026-07-15). Changes via [proposals/](proposals/) — see [CHANGELOG.md](CHANGELOG.md). **Additive** over [v0.1](chp-v0.1.md); a v0.1-only host remains
 conformant at the `none` assurance tier. v0.2 defines an *optional* tamper-
 evident evidence layer without changing the v0.1 local-first experience. v0.3.0
 adds the first *canon evolution* — a second, opt-in content-hash scheme
@@ -1358,3 +1358,31 @@ that cross-check also **prevents a payload swap** (approve payload A, resume wit
 *exactly-once resume*; the durable **approval-queue service** that holds pending approvals,
 runs the human decision state machine, and *produces* signed grants is an operational
 concern, out of scope here.
+
+## 20. Adapter operational contract (v0.9.2)
+
+Beyond identity + capability discovery, a capability MAY declare — and a host enforces or
+surfaces — operational reliability (proposal 0038):
+
+**Declared timeout (`descriptor.timeout_s`, host-ENFORCED).** A capability MAY declare an
+execution timeout in seconds. The host bounds the handler's result wait to it; exceeding it
+yields an **`execution_failed`** with a `TimeoutError` — a *failure*, not a governance
+denial (the capability did not refuse, it ran too long), so **no new reserved code**.
+Omitted = unbounded (today's behavior). Enforced in both reference hosts.
+
+**Advisory retry (`descriptor.retry`).** A capability MAY declare a `RetryPolicy`
+(`{max_attempts, backoff_s, retry_on}`). It is **advisory** — a caller or the routing
+gateway MAY honor it; the host does **not** auto-retry, because retrying is the caller's
+decision (and the mesh gateway already fails over). It documents the capability's retry
+expectation for schedulers.
+
+**Per-adapter health (`BaseAdapter.health()` → `HealthStatus`).** An adapter MAY report its
+own operational health — `healthy` / `degraded` / `unavailable` with an optional `detail` —
+distinct from mesh/routing host health (`host_marked_*`), so an operator can tell a broken
+adapter from an unreachable host. `aggregate_health` rolls a set up **worst-wins**, and a
+`health()` that raises is reported `unavailable` (fail-safe — a broken adapter never crashes
+the rollup). The default is `healthy`.
+
+`timeout_s` and `retry` are additive descriptor fields (omit-when-absent → byte-identical
+when unused). The publisher-signed **install gate** (§9) is a separate, already-normative
+supply-chain surface; this section is the *runtime* operational contract.
