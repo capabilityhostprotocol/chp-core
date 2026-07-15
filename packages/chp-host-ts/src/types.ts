@@ -112,9 +112,31 @@ export class StreamResult {
 export type Handler = (ctx: Ctx, payload: JsonValue) =>
   JsonValue | Promise<JsonValue> | AsyncGenerator<JsonValue | StreamResult, void, unknown>;
 
+/** The policy decision vocabulary (chp-governance-v0.2.md §2, proposal 0036). */
+export type PolicyDecision =
+  | 'allow'
+  | 'deny'
+  | 'requires_approval'
+  | 'requires_escalation'
+  | 'requires_more_evidence'
+  | 'sandbox_only';
+
+export interface PolicyBlockPattern {
+  capability_id: string;
+  field: string;
+  pattern: string;
+  reason?: string;
+  /** The decision this rule renders when it matches (default 'deny'). */
+  decision?: PolicyDecision;
+}
+
 export interface PolicyConfig {
   allowed_capability_ids?: string[];
   block_capability_ids?: string[];
   max_risk_tier?: RiskTier | null;
   audit_only?: boolean;
+  /** Pattern rules that may render any decision in the vocabulary (proposal 0036). */
+  block_patterns?: PolicyBlockPattern[];
+  /** Policy version, threaded into every decision record (proposal 0036). */
+  version?: string;
 }

@@ -411,7 +411,7 @@ export class LocalCapabilityHost {
       }
     }
     // Gate 6: policy
-    const pd = this.checkPolicy(d);
+    const pd = this.checkPolicy(d, env);
     if (pd) return decided(this.deny(env, pd));
     // Gate 7: invariants
     const inv = this.checkInvariants(d, env);
@@ -554,20 +554,67 @@ export class LocalCapabilityHost {
 
   // ── gate helpers ──────────────────────────────────────────────────────────
 
-  private checkPolicy(d: CapabilityDescriptor): DenialReason | null {
+  private checkPolicy(d: CapabilityDescriptor, env: InvocationEnvelope): DenialReason | null {
     const p = this.opts.policy;
     if (!p) return null;
-    let blocked: string | null = null;
-    if (p.allowed_capability_ids && !p.allowed_capability_ids.includes(d.id)) blocked = 'not in allowlist';
-    else if (p.block_capability_ids?.includes(d.id)) blocked = 'blocked capability id';
-    else if (p.max_risk_tier != null) {
+    // Policy decision (proposal 0036): coarse rules render 'deny'; a block-pattern
+    // may render any decision. Map to a reserved code + attach the decision record.
+    // Parity with Python policy.py / host.py _POLICY_DECISION_CODE.
+    const CODE: Record<string, string> = {
+      deny: 'policy_blocked',
+      requires_approval: 'approval_required',
+      requires_escalation: 'escalation_required',
+      requires_more_evidence: 'evidence_required',
+      sandbox_only: 'policy_blocked', // fail-closed: no sandbox execution mode
+    };
+    const NEXT: Record<string, string> = {
+      requires_approval: 'obtain human approval and retry',
+      requires_escalation: 'escalate to a higher authority to decide',
+      requires_more_evidence: 'provide the required additional evidence and retry',
+      sandbox_only: 'run in a sandbox (no sandbox execution mode available — denied)',
+    };
+    let decision = 'allow';
+    let reason: string | null = null;
+    let matched: string | null = null;
+    if (p.allowed_capability_ids && !p.allowed_capability_ids.includes(d.id)) {
+      decision = 'deny'; reason = 'not in allowlist'; matched = 'allowed_capability_ids';
+    } else if (p.block_capability_ids?.includes(d.id)) {
+      decision = 'deny'; reason = 'blocked capability id'; matched = `block_capability_ids:${d.id}`;
+    } else if (p.max_risk_tier != null) {
       const eff = (d.risk && d.risk in RISK_ORDER ? d.risk : 'medium') as RiskTier;
-      if (RISK_ORDER[eff] > RISK_ORDER[p.max_risk_tier]) blocked = `risk ${eff} exceeds max ${p.max_risk_tier}`;
+      if (RISK_ORDER[eff] > RISK_ORDER[p.max_risk_tier]) {
+        decision = 'deny'; reason = `risk ${eff} exceeds max ${p.max_risk_tier}`;
+        matched = `max_risk_tier:${p.max_risk_tier}`;
+      }
     }
-    if (blocked && !p.audit_only) {
-      return { code: 'policy_blocked', message: blocked, retryable: false };
+    if (decision === 'allow' && p.block_patterns) {
+      const payload = (env.payload ?? {}) as Record<string, JsonValue>;
+      for (const bp of p.block_patterns) {
+        if (bp.capability_id !== d.id) continue;
+        const value = String(payload[bp.field] ?? '');
+        let m = false;
+        try { m = new RegExp(bp.pattern, 'i').test(value); } catch { m = value.toLowerCase().includes(bp.pattern.toLowerCase()); }
+        if (m) {
+          decision = bp.decision ?? 'deny';
+          reason = bp.reason ?? 'blocked by policy pattern';
+          matched = `block_pattern:${bp.capability_id}.${bp.field}`;
+          break;
+        }
+      }
     }
-    return null;
+    if (decision === 'allow' || p.audit_only) return null; // audit_only records but never blocks
+    return {
+      code: CODE[decision] ?? 'policy_blocked',
+      message: reason ?? 'blocked by policy',
+      retryable: ['requires_approval', 'requires_escalation', 'requires_more_evidence'].includes(decision),
+      details: {
+        decision,
+        matched_rule: matched,
+        policy_version: p.version ?? null,
+        explanation: reason,
+        required_next_action: NEXT[decision] ?? null,
+      },
+    };
   }
 
   private checkInvariants(d: CapabilityDescriptor, env: InvocationEnvelope): DenialReason | null {

@@ -5,6 +5,25 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.9.0] — Richer policy decision vocabulary + versioned decision records over 0.8.8
+
+### Added (additive; two new reserved denial codes)
+- **Policy decision vocabulary** (chp-governance-v0.2.md §3.1, proposal 0036): the policy
+  gate renders one of 6 decisions — `allow` / `deny` / `requires_approval` /
+  `requires_escalation` / `requires_more_evidence` / `sandbox_only` — instead of a bare
+  block/allow. A block-pattern rule MAY declare its decision (default `deny` →
+  backward-compatible). Each blocking decision maps to a reserved code: `deny` and
+  `sandbox_only`→`policy_blocked`, `requires_approval`→`approval_required`,
+  `requires_escalation`→**`escalation_required`** (new), `requires_more_evidence`→
+  **`evidence_required`** (new). `sandbox_only` fails closed (no sandbox execution mode yet).
+- **Versioned decision records:** every non-`allow` denial carries
+  `details.{decision, matched_rule, policy_version, explanation, required_next_action}` — a
+  refusal is now attributable to a named, versioned rule with a stated next action.
+- **Two new reserved denial codes** `escalation_required` + `evidence_required` registered
+  across the 4 sites (RESERVED_CODES, denial-reason schema, governance spec, runtime) + the
+  pipeline/security-model listings. Regression gate: `test_policy_decisions.py` +
+  `spec/test-vectors/policy-decision.json` (3-impl agreement).
+
 ## [0.8.8] — Authorized discovery over 0.8.7
 
 ### Added (additive — no wire break, no schema change)

@@ -64,7 +64,7 @@ replay never bypasses it. Streaming mode is excluded.
 | 3 | Enabled | The resolved capability is registered but **disabled** | **`skipped`** | `capability_disabled` | n/a | `execution_skipped` |
 | 4 | Mode | `envelope.mode` ∉ `descriptor.modes` | `denied` | `unsupported_mode` | false | `execution_denied` |
 | 5 | Mandate | The envelope presents a `mandate` (see §3) | `denied` when it fails | `mandate_invalid`, `mandate_exhausted`, **or** `policy_blocked` | false | `execution_denied`; a VALID in-scope mandate denies nothing — it rebinds the subject |
-| 6 | Policy | A `PolicyConfig` is active and blocks (see §4) | `denied` | `policy_blocked` | false | `execution_denied` |
+| 6 | Policy | A `PolicyConfig` is active and blocks (see §4) | `denied` | `policy_blocked` (deny / sandbox_only fail-closed), `escalation_required`, `evidence_required`, **or** `approval_required` — the reserved code for the policy decision (proposal 0036) | see below | `execution_denied` |
 | 7 | Invariants | A host-enforced invariant with `failure_behavior="deny"` does not hold for the payload | `denied` | `invariant_failed` | false | `execution_denied` (carries `invariant_id`) |
 | 8 | Autonomy | An `AutonomyProfile` budget/tier gate fires (see §5) | `denied` | `budget_exceeded` **or** `approval_required` | see §5 | a governance event **then** `execution_denied` |
 | 9 | Input schema | `descriptor.input_schema` is set and the payload fails JSON-Schema validation | `denied` | `input_schema_validation_failed` | false | `execution_denied` (SHOULD carry `schema_id`, `path`) |

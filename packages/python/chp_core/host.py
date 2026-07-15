@@ -97,6 +97,17 @@ from .types import (
 
 CapabilityHandler = Callable[["CapabilityExecutionContext", JSON], Any | Awaitable[Any]]
 
+# Policy decision (policy.py) → reserved denial code at the governance gate
+# (proposal 0036). sandbox_only fails closed to policy_blocked — there is no
+# sandbox execution mode yet (deferred); a decision the host cannot honor denies.
+_POLICY_DECISION_CODE: dict[str, str] = {
+    "deny": "policy_blocked",
+    "requires_approval": "approval_required",
+    "requires_escalation": "escalation_required",
+    "requires_more_evidence": "evidence_required",
+    "sandbox_only": "policy_blocked",
+}
+
 
 def _usage_of(data: Any) -> JSON:
     """Token-usage fields lifted from a handler result into the terminal
@@ -766,12 +777,25 @@ class LocalCapabilityHost:
                 capability_risk=descriptor.risk,
             )
             if verdict.should_block:
+                # Map the policy decision to its reserved code (proposal 0036) and
+                # attach the versioned decision record. requires_approval/escalation/
+                # more_evidence are retryable — the caller can take the required next
+                # action and re-invoke. deny and sandbox_only (fail-closed) are not.
+                code = _POLICY_DECISION_CODE.get(verdict.decision, "policy_blocked")
                 return envelope, None, self._deny(
                     envelope,
                     DenialReason(
-                        code="policy_blocked",
+                        code=code,
                         message=verdict.reason or "blocked by policy",
-                        retryable=False,
+                        retryable=verdict.decision in (
+                            "requires_approval", "requires_escalation", "requires_more_evidence"),
+                        details={
+                            "decision": verdict.decision,
+                            "matched_rule": verdict.matched_rule,
+                            "policy_version": verdict.policy_version,
+                            "explanation": verdict.reason,
+                            "required_next_action": verdict.required_next_action,
+                        },
                     ),
                 )
 

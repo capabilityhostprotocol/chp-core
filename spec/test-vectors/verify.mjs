@@ -620,6 +620,34 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (actor: ${input.cases.length} allowlist-decision cases agree)`
     : "INVALID");
+} else if (input.kind === "policy-decision") {
+  // Policy decision vocabulary (proposal 0036): a matching block-pattern renders its
+  // declared decision (default deny); each blocking decision maps to a reserved code.
+  // Cross-impl agreement on decision + code.
+  const CODE = {
+    deny: "policy_blocked", requires_approval: "approval_required",
+    requires_escalation: "escalation_required", requires_more_evidence: "evidence_required",
+    sandbox_only: "policy_blocked",
+  };
+  const resolve = (c) => {
+    for (const bp of c.block_patterns ?? []) {
+      if (bp.capability_id !== c.capability_id) continue;
+      const value = String((c.input ?? {})[bp.field] ?? "");
+      let m = false;
+      try { m = new RegExp(bp.pattern, "i").test(value); } catch { m = value.toLowerCase().includes(bp.pattern.toLowerCase()); }
+      if (m) return bp.decision ?? "deny";
+    }
+    return "allow";
+  };
+  ok = (input.cases ?? []).every((c) => {
+    const d = resolve(c);
+    const blocks = d !== "allow";
+    if (blocks !== c.blocks || d !== c.decision) return false;
+    return !blocks || CODE[d] === c.code;
+  });
+  console.log(ok
+    ? `VALID (policy-decision: ${input.cases.length} decision+code cases agree)`
+    : "INVALID");
 } else if (input.kind === "authorized-discovery") {
   // Authorized discovery (proposal 0035): a host hides capabilities the caller may
   // not invoke. Visible iff allowed_actors is empty/absent OR includes the caller;
