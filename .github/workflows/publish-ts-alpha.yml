@@ -34,8 +34,16 @@ jobs:
       - name: Build sdk
         run: npm run build --workspace @capabilityhostprotocol/sdk
 
+      # Idempotent: skip a version already on npm so a re-run (e.g. after the host
+      # step failed) doesn't 403 re-publishing the sdk and can proceed to the host.
       - name: Publish sdk
-        run: npm publish --workspace @capabilityhostprotocol/sdk --access public --tag "${{ github.event.inputs.dist_tag }}"
+        run: |
+          V=$(jq -r .version packages/chp-sdk/package.json)
+          if npm view "@capabilityhostprotocol/sdk@$V" version >/dev/null 2>&1; then
+            echo "sdk@$V already published — skipping"
+          else
+            npm publish --workspace @capabilityhostprotocol/sdk --access public --tag "${{ github.event.inputs.dist_tag }}"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -43,6 +51,12 @@ jobs:
         run: npm run build --workspace @capabilityhostprotocol/host
 
       - name: Publish host
-        run: npm publish --workspace @capabilityhostprotocol/host --access public --tag "${{ github.event.inputs.dist_tag }}"
+        run: |
+          V=$(jq -r .version packages/chp-host-ts/package.json)
+          if npm view "@capabilityhostprotocol/host@$V" version >/dev/null 2>&1; then
+            echo "host@$V already published — skipping"
+          else
+            npm publish --workspace @capabilityhostprotocol/host --access public --tag "${{ github.event.inputs.dist_tag }}"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
