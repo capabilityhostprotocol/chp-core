@@ -26,9 +26,13 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      # npm install (not ci) — tolerant of lock drift for the newly-added workspaces
+      # npm ci (not install) — honors the lockfile's workspace LINK resolution
+      # (link:true) deterministically. `npm install` re-resolves the host's exact
+      # sdk pin to the published REGISTRY copy (a real dir), which rollup-plugin-dts
+      # fails to consume for a newly-added export (TS2305); the workspace symlink
+      # resolves cleanly. Requires a pristine in-sync lockfile (bump-version.sh full-regens).
       - name: Install workspaces
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # Build sdk first so the host can resolve it via the workspace symlink.
       - name: Build sdk
