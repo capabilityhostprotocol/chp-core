@@ -120,7 +120,12 @@ export class LocalCapabilityHost {
     this.caps.set(descriptor.id, versions);
   }
 
-  discover(): Record<string, JsonValue> {
+  discover(caller?: string | null): Record<string, JsonValue> {
+    // Authorized discovery (proposal 0035): when a verified caller is given, hide
+    // capabilities whose policy.allowed_actors is non-empty and excludes it — a
+    // caller sees only what it may invoke. Absent caller = unfiltered (today's
+    // behavior). Hiding is least-disclosure; the invoke gate (policy_blocked) is
+    // the security backstop. Parity with Python host.discover(caller=...).
     return {
       id: this.hostId,
       version: '0.1.0',
@@ -129,7 +134,13 @@ export class LocalCapabilityHost {
       // Wire versions this host speaks, for negotiation (§1.1, proposal 0016).
       supported_versions: versionsUpto(PROTOCOL_VERSION),
       kind: 'local',
-      capabilities: [...this.caps.values()].flat().map((c) => ({
+      capabilities: [...this.caps.values()]
+        .flat()
+        .filter((c) => {
+          const allowed = c.descriptor.policy?.allowed_actors;
+          return !caller || !allowed || allowed.length === 0 || allowed.includes(caller);
+        })
+        .map((c) => ({
         id: c.descriptor.id,
         version: c.descriptor.version,
         description: c.descriptor.description ?? '',

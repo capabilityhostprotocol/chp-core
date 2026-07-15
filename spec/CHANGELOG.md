@@ -5,6 +5,19 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
+## [0.8.8] — Authorized discovery over 0.8.7
+
+### Added (additive — no wire break, no schema change)
+- **Authorized discovery** (chp-v0.2.md §18, proposal 0035): `host.discover()` gains an
+  optional `caller` filter — a capability whose `descriptor.policy.allowed_actors` is
+  non-empty and excludes the caller is **hidden** from the catalog. The authenticated GETs
+  `/host` and `/capabilities` thread the verified `self._caller` (set by `_check_auth`), so
+  a caller sees only what it may invoke. Anonymous caller = unfiltered (backward-compatible).
+  **No new reserved code** — hiding is least-disclosure; the invocation gate (`policy_blocked`,
+  proposal 0034) is the security backstop (defense in depth). Reuses `allowed_actors` — no
+  schema change. Cross-host delegated discovery deferred. Regression gate:
+  `test_authorized_discovery.py` + `spec/test-vectors/authorized-discovery.json` (3-impl).
+
 ## [0.8.7] — First-class actor identity + per-actor allowlist over 0.8.6
 
 ### Added (additive — no wire break)

@@ -324,6 +324,7 @@ class LocalCapabilityHost:
         tags: list[str] | None = None,
         status: str | None = None,
         risk: str | None = None,
+        caller: str | None = None,
     ) -> JSON:
         """Return the host descriptor as a dict, with optional capability filtering.
 
@@ -339,6 +340,12 @@ class LocalCapabilityHost:
                 (``"draft"``, ``"experimental"``, ``"certified"``, ``"deprecated"``).
             risk: Return only capabilities at this risk tier
                 (``"low"``, ``"medium"``, ``"high"``, ``"critical"``).
+            caller: Authorized discovery (proposal 0035): the verified caller
+                identity. When set, capabilities whose ``policy.allowed_actors`` is
+                non-empty and excludes the caller are HIDDEN — a caller sees only
+                what it may invoke. ``None`` (anonymous / unnamed) = unfiltered,
+                today's behavior. Hiding is least-disclosure; the invocation gate
+                (``policy_blocked``, proposal 0034) remains the security backstop.
         """
         caps = [entry.descriptor for entry in self._capabilities.values()]
 
@@ -353,6 +360,11 @@ class LocalCapabilityHost:
             caps = [c for c in caps if c.status == status]
         if risk is not None:
             caps = [c for c in caps if c.risk == risk]
+        if caller is not None:
+            def _visible(c: CapabilityDescriptor) -> bool:
+                allowed = c.policy.allowed_actors if c.policy is not None else None
+                return not allowed or caller in allowed  # empty/absent = open
+            caps = [c for c in caps if _visible(c)]
 
         base = self.descriptor().to_dict()
         base["capabilities"] = [c.to_dict() for c in caps]

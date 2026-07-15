@@ -1,0 +1,36 @@
+{
+  "kind": "authorized-discovery",
+  "description": "Proposal 0035: a host filters its discovered catalog to what the verified caller may invoke. A capability is VISIBLE to a caller iff its descriptor.policy.allowed_actors is empty/absent (open) OR includes the caller. An anonymous/unnamed caller (null) sees the unfiltered catalog (backward-compatible). Hiding is least-disclosure; the invocation gate (policy_blocked, proposal 0034) is the security backstop. All three reference impls agree on the visibility decision.",
+  "cases": [
+    {
+      "note": "open capability (empty allowlist) visible to any caller",
+      "allowed_actors": [],
+      "caller": "alice",
+      "visible": true
+    },
+    {
+      "note": "restricted capability visible to a listed caller",
+      "allowed_actors": ["alice"],
+      "caller": "alice",
+      "visible": true
+    },
+    {
+      "note": "restricted capability HIDDEN from a non-listed caller",
+      "allowed_actors": ["alice"],
+      "caller": "mallory",
+      "visible": false
+    },
+    {
+      "note": "anonymous caller (null) sees the unfiltered catalog — backward-compatible",
+      "allowed_actors": ["alice"],
+      "caller": null,
+      "visible": true
+    },
+    {
+      "note": "multi-actor allowlist: a listed caller sees it",
+      "allowed_actors": ["alice", "bob"],
+      "caller": "bob",
+      "visible": true
+    }
+  ]
+}

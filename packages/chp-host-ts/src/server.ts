@@ -153,11 +153,14 @@ export function createHostServer(
     const auth = authenticate(req);
     if (!auth.ok) return err(res, 401, 'unauthorized', 'Missing or invalid X-CHP-Key');
 
+    // Authorized discovery (proposal 0035): filter the catalog to what the verified
+    // caller may invoke. auth.caller is set by authenticate() above.
+    const caller = auth.caller?.name ?? null;
     if (method === 'GET' && path === '/host') {
-      return sendJson(res, 200, { ...host.discover(), host_version: HOST_VERSION });
+      return sendJson(res, 200, { ...host.discover(caller), host_version: HOST_VERSION });
     }
     if (method === 'GET' && path === '/capabilities') {
-      return sendJson(res, 200, { capabilities: (host.discover().capabilities as JsonValue) });
+      return sendJson(res, 200, { capabilities: (host.discover(caller).capabilities as JsonValue) });
     }
     if (method === 'GET' && path.startsWith('/replay/')) {
       const corr = decodeURIComponent(path.slice('/replay/'.length));

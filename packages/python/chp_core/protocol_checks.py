@@ -739,6 +739,36 @@ def check_alignment(repo_root: Path) -> JSON:
         except Exception as exc:  # pragma: no cover - defensive
             add_check(checks, "actor_vector_verifies", False, {"error": str(exc)})
 
+    # Authorized discovery (proposal 0035): the v0.2 spec must define catalog
+    # filtering by caller authority, and the matcher vector's visibility decisions
+    # must all agree (visible iff allowed_actors empty/absent or includes caller;
+    # anonymous caller = unfiltered).
+    add_check(
+        checks,
+        "spec_defines_authorized_discovery",
+        "authorized discovery" in spec_v02_mk.lower(),
+        {"hint": "chp-v0.2.md must define authorized discovery (catalog filtering by caller)"},
+    )
+    ad_vec = repo_root / "spec" / "test-vectors" / "authorized-discovery.json"
+    if ad_vec.exists():
+        try:
+            ad_doc = read_json(ad_vec)
+
+            def _ad_visible(c: JSON) -> bool:
+                if c.get("caller") is None:
+                    return True
+                allowed = c.get("allowed_actors") or []
+                return not allowed or c["caller"] in allowed
+
+            add_check(
+                checks,
+                "authorized_discovery_vector_verifies",
+                all(_ad_visible(c) is c["visible"] for c in ad_doc.get("cases", [])),
+                {"hint": "regenerate authorized-discovery.json"},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            add_check(checks, "authorized_discovery_vector_verifies", False, {"error": str(exc)})
+
     # Mutual TLS (proposal 0031): §5 + the HTTP binding must define mTLS, and the
     # reference must expose the server TLS knobs + client-cert path.
     http_binding_mtls = read_text(repo_root / "spec" / "chp-http-binding.md")

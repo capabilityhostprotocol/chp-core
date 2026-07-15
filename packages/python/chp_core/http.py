@@ -360,12 +360,18 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                           "Missing or invalid X-CHP-Key / X-CHP-Token")
         return False
 
-    def _sync_discover(self) -> JSON:
-        """Call discover() on either a LocalCapabilityHost (sync) or MultiHostRouter (async)."""
+    def _sync_discover(self, caller: str | None = None) -> JSON:
+        """Call discover() on either a LocalCapabilityHost (sync) or MultiHostRouter (async).
+
+        ``caller`` (proposal 0035) enables authorized discovery on a local host — the
+        catalog is filtered to what the verified caller may invoke. The router path
+        (multi-host gateway) does not yet forward the end-caller credential to each
+        member, so cross-host delegated authorized discovery is deferred; the gateway
+        serves its merged catalog unfiltered."""
         host = self.server.chp_host
         if inspect.iscoroutinefunction(host.discover):
             return asyncio.run(host.discover())
-        return host.discover()
+        return host.discover(caller=caller)
 
     def do_GET(self) -> None:
         self._guarded(self._do_get)
@@ -466,7 +472,9 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if not self._check_auth():
             return
         if path == "/host":
-            desc = self._sync_discover()
+            # Authorized discovery (proposal 0035): filter the catalog to what the
+            # verified caller may invoke. _check_auth (above) set self._caller.
+            desc = self._sync_discover(caller=getattr(self, "_caller", None))
             desc.setdefault("host_version", _host_version())
             host_id = desc.get("id") or (desc.get("hosts") or [None])[0]
             for k, v in _host_assurance(host_id).items():
@@ -479,7 +487,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             self._write_json(desc)
             return
         if path == "/capabilities":
-            self._write_json({"capabilities": self._sync_discover()["capabilities"]})
+            desc = self._sync_discover(caller=getattr(self, "_caller", None))
+            self._write_json({"capabilities": desc["capabilities"]})
             return
         if path.startswith("/replay/"):
             correlation_id = unquote(path.removeprefix("/replay/"))
