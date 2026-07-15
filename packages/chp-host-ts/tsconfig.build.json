@@ -4,7 +4,11 @@
     "emitDeclarationOnly": true,
     "declaration": true,
     "noEmit": false,
-    "outDir": "dist"
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@capabilityhostprotocol/sdk": ["../chp-sdk/dist/index.d.ts"]
+    }
   },
   "include": ["src"],
   "exclude": ["test", "**/*.test.ts"]
