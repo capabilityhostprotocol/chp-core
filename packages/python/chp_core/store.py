@@ -132,6 +132,18 @@ class SQLiteEvidenceStore:
             current = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
             if current == self._SCHEMA_VERSION:
                 return
+            # Rollback safety: a store written by a NEWER chp-core (higher schema)
+            # must not be opened by this OLDER build. The migration below is additive
+            # + idempotent, so it would run without error — but then stamp user_version
+            # DOWN, silently "downgrading" a store whose newer columns/semantics this
+            # build does not understand (risking mis-reads or constraint violations).
+            # Fail closed instead: refuse, keep the store intact, tell the operator.
+            if current > self._SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"evidence store schema v{current} is newer than this chp-core "
+                    f"supports (v{self._SCHEMA_VERSION}); refusing to open at {self.path!r}. "
+                    f"Upgrade chp-core, or restore a schema-compatible backup — opening "
+                    f"would silently downgrade the store.")
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS evidence_sequence (
