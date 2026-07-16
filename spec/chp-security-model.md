@@ -112,10 +112,13 @@ returns a clean **invalid** verdict. It never raises (a crash on a hostile paylo
 be a denial-of-service — an unauthenticated client could topple a host by POSTing a
 malformed bundle) and never *falsely verifies* garbage. This is enforced structurally
 (an input-shape guard + a catch that converts any residual error to "invalid") and
-regression-tested by a fuzz matrix over every verifier. Residual risk: the property is
-"no crash / no false-accept on malformed input," not a proof of the cryptographic
-verification logic itself — that rests on the underlying ed25519/ECDSA primitives and
-the canonicalization being correct.
+regression-tested by a fuzz matrix over every verifier. **Both implementations hold this
+property:** the Python verifiers (fail-closed decorators, `test_verifier_robustness.py`)
+and the TypeScript SDK/host verifiers (each public `verify*` wrapped at its boundary with
+an input-shape guard + a catch, `chp-sdk/test/verifier-robustness.test.ts` — a 15×-garbage
+matrix over all 14). Residual risk: the property is "no crash / no false-accept on
+malformed input," not a proof of the cryptographic verification logic itself — that rests
+on the underlying ed25519/ECDSA primitives and the canonicalization being correct.
 
 ## What moved from v0.1 non-goal → shipped
 
