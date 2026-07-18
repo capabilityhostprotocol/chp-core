@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **This repository is a GENERATED PUBLIC MIRROR of the private `chp-dev` repo.** Do not hand-edit
+> generated content (`packages/`, `spec/`, `schemas/`, `conformance/`, `examples/`, `docs/`, `registry/`,
+> `provenance/`). Make the change in chp-dev and publish it with `scripts/sync-to-public.sh --publish`,
+> which opens a **PR into protected `main`** (gated by the *Python reference host* check) plus a signed
+> Radicle patch; `--land <pr#>` merges the PR and mirrors rad. Two backstops enforce this: a local
+> pre-commit guard rejects hand-edits to generated paths, and the **Mirror provenance** CI check
+> (`.github/workflows/mirror-provenance.yml`) rejects any PR that changes them from a non-`sync/*` branch.
+> Mirror-native files (this file, `.github/`, `README`, `LICENSE`) may be edited here via a normal PR.
+
 ## Commands
 
 ```bash

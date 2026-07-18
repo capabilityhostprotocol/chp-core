@@ -1,0 +1,33 @@
+name: Mirror provenance
+# chp-core is a GENERATED MIRROR of the private chp-dev repo. Content under generated paths is produced
+# ONLY by scripts/sync-to-public.sh, which runs on a sync/* branch. A PR that changes those paths from
+# any other branch bypassed the local mirror guard (e.g. via --no-verify) — this is the non-skippable
+# CI backstop that rejects it. Mirror-native files (.github, README, LICENSE, CLAUDE.md) are unaffected.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  mirror-provenance:
+    name: Mirror provenance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generated paths must come from a sync/* branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          case "$HEAD_REF" in
+            sync/*) echo "sync-origin PR ($HEAD_REF) — generated changes allowed."; exit 0 ;;
+          esac
+          files="$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files -q '.files[].path')"
+          touched="$(echo "$files" | grep -E '^(spec|schemas|conformance|examples|packages|docs|registry|provenance)/' || true)"
+          if [ -n "$touched" ]; then
+            echo "::error::PR from '$HEAD_REF' modifies GENERATED mirror paths — that bypasses the sync process:"
+            echo "$touched" | sed 's/^/  /'
+            echo "Make the change in chp-dev and publish it: scripts/sync-to-public.sh --publish"
+            exit 1
+          fi
+          echo "No generated paths touched by '$HEAD_REF' — ok."
