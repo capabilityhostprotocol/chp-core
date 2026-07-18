@@ -51,6 +51,27 @@ def add_radicle_common_args(parser: argparse.ArgumentParser, default_correlation
     parser.add_argument("--timeout-seconds", type=int, default=30)
 
 
+def _print_failing_checks(data: JSON) -> None:
+    """On a failing gate, name the EXACT failing checks + their hints to stderr, so the reason is
+    unmissable and never has to be guessed out of the full JSON dump (rad:9956f78 — the mechanical
+    half of verify-don't-guess). Handles both alignment ({name, passed, details.hint}) and precommit
+    ({name, passed, stderr_preview}) result shapes."""
+    import sys as _sys
+    checks = (data or {}).get("checks") if isinstance(data, dict) else None
+    if not isinstance(checks, list):
+        return
+    failing = [c for c in checks if isinstance(c, dict) and c.get("passed") is False]
+    if not failing:
+        return
+    print(f"\nFAILING CHECKS ({len(failing)}):", file=_sys.stderr)
+    for c in failing:
+        name = c.get("name", "?")
+        details = c.get("details")
+        note = (details.get("hint") if isinstance(details, dict) else None) or c.get("stderr_preview") or ""
+        note = (note[:160] + "…") if len(note) > 160 else note
+        print(f"  ✗ {name}" + (f" — {note}" if note else ""), file=_sys.stderr)
+
+
 def invoke_work_capability(
     capability_id: str,
     payload: JSON,
@@ -65,10 +86,10 @@ def invoke_work_capability(
     )
     data = result.to_dict()
     print_json(data)
-    if not result.success:
+    ok = result.success and (not pass_field or bool(result.data.get(pass_field)))
+    if not ok:
+        _print_failing_checks(result.data)
         return 1
-    if pass_field:
-        return 0 if bool(result.data.get(pass_field)) else 1
     return 0
 
 

@@ -43,6 +43,7 @@ def _session_file(repo_path: str | None) -> Path:
 _EMITS = [
     "source_checked", "adapter_checked", "all_checked", "staged_checked",
     "policy_checked", "dev_session_opened", "dev_session_closed", "violations_reported",
+    "sessions_reaped",
 ]
 
 # The sole adapter sanctioned to import an HTTP client directly: it IS the
@@ -322,11 +323,11 @@ class ConformanceAdapter(BaseAdapter):
         input_schema={
             "type": "object",
             "properties": {
-                "issue_id": {"type": "string", "description": "Radicle issue short-hash (7+ chars)"},
+                "issue_id": {"type": "string", "description": "Radicle issue short-hash (7+ chars). Single issue; use issue_ids for several."},
+                "issue_ids": {"type": "array", "items": {"type": "string"}, "description": "Radicle issue short-hashes — a session may span several issues (a planned batch of work)."},
                 "description": {"type": "string", "description": "Optional work description"},
                 "repo_path": {"type": "string", "description": "Repo/worktree path to key this session by (defaults to the global session)"},
             },
-            "required": ["issue_id"],
             "additionalProperties": False,
         },
     )
@@ -334,26 +335,36 @@ class ConformanceAdapter(BaseAdapter):
         if self._host is None:
             raise RuntimeError("ConformanceAdapter must be registered with a host")
 
-        issue_id = payload["issue_id"]
         repo_path = payload.get("repo_path")
+        # A session may cover one issue or several (a planned batch). Accept issue_ids; fall back to the
+        # scalar issue_id. commit-msg then accepts a commit referencing ANY issue in the set (rad:80fadcc).
+        issue_ids = list(payload.get("issue_ids") or [])
+        if not issue_ids and payload.get("issue_id"):
+            issue_ids = [payload["issue_id"]]
+        if not issue_ids:
+            raise ValueError("open_dev_session requires issue_id or issue_ids")
 
-        # 1. Validate issue exists and is open. Forward repo_path so the issue is
-        # resolved against the same repo the session is keyed by — without it,
-        # issue_show defaults to the host's cwd and fails for any other repo.
-        issue_show_payload = {"issue_id": issue_id}
-        if repo_path:
-            issue_show_payload["repo_path"] = repo_path
-        issue_result = await ctx.ainvoke(
-            "chp.adapters.radicle.issue_show",
-            issue_show_payload,
-        )
-        if not issue_result.success:
-            raise ValueError(f"Issue {issue_id} not found: {issue_result.error}")
-        issue_data = issue_result.data
-        issue_title = issue_data.get("title", issue_id)
-        issue_state = str(issue_data.get("state", "open"))
-        if issue_state not in {"open", ""}:
-            raise ValueError(f"Issue {issue_id} is not open (state: {issue_state})")
+        # 1. Validate EACH issue exists and is open. Forward repo_path so issues resolve against the
+        # same repo the session is keyed by — without it, issue_show defaults to the host's cwd.
+        titles: list[str] = []
+        for iid in issue_ids:
+            issue_show_payload = {"issue_id": iid}
+            if repo_path:
+                issue_show_payload["repo_path"] = repo_path
+            issue_result = await ctx.ainvoke(
+                "chp.adapters.radicle.issue_show",
+                issue_show_payload,
+            )
+            if not issue_result.success:
+                raise ValueError(f"Issue {iid} not found: {issue_result.error}")
+            issue_data = issue_result.data
+            issue_state = str(issue_data.get("state", "open"))
+            if issue_state not in {"open", ""}:
+                raise ValueError(f"Issue {iid} is not open (state: {issue_state})")
+            titles.append(issue_data.get("title", iid))
+        # Primary issue (first) drives back-compat fields read by close_dev_session and old session files.
+        issue_id = issue_ids[0]
+        issue_title = titles[0]
 
         # 2. Snapshot baseline conformance (governed — each file check appears in evidence)
         baseline = await self._run_baseline(ctx)
@@ -362,7 +373,7 @@ class ConformanceAdapter(BaseAdapter):
         plan_result = await ctx.ainvoke(
             "chp.adapters.planning.create_plan",
             {
-                "intent": f"Resolve rad:{issue_id[:7]} — {issue_title}",
+                "intent": "Resolve " + ", ".join(f"rad:{i[:7]}" for i in issue_ids) + f" — {issue_title}",
                 "steps": [
                     {"step_id": "baseline", "description": "Review violation baseline"},
                     {"step_id": "implement", "description": "Implement fix"},
@@ -378,7 +389,8 @@ class ConformanceAdapter(BaseAdapter):
         session_file = _session_file(payload.get("repo_path"))
         session_file.parent.mkdir(parents=True, exist_ok=True)
         session_data = {
-            "issue_id": issue_id,
+            "issue_id": issue_id,          # primary (first) — back-compat for readers of the scalar
+            "issue_ids": issue_ids,        # full set — a session may span several issues (rad:80fadcc)
             "issue_title": issue_title,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "baseline": baseline,
@@ -391,6 +403,7 @@ class ConformanceAdapter(BaseAdapter):
         baseline_total = baseline["total_violations"]
         ctx.emit("dev_session_opened", {
             "issue_id": issue_id,
+            "issue_ids": issue_ids,
             "issue_title": issue_title,
             "baseline_total_violations": baseline_total,
             "baseline_adapter_count": baseline["adapter_count"],
@@ -398,6 +411,7 @@ class ConformanceAdapter(BaseAdapter):
         }, redacted=False)
         return {
             "issue_id": issue_id,
+            "issue_ids": issue_ids,
             "issue_title": issue_title,
             "baseline_total_violations": baseline_total,
             "session_file": str(session_file),
@@ -529,6 +543,7 @@ class ConformanceAdapter(BaseAdapter):
 
         session_data = json.loads(session_file.read_text())
         issue_id = session_data["issue_id"]
+        issue_ids = session_data.get("issue_ids") or [issue_id]
         started_at = session_data.get("started_at", "")
         baseline_total = session_data.get("baseline", {}).get("total_violations", 0)
         outcome = payload.get("outcome", "success")
@@ -549,6 +564,7 @@ class ConformanceAdapter(BaseAdapter):
 
         ctx.emit("dev_session_closed", {
             "issue_id": issue_id,
+            "issue_ids": issue_ids,
             "outcome": outcome,
             "duration_s": duration_s,
             "violations_resolved": violations_resolved,
@@ -556,12 +572,77 @@ class ConformanceAdapter(BaseAdapter):
         }, redacted=False)
         return {
             "issue_id": issue_id,
+            "issue_ids": issue_ids,
             "outcome": outcome,
             "duration_s": duration_s,
             "violations_resolved": violations_resolved,
             "violations_remaining": final["total_violations"],
             "final_adapter_count": final["adapter_count"],
         }
+
+    @capability(
+        id="chp.adapters.conformance.reap_stale_sessions",
+        emits=_EMITS,
+        version="1.0.0",
+        description="Auto-close dev sessions whose EVERY issue is closed (the stale-session state that "
+                    "drove --no-verify), and flag sessions open longer than max_age_hours. Governed, "
+                    "in-host, evidence-emitting; fail-open per session so a lookup hiccup never closes one.",
+        category="core",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "max_age_hours": {"type": "number", "description": "Flag open sessions older than this (default 24)."},
+            },
+            "additionalProperties": False,
+        },
+    )
+    async def reap_stale_sessions(self, ctx: Any, payload: dict) -> dict:
+        if self._host is None:
+            raise RuntimeError("ConformanceAdapter must be registered with a host")
+        import glob
+        from datetime import datetime, timezone
+        max_age = float(payload.get("max_age_hours", 24) or 24)
+        closed: list = []
+        old_open: list = []
+        scanned = 0
+        for path in glob.glob(str(_SESSION_DIR / "*.json")):
+            try:
+                d = json.loads(Path(path).read_text())
+            except Exception:
+                continue
+            scanned += 1
+            ids = d.get("issue_ids") or ([d["issue_id"]] if d.get("issue_id") else [])
+            if not ids:
+                continue
+            repo_path = d.get("repo_path")
+            states: list[str] = []
+            for iid in ids:
+                q: dict = {"issue_id": iid}
+                if repo_path:
+                    q["repo_path"] = repo_path
+                r = await ctx.ainvoke("chp.adapters.radicle.issue_show", q)
+                # Fail-open: an unresolved issue reads as OPEN, so a transient error never reaps a session.
+                states.append(str(r.data.get("state", "open")) if r.success else "open")
+            if states and all(s == "closed" for s in states):
+                cp: dict = {"outcome": "success"}
+                if repo_path:
+                    cp["repo_path"] = repo_path
+                cr = await ctx.ainvoke("chp.adapters.conformance.close_dev_session", cp)
+                if cr.success:
+                    closed.append({"issue_ids": ids, "repo_path": repo_path})
+                continue
+            try:
+                age_h = (datetime.now(timezone.utc)
+                         - datetime.fromisoformat(d.get("started_at", ""))).total_seconds() / 3600
+            except Exception:
+                age_h = 0.0
+            if age_h > max_age:
+                old_open.append({"issue_ids": ids, "age_h": round(age_h, 1)})
+        ctx.emit("sessions_reaped",
+                 {"closed": len(closed), "old_open": len(old_open), "scanned": scanned},
+                 redacted=False)
+        return {"closed": closed, "old_open": old_open, "scanned": scanned}
 
     @capability(
         id="chp.adapters.conformance.report_violations",
