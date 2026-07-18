@@ -22,7 +22,7 @@ if [ -z "${CHP_SYNC:-}" ] && [ -f "$ROOT/mirror-hooks/_generated.py" ]; then
     echo "$BLOCKED" | sed 's/^/  /' >&2
     echo "" >&2
     echo "Make the change in chp-dev, then publish it:" >&2
-    echo "  (edit chp-dev/…)  →  bash scripts/sync-to-public.sh --pr" >&2
+    echo "  (edit chp-dev/…)  →  bash scripts/sync-to-public.sh --publish" >&2
     echo "" >&2
     echo "Do NOT use --no-verify: CI verifies mirror provenance and will reject the bypass (rad:47e2b1e)." >&2
     exit 1
