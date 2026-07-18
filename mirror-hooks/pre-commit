@@ -1,0 +1,40 @@
+#!/bin/sh
+# chp-core pre-commit — GENERATED MIRROR guard + quality checks.
+#
+# This hook is authored in chp-dev (mirror-hooks/pre-commit) and installed into chp-core/.git/hooks by
+# scripts/sync-to-public.sh, so it reproduces from one source instead of being a hand-placed local file.
+#
+# Guard: chp-core is a generated mirror of chp-dev. Hand-editing a synced/generated file drifts the
+# mirror from its source — the exact situation that forced --no-verify (rad:bd0c700): the drift makes
+# the sync-clean alignment check red, which then blocks EVERY commit. So reject commits that stage
+# generated paths, unless CHP_SYNC=1 (set only by the sync script — the one legitimate writer).
+#
+# LIMIT: `git commit --no-verify` skips this hook entirely; that cannot be prevented client-side. CI
+# verifies mirror provenance and rejects a bypass where it can't be skipped (rad:47e2b1e).
+set -eu
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if [ -z "${CHP_SYNC:-}" ] && [ -f "$ROOT/mirror-hooks/_generated.py" ]; then
+  BLOCKED="$(git diff --cached --name-only --diff-filter=ACM | python3 "$ROOT/mirror-hooks/_generated.py" 2>/dev/null || true)"
+  if [ -n "$BLOCKED" ]; then
+    echo "CHP: chp-core is a GENERATED mirror — do not hand-edit synced files:" >&2
+    echo "$BLOCKED" | sed 's/^/  /' >&2
+    echo "" >&2
+    echo "Make the change in chp-dev, then publish it:" >&2
+    echo "  (edit chp-dev/…)  →  bash scripts/sync-to-public.sh --pr" >&2
+    echo "" >&2
+    echo "Do NOT use --no-verify: CI verifies mirror provenance and will reject the bypass (rad:47e2b1e)." >&2
+    exit 1
+  fi
+fi
+
+# Quality checks. NOT `--check alignment`: its chp_dev_python_sync_clean check is circular on the mirror
+# (green only when the mirror already equals its source — the sync script's job), so it was red between
+# syncs and forced --no-verify (rad:bd0c700). Tests/conformance/schemas/mypy remain honest signals.
+PYTHONPATH=packages/python python -m chp_core.cli work vc precommit \
+  --check tests \
+  --check conformance \
+  --check schemas \
+  --check mypy \
+  --repo-root . 2>&1
