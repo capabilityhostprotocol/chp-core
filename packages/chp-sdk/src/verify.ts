@@ -23,6 +23,68 @@ export interface BundleVerification {
   anchoredDid?: string | null;
 }
 
+// ── fail-closed verifier robustness (parity with the Python fail-closed audit) ──
+// A verifier is fed untrusted wire input; malformed input (non-object, or an object
+// with wrong-typed fields) must yield a NOT-valid verdict — never throw, never
+// false-verify. Each public verifier is its `*Impl` wrapped here at the boundary.
+export function isRecord(x: unknown): x is Record<string, JsonValue> {
+  return typeof x === 'object' && x !== null && !Array.isArray(x);
+}
+
+function failClosedBV<A extends unknown[]>(
+  fn: (d: Record<string, JsonValue>, ...a: A) => BundleVerification,
+): (d: unknown, ...a: A) => BundleVerification {
+  return (d, ...a) => {
+    if (!isRecord(d)) return { valid: false, assurance: 'unsigned', checks: {}, reason: 'malformed input: not an object' };
+    try { return fn(d, ...a); }
+    catch (e) { return { valid: false, assurance: 'unsigned', checks: {}, reason: `verifier error: ${(e as Error).message}` }; }
+  };
+}
+
+function failClosedBool<A extends unknown[]>(
+  fn: (d: Record<string, JsonValue>, ...a: A) => boolean,
+): (d: unknown, ...a: A) => boolean {
+  return (d, ...a) => {
+    if (!isRecord(d)) return false;
+    try { return fn(d, ...a); } catch { return false; }
+  };
+}
+
+function failClosedStoreHeadAnchor<A extends unknown[]>(
+  fn: (d: Record<string, JsonValue>, ...a: A) => { valid: boolean; checks: Record<string, boolean>; anchoredDid: string | null },
+): (d: unknown, ...a: A) => { valid: boolean; checks: Record<string, boolean>; anchoredDid: string | null } {
+  return (d, ...a) => {
+    if (!isRecord(d)) return { valid: false, checks: {}, anchoredDid: null };
+    try { return fn(d, ...a); } catch { return { valid: false, checks: {}, anchoredDid: null }; }
+  };
+}
+
+function failClosedTaskBundle<A extends unknown[]>(
+  fn: (d: Record<string, JsonValue>, ...a: A) => TaskBundleVerification,
+): (d: unknown, ...a: A) => TaskBundleVerification {
+  const bad = (reason: string): TaskBundleVerification => ({
+    valid: false, assurance: 'unsigned', checks: {}, correlationId: '', taskRootHash: null, hosts: [], reason });
+  return (d, ...a) => {
+    if (!isRecord(d)) return bad('malformed input: not an object');
+    try { return fn(d, ...a); } catch (e) { return bad(`verifier error: ${(e as Error).message}`); }
+  };
+}
+
+// The public verifiers: each `*Impl` wrapped so malformed input fails closed. (`*Impl`
+// functions are hoisted, so this block can precede their definitions.)
+export const verifyRekorAnchor = failClosedBV(verifyRekorAnchorImpl);
+export const verifyBundle = failClosedBV(verifyBundleImpl);
+export const verifyProvenanceStatement = failClosedBV(verifyProvenanceStatementImpl);
+export const verifyChainWitness = failClosedBV(verifyChainWitnessImpl);
+export const verifyAuthToken = failClosedBV(verifyAuthTokenImpl);
+export const verifyApprovalGrant = failClosedBV(verifyApprovalGrantImpl);
+export const verifyStoreHeadMonitorReport = failClosedBV(verifyStoreHeadMonitorReportImpl);
+export const verifyMandateRevocation = failClosedBV(verifyMandateRevocationImpl);
+export const verifyMandate = failClosedBV(verifyMandateImpl);
+export const verifyContinuity = failClosedBool(verifyContinuityImpl);
+export const verifyStoreHeadAnchor = failClosedStoreHeadAnchor(verifyStoreHeadAnchorImpl);
+export const verifyTaskBundle = failClosedTaskBundle(verifyTaskBundleImpl);
+
 function verifyCanon(pubB64: string, obj: JsonValue, sigB64: string): boolean {
   return edVerify(null, Buffer.from(canon(obj), 'utf8'), publicKeyFromB64(pubB64), Buffer.from(sigB64, 'base64'));
 }
@@ -33,7 +95,7 @@ function verifyCanon(pubB64: string, obj: JsonValue, sigB64: string): boolean {
  * Four independent checks, no network: RFC 6962 inclusion of `SHA256(0x00‖entry_body)`
  * under `tree_root`; the ECDSA-P256 SET over JCS(`{body,integratedTime,logIndex,logID}`);
  * the entry records THIS DSSE (envelope hash); and the DSSE commits `store_head`. */
-export function verifyRekorAnchor(
+function verifyRekorAnchorImpl(
   anchor: Record<string, JsonValue>, logPublicKeyPem: string,
 ): BundleVerification {
   const a = (anchor.anchor ?? {}) as Record<string, JsonValue>;
@@ -73,7 +135,7 @@ export function verifyRekorAnchor(
              + Object.keys(checks).filter((k) => !checks[k]).join(', ') };
 }
 
-export function verifyBundle(
+function verifyBundleImpl(
   bundle: Record<string, JsonValue>,
   opts: { expectedKeyId?: string } = {},
 ): BundleVerification {
@@ -228,7 +290,7 @@ export function storeHeadAnchorMessage(
 /** Offline-verify a store-head anchor (§12, proposal 0013): the external did:key
  * must have SSHSIG-countersigned THIS (host_id, sequence, store_head, anchored_at)
  * under namespace chp-store-head-anchor. Independent of the witness peer set. */
-export function verifyStoreHeadAnchor(
+function verifyStoreHeadAnchorImpl(
   statement: Record<string, JsonValue>,
 ): { valid: boolean; checks: Record<string, boolean>; anchoredDid: string | null } {
   const checks: Record<string, boolean> = {};
@@ -371,7 +433,7 @@ const PROVENANCE_HEADER_FIELDS = [
 /** Verify a publisher's adapter-provenance statement: header signature,
  * publisher attestation (binding + temporal), DID anchor when present, and —
  * when `wheelSha256` is supplied — that the artifact on hand is the signed one. */
-export function verifyProvenanceStatement(
+function verifyProvenanceStatementImpl(
   stmt: Record<string, JsonValue>,
   opts: { expectedKeyId?: string; wheelSha256?: string } = {},
 ): BundleVerification {
@@ -436,7 +498,7 @@ export function verifyProvenanceStatement(
  * multi-hop walk from a pin lives with the pin store, not here). A verifier
  * holding an independently-pinned old key SHOULD check `old_public_key`
  * against its pin before trusting the statement. */
-export function verifyContinuity(statement: Record<string, JsonValue>): boolean {
+function verifyContinuityImpl(statement: Record<string, JsonValue>): boolean {
   const claim: Record<string, JsonValue> = {
     old_key_id: statement.old_key_id ?? null,
     old_public_key: statement.old_public_key ?? null,
@@ -459,7 +521,7 @@ const CHAIN_WITNESS_VERIFY_FIELDS = [
  * witness attestation (binding + temporal), DID anchor when present, and —
  * when supplied — the witnessed-host binding. Store-head RECOMPUTATION is a
  * separate act that needs the store itself. */
-export function verifyChainWitness(
+function verifyChainWitnessImpl(
   statement: Record<string, JsonValue>,
   opts: { expectedHostId?: string; expectedWitnessKey?: string } = {},
 ): BundleVerification {
@@ -518,7 +580,7 @@ export function verifyChainWitness(
  * host's pin for `sub` (`expectedCallerKey`). Byte-parity with Python
  * `verify_auth_token`. Any failure is a transport rejection.
  */
-export function verifyAuthToken(
+function verifyAuthTokenImpl(
   token: Record<string, JsonValue>,
   opts: { aud: string; atTime: string; expectedCallerKey?: string },
 ): BundleVerification {
@@ -561,7 +623,7 @@ export function verifyAuthToken(
  * payload_commitment against the envelope at the resume gate. Byte-parity with Python
  * `verify_approval_grant`.
  */
-export function verifyApprovalGrant(
+function verifyApprovalGrantImpl(
   grant: Record<string, JsonValue>,
   opts: { atTime: string; expectedApproverKey?: string },
 ): BundleVerification {
@@ -606,7 +668,7 @@ const STORE_HEAD_MONITOR_HEADER_FIELDS = [
  * Store-head RECONSTRUCTION was the monitor's act; a report verifier trusts the
  * signed verdict.
  */
-export function verifyStoreHeadMonitorReport(
+function verifyStoreHeadMonitorReportImpl(
   report: Record<string, JsonValue>,
   opts: { expectedHostId?: string; expectedMonitorKey?: string } = {},
 ): BundleVerification {
@@ -814,7 +876,7 @@ const MANDATE_REVOCATION_VERIFY_FIELDS = [
  * structure, header signature, principal attestation. SELF-consistency only —
  * whether it revokes a GIVEN mandate is `verifyMandate({revocations})`, which
  * checks the signature against the MANDATE's principal key (issuer-only). */
-export function verifyMandateRevocation(
+function verifyMandateRevocationImpl(
   statement: Record<string, JsonValue>,
   opts: { expectedPrincipalKey?: string } = {},
 ): BundleVerification {
@@ -857,7 +919,7 @@ export function verifyMandateRevocation(
   };
 }
 
-export function verifyMandate(
+function verifyMandateImpl(
   mandate: Record<string, JsonValue>,
   opts: {
     atTime?: string; capabilityId?: string;
@@ -1003,7 +1065,7 @@ const taskMemberKey = (b: Record<string, JsonValue>): string =>
  * prove absence of evidence (a leaf contributor can be omitted undetectably;
  * a causal ancestor cannot — its children's causation_ids would dangle).
  */
-export function verifyTaskBundle(task: Record<string, JsonValue>): TaskBundleVerification {
+function verifyTaskBundleImpl(task: Record<string, JsonValue>): TaskBundleVerification {
   const checks: Record<string, boolean> = {};
   const correlationId = String(task.correlation_id ?? '');
   const members = (task.bundles as Record<string, JsonValue>[] | undefined) ?? [];

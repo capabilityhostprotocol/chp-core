@@ -362,8 +362,16 @@ def test_session_file_keying():
     assert f1.parent == A._SESSION_DIR
 
 
-def test_resolve_existing_falls_back_to_global():
-    """A keyed path with no keyed file resolves to the global session file."""
+def test_repo_path_never_resolves_to_the_global_session():
+    """A repo with no session of its own must NOT inherit the unkeyed global session.
+
+    This previously fell back to the global file, which is scoped to no repo — so a single unkeyed
+    session answered for every repo that had none of its own, satisfying commit gates everywhere,
+    while close_dev_session only ever unlinked the keyed file it resolved. A missing session must
+    read as absent, not as another repo's.
+    """
     from chp_adapter_conformance import adapter as A
-    # An unlikely path that has no keyed session file → fall back to global.
-    assert A._resolve_existing("/no/such/worktree/xyzzy") == A._SESSION_FILE
+    assert A._session_file("/no/such/worktree/xyzzy") != A._SESSION_FILE
+    assert A._session_file("/no/such/worktree/xyzzy").parent == A._SESSION_DIR
+    # Only a caller with no repo_path at all gets the global file.
+    assert A._session_file(None) == A._SESSION_FILE

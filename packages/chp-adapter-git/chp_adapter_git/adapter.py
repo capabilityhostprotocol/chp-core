@@ -216,8 +216,9 @@ class GitAdapter(BaseAdapter):
 
     @capability(
         id="chp.adapters.git.log",
-        version="0.1.0",
-        description="Recent commit list: sha7, author name, subject (truncated), ISO date.",
+        version="0.2.0",
+        description="Recent commit list: sha7, author name, subject (truncated), ISO date, and "
+                    "optionally the full commit body.",
         category="developer_tooling",
         risk="low",
         input_schema={
@@ -226,6 +227,12 @@ class GitAdapter(BaseAdapter):
                 "repo_path": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "branch": {"type": "string"},
+                "include_body": {
+                    "type": "boolean",
+                    "description": "Include each commit's full message body. Callers that link "
+                                   "commits back to their own records need it: the trailers that "
+                                   "name an issue or record live in the body, not the subject.",
+                },
             },
             "additionalProperties": False,
         },
@@ -236,27 +243,43 @@ class GitAdapter(BaseAdapter):
         repo = self._repo(payload)
         limit = min(int(payload.get("limit") or 20), self._config.max_log_entries)
         branch = payload.get("branch") or "HEAD"
-        ctx.emit("git_request", {"operation": "log", "repo_path": repo, "limit": limit, "branch": branch})
-        # format: sha|author|date|subject  (subject truncated client-side)
-        sep = "\x1f"
-        fmt = f"%h{sep}%an{sep}%aI{sep}%s"
+        include_body = bool(payload.get("include_body"))
+        ctx.emit("git_request", {"operation": "log", "repo_path": repo, "limit": limit,
+                                 "branch": branch})
+        # Fields are US-separated; RECORDS are NUL-separated. A body is multi-line, so a
+        # line-oriented parse would split one commit across records: the first body line would be
+        # swallowed into `subject` and the rest dropped with no error. NUL is the only byte git
+        # guarantees cannot appear in a commit message, so it is the only safe record delimiter.
+        #
+        # The record separator must be git's `%x00` ESCAPE, never a literal NUL: argv strings are
+        # NUL-terminated, so the OS would silently truncate the format at that byte and every commit
+        # would come back unparsed. US (0x1f) is fine literal — only NUL is impossible to pass.
+        sep, rec = "\x1f", "\x00"
+        fields = f"%h{sep}%an{sep}%aI{sep}%s" + (f"{sep}%b" if include_body else "")
         try:
-            raw = self._git("log", f"-{limit}", f"--format={fmt}", branch, repo=repo)
+            raw = self._git("log", f"-{limit}", f"--format={fields}%x00", branch, repo=repo)
         except RuntimeError as exc:
             ctx.emit("git_error", {"operation": "log", "error": str(exc)})
             raise
 
+        width = 5 if include_body else 4
         commits = []
-        for line in raw.splitlines():
-            parts = line.split(sep, 3)
-            if len(parts) == 4:
-                sha7, author, date, subject = parts
-                commits.append({
-                    "sha7": sha7,
-                    "author": author,
-                    "date": date,
-                    "subject": subject[:80],
-                })
+        for record in raw.split(rec):
+            record = record.strip("\n")  # git writes a newline after each record
+            if not record.strip():
+                continue
+            parts = record.split(sep, width - 1)
+            if len(parts) != width:
+                continue
+            commit = {
+                "sha7": parts[0],
+                "author": parts[1],
+                "date": parts[2],
+                "subject": parts[3][:80],  # unchanged contract: subject stays truncated
+            }
+            if include_body:
+                commit["body"] = parts[4].strip()
+            commits.append(commit)
 
         ctx.emit("git_response", {"operation": "log", "count": len(commits)})
         return {"commits": commits, "count": len(commits)}
