@@ -131,6 +131,98 @@ def _facts_tool(name: str) -> dict:
     return info
 
 
+# ── inference capacity (can this node serve a given LLM?) ─────────────────────
+# Bytes-per-weight by quantization (MLX/GGUF community approx): weights_gb ≈ params_b × bytes/weight.
+_BYTES_PER_WEIGHT = {"q2": 0.33, "q3": 0.43, "q4": 0.55, "q5": 0.68, "q6": 0.81,
+                     "q8": 1.06, "fp16": 2.0, "bf16": 2.0, "fp32": 4.0}
+
+
+def _free_mem_gb() -> float | None:
+    """Currently-free physical memory in GB (best-effort, macOS vm_stat)."""
+    vm = _facts_sh(["vm_stat"])
+    if not vm:
+        return None
+    page = 4096
+    m = re.search(r"page size of (\d+)", vm)
+    if m:
+        page = int(m.group(1))
+    free = 0
+    for key in ("Pages free", "Pages inactive", "Pages speculative"):
+        mm = re.search(rf"{key}:\s+(\d+)", vm)
+        if mm:
+            free += int(mm.group(1))
+    return round(free * page / 1e9, 1) if free else None
+
+
+def _inference_capacity() -> dict[str, Any]:
+    """What this node can serve: the memory ceiling an LLM (weights + KV cache) must fit under, plus
+    free memory. Apple-Silicon aware (unified memory); a conservative fallback elsewhere."""
+    is_darwin = platform.system() == "Darwin"
+    arch = platform.machine()
+    unified = is_darwin and arch == "arm64"
+    ram_bytes = int(_facts_sh(["sysctl", "-n", "hw.memsize"]) or 0) if is_darwin else 0
+    if not ram_bytes:
+        try:
+            ram_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        except Exception:
+            ram_bytes = 0
+    ram_gb = round(ram_bytes / 1e9, 1)
+    # Metal GPU ceiling: iogpu.wired_limit_mb if raised, else the OS default (~75% of unified RAM on
+    # Apple Silicon; ~25% is reserved for macOS + framework + KV/runtime overhead).
+    wired_mb = int(_facts_sh(["sysctl", "-n", "iogpu.wired_limit_mb"]) or 0) if is_darwin else 0
+    if wired_mb > 0:
+        gpu_gb = round(wired_mb * 1024 * 1024 / 1e9, 1)
+    elif unified:
+        gpu_gb = round(ram_gb * 0.75, 1)
+    else:
+        gpu_gb = round(ram_gb * 0.5, 1)
+    return {"platform": platform.platform(), "arch": arch, "cpu_count": os.cpu_count(),
+            "unified_memory": unified, "ram_gb": ram_gb, "gpu_memory_gb": gpu_gb,
+            "free_gb": _free_mem_gb(),
+            "gpu_ceiling_source": ("iogpu.wired_limit_mb" if wired_mb > 0 else
+                                   "~75% unified RAM (default)" if unified else "~50% RAM (estimate)")}
+
+
+def _guess_layers(params_b: float) -> int:
+    """Rough transformer depth from param count when the caller doesn't give it."""
+    for cutoff, layers in ((1, 24), (4, 36), (9, 28), (16, 40), (35, 48)):
+        if params_b <= cutoff:
+            return layers
+    return 64
+
+
+def _estimate_fit(cap: dict[str, Any], model: dict[str, Any]) -> dict[str, Any]:
+    """Estimate whether a model fits under this node's ceiling (weights + KV cache + overhead).
+    HEURISTIC — be conservative and verify with a real load; KV cache grows with context, which is
+    the usual Metal-OOM cause on a long agentic run."""
+    params_b = float(model.get("params_b", 0) or 0)
+    bpw = _BYTES_PER_WEIGHT.get(str(model.get("quant", "q4")).lower(), 0.55)
+    ctx = int(model.get("context_tokens", 8192) or 8192)
+    layers = int(model.get("layers") or 0) or _guess_layers(params_b)
+    kv_heads = int(model.get("kv_heads") or 0) or 8      # GQA typical
+    head_dim = int(model.get("head_dim") or 0) or 128
+    weights_gb = round(params_b * bpw, 2)
+    kv_gb = round(2 * layers * kv_heads * head_dim * ctx * 2 / 1e9, 2)   # 2(K+V) × … × 2 bytes fp16
+    overhead_gb = 2.0
+    steady_gb = round(weights_gb + kv_gb + overhead_gb, 1)
+    # Prompt-processing PEAK: processing a long prompt allocates large transient buffers ~another
+    # KV-cache worth (empirically the Metal-OOM driver on long agentic runs). Plan against the peak.
+    peak_gb = round(steady_gb + kv_gb, 1)
+    ceiling = float(cap.get("gpu_memory_gb") or 0)
+    free = cap.get("free_gb")
+    return {"weights_gb": weights_gb, "kv_cache_gb": kv_gb, "overhead_gb": overhead_gb,
+            "estimated_steady_gb": steady_gb, "estimated_peak_gb": peak_gb,
+            "ceiling_gb": ceiling, "free_gb_now": free,
+            # cold: on an idle node (peak under the ceiling, with 15% headroom). now: given free memory.
+            "fits_cold": bool(ceiling) and peak_gb <= ceiling * 0.85,
+            "fits_now": (free is None) or (peak_gb <= free),
+            "headroom_gb": round(ceiling - peak_gb, 1) if ceiling else None,
+            "context_tokens": ctx, "quant": str(model.get("quant", "q4")).lower(),
+            "note": "estimate: plan against PEAK (steady + a KV-cache worth for prompt processing); "
+                    "KV grows with context — the usual OOM. fits_cold assumes an idle node; fits_now "
+                    "uses current free memory. Verify a marginal model with a real load."}
+
+
 class HostAdapter(BaseAdapter):
     adapter_id = "chp.adapters.host"
     adapter_name = "Host"
@@ -336,6 +428,31 @@ class HostAdapter(BaseAdapter):
             "gpu": result.get("gpu"),
         })
         return result
+
+    @capability(
+        id="chp.adapters.host.inference_capacity",
+        version="1.0.0",
+        description="What LLM inference this node can serve: unified/GPU memory ceiling, free memory, "
+                    "and — given {params_b, quant, context_tokens} — whether the model FITS. Lets the "
+                    "mesh place inference on a device that won't Metal-OOM. Apple-Silicon aware.",
+        category="infrastructure",
+        risk="low",
+        input_schema={"type": "object", "properties": {"model": {"type": "object",
+            "description": "optional {params_b, quant (q4/q8/fp16), context_tokens, layers?, "
+                           "kv_heads?, head_dim?} to get a fit verdict"}},
+            "additionalProperties": False},
+        emits=["inference_capacity_reported"],
+        tags=["host", "inference", "capacity", "gpu", "mlx"],
+    )
+    async def inference_capacity(self, ctx: Any, payload: dict) -> dict:
+        cap = _inference_capacity()
+        model = payload.get("model")
+        if model:
+            cap["fit"] = _estimate_fit(cap, model)
+        ctx.emit("inference_capacity_reported",
+                 {"gpu_memory_gb": cap.get("gpu_memory_gb"), "ram_gb": cap.get("ram_gb"),
+                  "fits": (cap.get("fit") or {}).get("fits")})
+        return cap
 
     @capability(
         id="chp.adapters.host.update",

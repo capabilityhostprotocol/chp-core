@@ -24,18 +24,18 @@ _SESSION_DIR = Path.home() / ".chp" / "sessions"  # per-repo/worktree keyed sess
 
 def _session_file(repo_path: str | None) -> Path:
     """Resolve the session-state file. Keyed by repo path when given (so each git worktree gets its
-    own session and concurrent builds never clobber each other), else the global file."""
+    own session and concurrent builds never clobber each other), else the global file.
+
+    A repo_path NEVER falls back to the global file. The global file is scoped to no repo, so a
+    fallback lets one unkeyed session answer for every repo that has no session of its own — and
+    since close_dev_session unlinks the file it resolves, a keyed close leaves that global session
+    in place to go on satisfying commit gates everywhere, indefinitely. A missing keyed session must
+    read as "no session" — loudly — rather than silently borrowing another repo's authority.
+    """
     if not repo_path:
         return _SESSION_FILE
     key = _hashlib.sha1(str(Path(repo_path).resolve()).encode()).hexdigest()[:12]
     return _SESSION_DIR / f"{key}.json"
-
-
-def _resolve_existing(repo_path: str | None) -> Path:
-    """The keyed file if it exists, else fall back to the global file (smooth migration + lets an
-    authoring (global) session and a worktree (keyed) session coexist)."""
-    sf = _session_file(repo_path)
-    return sf if sf.exists() else _SESSION_FILE
 
 # Declared evidence-emission contract for this adapter's capabilities (the granular
 # events each method emits). Declaring the superset makes the catalog honest vs what's
@@ -431,7 +431,7 @@ class ConformanceAdapter(BaseAdapter):
 
         staged_files = payload.get("staged_files", [])
 
-        session_file = _resolve_existing(payload.get("repo_path"))
+        session_file = _session_file(payload.get("repo_path"))
         if not session_file.exists():
             raise RuntimeError("No active dev session. Run open_dev_session first.")
 
@@ -523,7 +523,7 @@ class ConformanceAdapter(BaseAdapter):
         if self._host is None:
             raise RuntimeError("ConformanceAdapter must be registered with a host")
 
-        session_file = _resolve_existing(payload.get("repo_path"))
+        session_file = _session_file(payload.get("repo_path"))
         if not session_file.exists():
             raise RuntimeError("No active dev session to close")
 

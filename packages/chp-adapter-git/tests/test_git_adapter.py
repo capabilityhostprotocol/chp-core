@@ -186,16 +186,24 @@ class TestInspectRepo:
 # ---------------------------------------------------------------------------
 
 _SEP = "\x1f"
-_LOG_OUTPUT = "\n".join([
-    f"abc1234{_SEP}Alice{_SEP}2024-01-01T00:00:00+00:00{_SEP}Initial commit",
-    f"def5678{_SEP}Bob{_SEP}2024-01-02T00:00:00+00:00{_SEP}Add feature",
+_REC = "\x00"  # records are NUL-separated: a commit body is multi-line, so lines can't delimit them
+# git writes the format then a newline, hence the trailing "\n" after each record.
+_LOG_OUTPUT = "".join([
+    f"abc1234{_SEP}Alice{_SEP}2024-01-01T00:00:00+00:00{_SEP}Initial commit{_REC}\n",
+    f"def5678{_SEP}Bob{_SEP}2024-01-02T00:00:00+00:00{_SEP}Add feature{_REC}\n",
 ])
 
 
+def _fmt(include_body: bool = False) -> str:
+    # `%x00` is git's ESCAPE for NUL, expanded by git itself. A literal NUL cannot be passed in argv
+    # (execve strings are NUL-terminated) — the OS would truncate the format and every commit would
+    # come back unparsed. A mock that encodes a literal NUL here would pass while real git fails.
+    return f"%h{_SEP}%an{_SEP}%aI{_SEP}%s" + (f"{_SEP}%b" if include_body else "") + "%x00"
+
+
 def _log_backend(limit: int = 20, branch: str = "HEAD") -> FakeGitBackend:
-    fmt = f"%h{_SEP}%an{_SEP}%aI{_SEP}%s"
     return FakeGitBackend(responses={
-        ("log", f"-{limit}", f"--format={fmt}", branch): _LOG_OUTPUT,
+        ("log", f"-{limit}", f"--format={_fmt()}", branch): _LOG_OUTPUT,
     })
 
 
@@ -212,13 +220,38 @@ class TestLog:
     @pytest.mark.asyncio
     async def test_subject_truncated_to_80_chars(self):
         long_subject = "A" * 100
-        fmt = f"%h{_SEP}%an{_SEP}%aI{_SEP}%s"
         backend = FakeGitBackend(responses={
-            ("log", "-20", f"--format={fmt}", "HEAD"): f"aaa1111{_SEP}Dev{_SEP}2024-01-01T00:00:00+00:00{_SEP}{long_subject}",
+            ("log", "-20", f"--format={_fmt()}", "HEAD"): f"aaa1111{_SEP}Dev{_SEP}2024-01-01T00:00:00+00:00{_SEP}{long_subject}{_REC}\n",
         })
         host = _make_host(backend)
         result = await host.ainvoke("chp.adapters.git.log", {})
         assert len(result.data["commits"][0]["subject"]) == 80
+
+    @pytest.mark.asyncio
+    async def test_include_body_survives_a_multiline_body(self):
+        """A body is multi-line. Line-delimited records would swallow its first line into `subject`
+        and silently drop the rest — no exception, just quietly wrong data. Records are NUL-delimited
+        precisely so a body can contain anything a human types."""
+        body = "Fixes issue-1234.\n\nSecond paragraph.\nRef: 7f3a2b1"
+        backend = FakeGitBackend(responses={
+            ("log", "-20", f"--format={_fmt(True)}", "HEAD"):
+                f"abc1234{_SEP}Alice{_SEP}2024-01-01T00:00:00+00:00{_SEP}fix: a thing{_SEP}{body}{_REC}\n"
+                f"def5678{_SEP}Bob{_SEP}2024-01-02T00:00:00+00:00{_SEP}chore: another{_SEP}no trailer here{_REC}\n",
+        })
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.git.log", {"include_body": True})
+        commits = result.data["commits"]
+        assert result.data["count"] == 2                      # the multi-line body did NOT split records
+        assert commits[0]["subject"] == "fix: a thing"        # body did not bleed into subject
+        assert "issue-1234" in commits[0]["body"]
+        assert "Ref: 7f3a2b1" in commits[0]["body"]           # the LAST line survived
+        assert commits[1]["body"] == "no trailer here"
+
+    @pytest.mark.asyncio
+    async def test_body_is_absent_unless_asked(self):
+        host = _make_host(_log_backend())
+        result = await host.ainvoke("chp.adapters.git.log", {})
+        assert "body" not in result.data["commits"][0]        # additive: default shape unchanged
 
     @pytest.mark.asyncio
     async def test_custom_limit(self):
@@ -228,9 +261,8 @@ class TestLog:
 
     @pytest.mark.asyncio
     async def test_limit_capped_at_max(self):
-        fmt = f"%h{_SEP}%an{_SEP}%aI{_SEP}%s"
         backend = FakeGitBackend(responses={
-            ("log", "-10", f"--format={fmt}", "HEAD"): _LOG_OUTPUT,
+            ("log", "-10", f"--format={_fmt()}", "HEAD"): _LOG_OUTPUT,
         })
         # max_log_entries=10; passing limit=80 (valid per schema) should cap to 10
         config = GitConfig(default_repo_path="/fake", backend=backend, max_log_entries=10)

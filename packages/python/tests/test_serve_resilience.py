@@ -20,6 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from chp_core import CapabilityDescriptor, LocalCapabilityHost, SQLiteEvidenceStore
 from chp_core.http import create_http_server
+from chp_core.merkle import (
+    CHP_STORE_HEAD_V2,
+    store_head_consistency_proof,
+    verify_store_head_consistency,
+)
 
 
 def _serve(host):
@@ -490,6 +495,97 @@ class ChaosRecoveryTests(unittest.TestCase):
                                     f"acked invocation k{i} lost or corrupt after SIGKILL: {res}")
             finally:
                 recovered.close()
+
+
+class ChaosRestartTests(unittest.TestCase):
+    """Recovery, not just durability (proposal 0043): SIGKILL the host mid-load, then
+    RESTART a real server on the same store file. The guarantees: (1) the host serves
+    again and accepts NEW work that chains onto the recovered ledger; (2) the recovered
+    ledger is PROVABLY append-only across the crash — a post-restart RFC 6962 consistency
+    proof (0022) shows the new store head is an append-only extension of the pre-crash
+    head (nothing rewritten or truncated). ChaosRecoveryTests proves acked evidence
+    survives; this proves the ledger keeps its integrity *and the host comes back*."""
+
+    def test_restart_serves_and_ledger_is_provably_append_only(self) -> None:
+        import http.client
+        import tempfile
+        import time as _t
+
+        pkg_dir = str(Path(__file__).resolve().parents[1])
+        with tempfile.TemporaryDirectory() as td:
+            db_path = str(Path(td) / "chaos-restart.sqlite")
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _CHAOS_CHILD, pkg_dir, db_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                assert proc.stdout is not None
+                port = int(proc.stdout.readline().strip())
+
+                # pre-crash correlations sort BEFORE the post-restart one ("a…" < "zzz…"),
+                # so the recovered leaf set is a sorted PREFIX of the post-restart set — the
+                # store-head-v2 consistency proof's append-only precondition.
+                def _fire(i: int) -> None:
+                    try:
+                        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                        conn.request("POST", "/invoke", json.dumps(
+                            {"capability_id": "w.cap", "payload": {"n": i},
+                             "correlation_id": f"a{i:03d}"}), {"Content-Type": "application/json"})
+                        conn.getresponse().status
+                        conn.close()
+                    except Exception:
+                        pass
+
+                threads = [threading.Thread(target=_fire, args=(i,)) for i in range(40)]
+                for t in threads:
+                    t.start()
+                _t.sleep(0.35)  # let a batch commit, leave some in flight
+                proc.kill()      # SIGKILL — unclean, no drain
+                for t in threads:
+                    t.join(timeout=5)
+            finally:
+                proc.kill()
+            proc.wait(timeout=10)
+
+            # ── recovery path: reopen the crashed store, snapshot the pre-crash head ──
+            store = SQLiteEvidenceStore(db_path)
+            try:
+                pre = store.get_store_head(scheme=CHP_STORE_HEAD_V2)
+                self.assertGreater(pre["sequence"], 0, "the crash must have committed some events")
+
+                # restart a REAL server on the recovered store — it must serve again
+                host = LocalCapabilityHost("restart-host", store=store)
+
+                async def work(_c, p):
+                    return {"n": p.get("n", 0)}
+
+                host.register(CapabilityDescriptor(id="w.cap", version="1.0.0", description="."),
+                              work)
+                server, base = _serve(host)
+                try:
+                    health = urllib.request.urlopen(f"{base}/health", timeout=10)
+                    self.assertEqual(health.status, 200, "host must serve after restart")
+
+                    # NEW work must succeed and chain onto the recovered ledger
+                    req = urllib.request.Request(
+                        f"{base}/invoke",
+                        data=json.dumps({"capability_id": "w.cap", "payload": {"n": 99},
+                                         "correlation_id": "zzz-post-restart"}).encode(),
+                        headers={"Content-Type": "application/json"})
+                    self.assertEqual(urllib.request.urlopen(req, timeout=10).status, 200)
+                    self.assertTrue(store.verify_chain("zzz-post-restart", strict=True).valid,
+                                    "post-restart work must chain onto the recovered ledger")
+
+                    # ── the ledger is PROVABLY append-only across the crash ──
+                    post = store.get_store_head(scheme=CHP_STORE_HEAD_V2)
+                    self.assertGreater(post["sequence"], pre["sequence"], "ledger must have grown")
+                    proof = store_head_consistency_proof(pre["leaves"], post["leaves"])
+                    self.assertTrue(
+                        verify_store_head_consistency(pre["store_head"], post["store_head"], proof),
+                        "post-restart ledger must be a provable append-only extension of pre-crash")
+                finally:
+                    server.shutdown(); server.server_close()
+            finally:
+                store.close()
 
 
 if __name__ == "__main__":

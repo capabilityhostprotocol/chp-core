@@ -185,3 +185,31 @@ def test_topology_capability():
     assert isinstance(d["radicle_peers"], list)
     assert isinstance(d["tailscale_devices"], list)
     assert "radicle_connected" in d and "tailscale_online" in d
+
+
+def test_inference_capacity_reports_memory_ceiling():
+    result = _host().invoke("chp.adapters.host.inference_capacity", {})
+    assert result.outcome == "success"
+    d = result.data
+    assert d["ram_gb"] > 0 and d["gpu_memory_gb"] > 0        # a real memory ceiling
+    assert "unified_memory" in d and "gpu_ceiling_source" in d
+    assert "fit" not in d                                    # no model → no fit verdict
+
+
+def test_inference_capacity_fit_verdict():
+    # a huge model must NOT fit a tiny ceiling; a tiny model must fit cold
+    from chp_adapter_host.adapter import _estimate_fit
+    small_node = {"gpu_memory_gb": 8.0, "free_gb": 6.0}
+    big = _estimate_fit(small_node, {"params_b": 70, "quant": "q4", "context_tokens": 8192})
+    assert big["fits_cold"] is False                         # 70B nowhere near 8GB
+    tiny = _estimate_fit(small_node, {"params_b": 1.5, "quant": "q4", "context_tokens": 2048})
+    assert tiny["fits_cold"] is True
+    assert tiny["estimated_peak_gb"] >= tiny["estimated_steady_gb"]  # peak ≥ steady
+
+
+def test_inference_capacity_fit_uses_free_memory_now():
+    from chp_adapter_host.adapter import _estimate_fit
+    # steady fits the ceiling, but current free memory is tiny → fits_now is False (the OOM signal)
+    node = {"gpu_memory_gb": 20.0, "free_gb": 3.0}
+    f = _estimate_fit(node, {"params_b": 7, "quant": "q4", "context_tokens": 8192})
+    assert f["fits_cold"] is True and f["fits_now"] is False
