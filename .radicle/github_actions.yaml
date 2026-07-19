@@ -1,0 +1,3 @@
+# Tells the radicle-github-actions-adapter which GitHub repo runs the Actions for chp-core patches.
+github_username: capabilityhostprotocol
+github_repo: chp-core
