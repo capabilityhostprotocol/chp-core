@@ -430,3 +430,50 @@ def test_count_by_correlation_event_type_returns_int(tmp_path: Path) -> None:
     assert isinstance(count, int)
     assert count == 0
     store_obj.close()
+
+
+# ── H. capability() decorator carries autonomy (DX: no raw CapabilityDescriptor needed) ─────────
+
+def test_capability_decorator_accepts_autonomy() -> None:
+    """The @capability decorator forwards ``autonomy`` to the descriptor (previously you had to drop
+    to a raw CapabilityDescriptor to declare an approval-gated capability)."""
+    from chp_core import capability
+    from chp_core.decorators import get_capability_descriptor
+
+    @capability(id="test.gated", version="0.1.0", description="gated",
+                autonomy=AutonomyProfile(tier="approval_required"))
+    def gated(payload):  # noqa: ANN001, ANN202
+        return {"ok": True}
+
+    desc = get_capability_descriptor(gated)
+    assert desc is not None and desc.autonomy is not None
+    assert desc.autonomy.tier == "approval_required"
+
+
+def test_capability_decorator_autonomy_gates_at_host(tmp_path: Path) -> None:
+    """A decorator-declared approval_required capability denies with approval_required at the host."""
+    from chp_core import capability
+
+    host, _, _ = _host(tmp_path)
+
+    @capability(id="test.gated2", version="0.1.0", description="gated",
+                autonomy=AutonomyProfile(tier="approval_required"))
+    def gated(payload):  # noqa: ANN001, ANN202
+        return {"ok": True}
+
+    host.register(gated)
+    r = host.invoke("test.gated2", {}, correlation=_corr(new_id("s")))
+    assert r.outcome == "denied" and r.denial is not None
+    assert r.denial.code == "approval_required"
+
+
+def test_capability_decorator_autonomy_default_none() -> None:
+    """Omitting autonomy leaves it None — unchanged behavior for existing capabilities."""
+    from chp_core import capability
+    from chp_core.decorators import get_capability_descriptor
+
+    @capability(id="test.plain", version="0.1.0", description="plain")
+    def plain(payload):  # noqa: ANN001, ANN202
+        return {"ok": True}
+
+    assert get_capability_descriptor(plain).autonomy is None
