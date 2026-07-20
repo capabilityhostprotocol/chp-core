@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from .types import (
     AssuranceMetadata,
+    AutonomyProfile,
     CapabilityDescriptor,
     CapabilityIdempotency,
     CapabilityStatus,
@@ -47,6 +48,7 @@ def capability(
     # structured optional sub-objects
     host_requirements: HostRequirements | None = None,
     policy: PolicyDescriptor | None = None,
+    autonomy: AutonomyProfile | None = None,
     # reliability (proposal 0038)
     timeout_s: float | None = None,
     retry: "RetryPolicy | None" = None,
@@ -87,6 +89,7 @@ def capability(
         metadata=metadata or {},
         host_requirements=host_requirements,
         policy=policy,
+        autonomy=autonomy,
         timeout_s=timeout_s,
         retry=retry,
     )
