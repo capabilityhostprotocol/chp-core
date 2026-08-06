@@ -251,3 +251,70 @@ def test_resolve_version_falls_back_when_info_unavailable():
     backend, ctx = _dsm_with_handler(handler)
     # Should not raise — falls back to the preferred version.
     assert asyncio.run(backend.task_list(ctx)) == {"total": 0, "tasks": []}
+
+
+def test_reauth_on_dsm_119_stale_sid():
+    """A stale SID comes back as HTTP 200 + DSM code 119; _entry must re-auth + retry, not fail."""
+    calls = {"entry": 0, "auth": 0}
+
+    def handler(req: dict):
+        url = req["url"]
+        if "auth.cgi" in url:
+            calls["auth"] += 1
+            return 200, {"success": True, "data": {"sid": "NEWSID"}}
+        if "query.cgi" in url:  # version negotiation
+            return 200, {"success": True, "data": {}}
+        calls["entry"] += 1  # entry.cgi
+        if calls["entry"] == 1:
+            return 200, {"success": False, "error": {"code": 119}}  # stale SID
+        return 200, {"success": True, "data": {"tasks": []}}
+
+    backend, ctx = _dsm_with_handler(handler)
+    assert asyncio.run(backend.task_list(ctx)) == {"tasks": []}
+    assert calls["auth"] == 1 and calls["entry"] == 2  # re-authed once, retried once
+
+
+# --- added DSM health / backup / snapshot / container-log caps ---
+
+def test_storage_volume_list():
+    host, _ = _host_with_fake()
+    r = host.invoke("chp.adapters.synology.storage_volume_list", {})
+    assert r.data["volumes"][0]["raid_type"] == "raid1"
+
+
+def test_disk_smart_health():
+    host, _ = _host_with_fake()
+    r = host.invoke("chp.adapters.synology.disk_smart_health", {})
+    assert all(d["smart_status"] == "normal" for d in r.data["disks"])
+
+
+def test_system_info():
+    host, _ = _host_with_fake()
+    r = host.invoke("chp.adapters.synology.system_info", {})
+    assert r.data["model"] == "DS918+"
+
+
+def test_backup_task_list_and_run():
+    host, _ = _host_with_fake()
+    assert host.invoke("chp.adapters.synology.backup_task_list", {}).data["tasks"]
+    r = host.invoke("chp.adapters.synology.backup_task_run", {"task_id": 1})
+    assert r.data["started"] is True
+
+
+def test_snapshot_create():
+    host, _ = _host_with_fake()
+    r = host.invoke("chp.adapters.synology.snapshot_create", {"share": "photos", "desc": "pre-op"})
+    assert r.data["share"] == "photos" and r.data["desc"] == "pre-op"
+
+
+def test_container_logs():
+    host, _ = _host_with_fake()
+    r = host.invoke("chp.adapters.synology.container_logs", {"container_id": "abc123", "lines": 2})
+    assert len(r.data["lines"]) == 2
+
+
+def test_download_task_control():
+    host, _ = _host_with_fake()
+    r = host.invoke("chp.adapters.synology.download_task_control",
+                    {"task_id": "DL001", "action": "pause"})
+    assert r.data["action"] == "pause" and r.data["ok"] is True

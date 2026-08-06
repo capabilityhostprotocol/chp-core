@@ -202,3 +202,59 @@ def test_normalize_model_info_ollama():
     out = _normalize_model_info(raw, "ollama")
     assert out["parameter_size"] == "7B"
     assert out["context_length"] == 8192
+
+
+# ---------------------------------------------------------------------------
+# durable tool-calling defaults (regression gate for the Metal-OOM / empty-output fix)
+# ---------------------------------------------------------------------------
+
+def test_ollama_body_nests_generation_params_under_options():
+    from chp_adapter_local_llm._backends import _ollama_body, _openai_body
+    b = _ollama_body({"model": "m"}, {"num_ctx": 4096, "temperature": 0.1, "max_tokens": 128,
+                                      "tools": [{"x": 1}], "think": False, "keep_alive": "5m"})
+    assert b["options"] == {"num_ctx": 4096, "temperature": 0.1, "num_predict": 128}
+    assert b["tools"] == [{"x": 1}] and b["think"] is False and b["keep_alive"] == "5m"
+    assert "num_ctx" not in b and "max_tokens" not in b  # not left top-level (Ollama would ignore)
+    o = _openai_body({"model": "m"}, {"num_ctx": 4096, "temperature": 0.1, "max_tokens": 128,
+                                      "think": True, "keep_alive": "5m"})
+    assert o["temperature"] == 0.1 and o["max_tokens"] == 128
+    assert "num_ctx" not in o and "think" not in o and "keep_alive" not in o and "options" not in o
+
+
+def test_chat_with_tools_defaults_think_off_and_safe_ctx():
+    captured: dict = {}
+
+    class CapturingBackend(FakeBackend):
+        async def chat(self, model: str, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return await super().chat(model, messages)
+
+    host = LocalCapabilityHost()
+    register_adapter(host, LocalLLMAdapter(LocalLLMConfig(_backend=CapturingBackend())))
+    r = host.invoke("chp.adapters.local_llm.chat",
+                    {"messages": [{"role": "user", "content": "hi"}], "tools": [{"x": 1}]})
+    assert r.success
+    assert captured["think"] is False          # tools present -> thinking off (empty-output fix)
+    assert captured["num_ctx"] == 8192         # safe floor, not Ollama's OOM-y 32k default
+    assert captured["keep_alive"] == "5m"      # stays resident -> no cold-load abort next call
+    assert captured["tools"] == [{"x": 1}]
+
+
+def test_http_error_surfaces_backend_body():
+    """A >=400 from the backend includes ollama's own error text, not just the status —
+    otherwise a tools-schema 400 is undiagnosable (rad:4dd8b8e)."""
+    import asyncio
+    from types import SimpleNamespace
+    from chp_adapter_local_llm._backends import _OllamaBackend
+
+    class _Ctx:
+        async def ainvoke(self, cap, req):
+            return SimpleNamespace(success=True, data={
+                "status_code": 400,
+                "json": {"error": "registry.ollama.ai: invalid tool schema"},
+            })
+
+    be = _OllamaBackend("http://x", 5.0, _Ctx())
+    with pytest.raises(RuntimeError) as ei:
+        asyncio.run(be.chat("m", [{"role": "user", "content": "hi"}], tools=[{"bad": 1}]))
+    assert "400" in str(ei.value) and "invalid tool schema" in str(ei.value)

@@ -173,12 +173,19 @@ class SimpleAdapter(BaseAdapter):
 def register_adapter(
     host: LocalCapabilityHost,
     adapter: CapabilityAdapter,
+    *,
+    replace: bool = False,
 ) -> list[CapabilityDescriptor]:
     """Register all capabilities from *adapter* with *host*, skipping duplicates.
 
+    ``replace=True`` OVERWRITES already-registered capabilities instead of skipping — use when
+    intentionally re-registering an adapter re-created with new config (e.g. a changed filesystem
+    scope), so the live handler picks up the new config without a process restart.
+
     Calls ``adapter.on_register(host)`` after registration if the method exists.
     """
-    registered = register_hosted_capabilities(host, list(adapter.capabilities()))
+    registered = register_hosted_capabilities(
+        host, list(adapter.capabilities()), replace=replace)
     on_register = getattr(adapter, "on_register", None)
     if callable(on_register):
         on_register(host)
@@ -252,6 +259,8 @@ def auto_register_adapters(
 def register_hosted_capabilities(
     host: LocalCapabilityHost,
     capabilities: Sequence[HostedCapability],
+    *,
+    replace: bool = False,
 ) -> list[CapabilityDescriptor]:
     registered: list[CapabilityDescriptor] = []
     for capability in capabilities:
@@ -260,6 +269,7 @@ def register_hosted_capabilities(
             capability.descriptor,
             capability.handler,
             enabled=capability.enabled,
+            replace=replace,
         )
         if descriptor is not None:
             registered.append(descriptor)
@@ -272,11 +282,15 @@ def register_capability_once(
     handler: CapabilityHandler,
     *,
     enabled: bool = True,
+    replace: bool = False,
 ) -> CapabilityDescriptor | None:
-    capability_ids = {
-        capability["id"]
-        for capability in host.discover().get("capabilities", [])
-    }
-    if descriptor.id in capability_ids:
-        return None
+    if not replace:
+        capability_ids = {
+            capability["id"]
+            for capability in host.discover().get("capabilities", [])
+        }
+        if descriptor.id in capability_ids:
+            return None
+    # replace=True: re-register so a changed descriptor/handler (e.g. an adapter re-created
+    # with new config) OVERWRITES the live one — host.register is last-write-wins.
     return host.register(descriptor, handler, enabled=enabled)

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated": "2026-07-03",
+  "generated": "2026-08-06",
   "categories": [
     "network",
     "filesystem",
@@ -697,6 +697,86 @@
       "status": "experimental",
       "tier": 2,
       "publisher_key_id": "d20d8b42b94c3375"
+    },
+    {
+      "id": "chp-adapter-approval",
+      "pypi": "chp-adapter-approval",
+      "category": "platform",
+      "description": "effect pre-authorization (single-use, action-bound approval grants)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-browser",
+      "pypi": "chp-adapter-browser",
+      "category": "platform",
+      "description": "governed headless-browser navigation with a network-enforced domain allowlist",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-colibri",
+      "pypi": "chp-adapter-colibri",
+      "category": "platform",
+      "description": "sovereign frontier (MoE) text generation via a local colibri server (github.com/JustVugg/colibri)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-eval",
+      "pypi": "chp-adapter-eval",
+      "category": "platform",
+      "description": "on-mesh model eval with signed, portable scorecards",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-graphify",
+      "pypi": "chp-adapter-graphify",
+      "category": "platform",
+      "description": "sovereign code/artifact knowledge graph via graphify (BYO mesh backend)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-llmfit",
+      "pypi": "chp-adapter-llmfit",
+      "category": "platform",
+      "description": "hardware-aware LLM model fit, ranking, and discovery (wraps the llmfit CLI)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-notes",
+      "pypi": "chp-adapter-notes",
+      "category": "platform",
+      "description": "personal notes over a markdown/Obsidian vault",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-sandbox",
+      "pypi": "chp-adapter-sandbox",
+      "category": "platform",
+      "description": "rootless isolation-boundary command execution (evidence-recorded)",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-service",
+      "pypi": "chp-adapter-service",
+      "category": "platform",
+      "description": "host and lifecycle-manage long-running services on the mesh",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
+      "id": "chp-adapter-websearch",
+      "pypi": "chp-adapter-websearch",
+      "category": "platform",
+      "description": "bounded sovereign web search via a self-hosted SearxNG",
+      "status": "experimental",
+      "tier": 2
     }
   ],
   "community": []

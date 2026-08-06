@@ -162,6 +162,11 @@ Hosts MUST:
 - return correlation context in every invocation result
 - support replay by correlation ID
 
+`CorrelationContext` MAY carry an optional `environment` (`dev` | `test` | `pilot` | `prod`) — the
+deployment tier the invocation ran in. When present it is recorded in evidence, so a record is
+provably attributed to its environment; when absent a reader defaults it to its own environment.
+Optional and additive: pre-existing correlations without the field remain valid.
+
 Hosts MUST NOT silently overwrite a caller-provided correlation ID.
 
 Schema: `schemas/correlation-context.schema.json`

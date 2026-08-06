@@ -29,6 +29,12 @@
         "type": ["string", "number", "boolean", "null"]
       },
       "default": {}
+    },
+    "environment": {
+      "type": "string",
+      "enum": ["dev", "test", "pilot", "prod"],
+      "description": "Deployment tier this invocation ran in, recorded so evidence is provably attributed to its environment.",
+      "default": "dev"
     }
   }
 }

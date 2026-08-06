@@ -53,7 +53,13 @@ class LocalLLMConfig:
     backend: Literal["auto", "ollama", "llama_cpp"] = "auto"
     default_model: str = _DEFAULT_MODEL
     allowed_models: list[str] | None = None
-    timeout: float = 120.0
+    timeout: float = 300.0  # cold loads of a 14B can exceed 120s; a short timeout aborts the load
+    default_num_ctx: int = 8192  # safe floor — Ollama's VRAM-adaptive default (32k) OOMs Metal
+    default_keep_alive: str = "5m"  # keep the model resident so callers don't pay cold-start twice
+    # adapter-first: self-provision the ollama runtime (install-if-missing + serve) when the
+    # probe fails, so pushing this adapter makes a node inference-ready (Linux, root-free).
+    auto_start_ollama: bool = True
+    models_dir: str = ""  # OLLAMA_MODELS for a self-started ollama (defaults to ollama's own)
     _backend: LocalLLMBackend | None = field(default=None, repr=False)
 
     def resolved_ollama_url(self) -> str:
@@ -92,12 +98,23 @@ class LocalLLMAdapter(BaseAdapter):
         if self.__backend_name:
             return self.__backend_name
         cfg = self._config
-        if cfg.backend in ("ollama", "llama_cpp"):
-            self.__backend_name = cfg.backend
-            return cfg.backend
+        if cfg.backend == "ollama":
+            # explicit ollama (the deployed config) — self-provision the runtime if it isn't up
+            # yet, so a pinned backend still bootstraps on a fresh node (the auto-path hook below
+            # would otherwise be skipped by this short-circuit).
+            if cfg.auto_start_ollama and not await probe(
+                    ctx, cfg.resolved_ollama_url(), "/api/tags", cfg.timeout):
+                await self._ensure_ollama(ctx)
+            self.__backend_name = "ollama"
+            return "ollama"
+        if cfg.backend == "llama_cpp":
+            self.__backend_name = "llama_cpp"
+            return "llama_cpp"
         # auto — probe Ollama first (via the governed http transport)
         if await probe(ctx, cfg.resolved_ollama_url(), "/api/tags", cfg.timeout):
             self.__backend_name = "ollama"
+        elif cfg.auto_start_ollama and await self._ensure_ollama(ctx):
+            self.__backend_name = "ollama"          # self-provisioned the runtime
         elif await probe(ctx, cfg.resolved_llama_cpp_url(), "/v1/models", cfg.timeout):
             self.__backend_name = "llama_cpp"
         else:
@@ -108,6 +125,21 @@ class LocalLLMAdapter(BaseAdapter):
                 "Set OLLAMA_BASE_URL or LLAMA_CPP_BASE_URL, or start Ollama with 'ollama serve'."
             )
         return self.__backend_name
+
+    async def _ensure_ollama(self, ctx: Any) -> bool:
+        """Self-provision the ollama runtime (install-if-missing + serve) then re-probe.
+        Adapter-first: pushing this adapter makes a node inference-ready even where ollama
+        was never installed. Runs the blocking install/serve off the event loop; best-effort."""
+        import asyncio
+
+        from ._ollama_runtime import ensure_ollama
+        cfg = self._config
+        try:
+            ok = await asyncio.to_thread(
+                ensure_ollama, cfg.resolved_ollama_url(), models_dir=cfg.models_dir or None)
+        except Exception:
+            return False
+        return bool(ok) and await probe(ctx, cfg.resolved_ollama_url(), "/api/tags", cfg.timeout)
 
     async def _backend(self, ctx: Any) -> tuple[LocalLLMBackend, str]:
         if self._config._backend is not None:
@@ -124,6 +156,20 @@ class LocalLLMAdapter(BaseAdapter):
                 f"Model {model!r} is not in the allowed list. Allowed: {allowed}"
             )
         return model
+
+    def _gen_params(self, payload: Any) -> dict[str, Any]:
+        """Semantic generation params for the backend, with the safety defaults that stop the
+        recurring failures: a bounded ``num_ctx`` (Ollama's 32k VRAM-default OOMs Metal) and a
+        ``keep_alive`` so the model stays resident instead of cold-loading on every call."""
+        params: dict[str, Any] = {
+            "num_ctx": payload.get("num_ctx", self._config.default_num_ctx),
+            "keep_alive": payload.get("keep_alive", self._config.default_keep_alive),
+        }
+        if "temperature" in payload:
+            params["temperature"] = payload["temperature"]
+        if "max_tokens" in payload:
+            params["max_tokens"] = payload["max_tokens"]
+        return params
 
     @capability(
         id="chp.adapters.local_llm.list_models",
@@ -202,6 +248,10 @@ class LocalLLMAdapter(BaseAdapter):
                 "prompt": {"type": "string", "minLength": 1},
                 "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0},
                 "max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192},
+                "num_ctx": {"type": "integer", "minimum": 256, "maximum": 131072,
+                            "description": "context window; defaults to a safe floor to avoid Metal OOM"},
+                "keep_alive": {"type": ["string", "integer"],
+                               "description": "how long to keep the model resident, e.g. '5m' or 0 to unload"},
             },
             "required": ["prompt"],
             "additionalProperties": False,
@@ -210,11 +260,7 @@ class LocalLLMAdapter(BaseAdapter):
     async def generate(self, ctx: Any, payload: Any) -> Any:
         model = self._allowed_model(payload.get("model") or self._config.default_model)
         prompt: str = payload["prompt"]
-        opts: dict[str, Any] = {}
-        if "temperature" in payload:
-            opts["temperature"] = payload["temperature"]
-        if "max_tokens" in payload:
-            opts["num_predict"] = payload["max_tokens"]
+        opts = self._gen_params(payload)
         backend, backend_name = await self._backend(ctx)
         ctx.emit("llm_request", {"op": "generate", "backend": backend_name, "model": model}, redacted=False)
         try:
@@ -257,7 +303,8 @@ class LocalLLMAdapter(BaseAdapter):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "role": {"type": "string", "enum": ["system", "user", "assistant"]},
+                            "role": {"type": "string",
+                                     "enum": ["system", "user", "assistant", "tool"]},
                             "content": {"type": "string"},
                         },
                         "required": ["role", "content"],
@@ -266,6 +313,14 @@ class LocalLLMAdapter(BaseAdapter):
                 },
                 "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0},
                 "max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192},
+                "num_ctx": {"type": "integer", "minimum": 256, "maximum": 131072,
+                            "description": "context window; defaults to a safe floor to avoid Metal OOM"},
+                "keep_alive": {"type": ["string", "integer"],
+                               "description": "how long to keep the model resident, e.g. '5m' or 0 to unload"},
+                "tools": {"type": "array", "items": {"type": "object"},
+                          "description": "OpenAI-style function schemas; model returns tool_calls"},
+                "think": {"type": "boolean",
+                          "description": "toggle a thinking model's CoT (defaults off when tools are present)"},
             },
             "required": ["messages"],
             "additionalProperties": False,
@@ -274,14 +329,19 @@ class LocalLLMAdapter(BaseAdapter):
     async def chat(self, ctx: Any, payload: Any) -> Any:
         model = self._allowed_model(payload.get("model") or self._config.default_model)
         messages: list[dict] = payload["messages"]
-        opts: dict[str, Any] = {}
-        if "temperature" in payload:
-            opts["temperature"] = payload["temperature"]
-        if "max_tokens" in payload:
-            opts["num_predict"] = payload["max_tokens"]
+        opts = self._gen_params(payload)
+        # tool-calling: `tools` is a top-level /api/chat param; the model returns structured
+        # tool_calls the caller executes. Thinking defaults OFF when tools are present — with
+        # thinking on, qwen3+Ollama emit empty output and drop tool_calls (ollama#10976).
+        if payload.get("tools"):
+            opts["tools"] = payload["tools"]
+            opts["think"] = bool(payload.get("think", False))
+        elif "think" in payload:
+            opts["think"] = bool(payload["think"])
         backend, backend_name = await self._backend(ctx)
         ctx.emit("llm_request", {
             "op": "chat", "backend": backend_name, "model": model, "message_count": len(messages),
+            "tool_count": len(payload.get("tools") or []),
         }, redacted=False)
         try:
             t0 = time.monotonic()
@@ -298,12 +358,61 @@ class LocalLLMAdapter(BaseAdapter):
             "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
             "latency_ms": latency_ms,
         }, redacted=False)
+        msg = result.get("message", {}) or {}
         return {
             "backend": backend_name, "model": model,
-            "message": result.get("message", {}),
+            "message": msg,
+            "tool_calls": msg.get("tool_calls") or [],
             "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
             "latency_ms": latency_ms,
         }
+
+    @capability(
+        id="chp.adapters.local_llm.load",
+        version="1.0.0",
+        description="Preload (warm) a model into memory and keep it resident. Blocks until loaded.",
+        category="ai",
+        provider="local_llm",
+        risk="low",
+        side_effects=["llm_inference"],
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "model": {"type": "string"},
+                "num_ctx": {"type": "integer", "minimum": 256, "maximum": 131072},
+                "keep_alive": {"type": ["string", "integer"]},
+            },
+            "additionalProperties": False,
+        },
+    )
+    async def load(self, ctx: Any, payload: Any) -> Any:
+        """Warm a model per Ollama's documented preload (empty prompt + keep_alive), with the
+        adapter's long timeout so a cold load isn't aborted mid-flight. Callers warm before
+        invoking so tool-calls never hit a cold model under a short client timeout."""
+        model = self._allowed_model(payload.get("model") or self._config.default_model)
+        backend, backend_name = await self._backend(ctx)
+        if backend_name != "ollama":
+            return {"backend": backend_name, "model": model, "loaded": True,
+                    "note": "no-op: llama.cpp loads its model at server start"}
+        ctx.emit("llm_request", {"op": "load", "backend": backend_name, "model": model}, redacted=False)
+        try:
+            t0 = time.monotonic()
+            result = await backend.generate(
+                model, "",
+                num_ctx=payload.get("num_ctx", self._config.default_num_ctx),
+                keep_alive=payload.get("keep_alive", self._config.default_keep_alive),
+            )
+            latency_ms = round((time.monotonic() - t0) * 1000)
+        except Exception as exc:
+            self._reset_backend()
+            ctx.emit("llm_error", {"op": "load", "model": model, "error": str(exc)[:500]}, redacted=False)
+            raise
+        ctx.emit("llm_response", {
+            "op": "load", "backend": backend_name, "model": model, "latency_ms": latency_ms,
+        }, redacted=False)
+        return {"backend": backend_name, "model": model,
+                "loaded": bool(result.get("done", True)), "latency_ms": latency_ms}
 
 
 # ---------------------------------------------------------------------------
@@ -324,10 +433,20 @@ def _normalize_model_info(raw: dict[str, Any], backend: str) -> dict[str, Any]:
     if backend == "ollama":
         details = raw.get("details", {})
         params = raw.get("model_info", {})
+
+        def _mi(suffix: str) -> Any:   # model_info keys are arch-prefixed (qwen3.*, gemma3.*, llama.*)
+            return next((v for k, v in params.items() if k.endswith(suffix)), None)
         return {
             "parameter_size": details.get("parameter_size"),
             "quantization": details.get("quantization_level"),
-            "context_length": params.get("llama.context_length"),
+            "context_length": _mi(".context_length"),   # arch-agnostic (was hardcoded llama.*)
             "family": details.get("family"),
+            # KV-cache sizing params → a remote node's card can compute a VRAM-fit num_ctx
+            "n_layers": _mi(".block_count"),
+            "n_heads": _mi(".attention.head_count"),
+            "n_kv_heads": _mi(".attention.head_count_kv"),
+            "key_length": _mi(".attention.key_length"),
+            "embedding_length": _mi(".embedding_length"),
+            "capabilities": raw.get("capabilities", []) or [],
         }
     return {"raw": raw}

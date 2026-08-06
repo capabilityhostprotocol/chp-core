@@ -46,6 +46,8 @@ _EMITS = [
     "mlx_models_listed",
     "mlx_status_reported",
     "mlx_finetune_started",
+    "mlx_fuse_completed",
+    "mlx_fuse_failed",
     "mlx_eval_started",
     "mlx_eval_completed",
     "mlx_eval_failed",
@@ -131,6 +133,46 @@ def _lora_cmd(model: str, data: str, adapter_path: str, iters: int,
     if num_layers:
         cmd += ["--num-layers", str(num_layers)]
     return cmd
+
+
+def _fuse_cmd(model: str, adapter_path: str, save_path: str,
+              gguf_path: str | None, de_quantize: bool) -> list[str]:
+    """`mlx_lm.fuse` command — merge a LoRA adapter back INTO the base weights, producing a
+    standalone model (the loop's merge step). ``--de-quantize`` restores the base to full
+    precision before merging: on a QUANTIZED base (the common MLX case, e.g. *-4bit) the
+    quantization otherwise swamps the small LoRA delta and the merge silently loses the tuning.
+    ``--export-gguf`` additionally writes a GGUF (Llama/Mistral base types only; other bases fuse to
+    safetensors, then go through huggingface.quantize_to_gguf → re-quantize to q4_K_M)."""
+    script = os.path.join(os.path.dirname(sys.executable), "mlx_lm.fuse")
+    base = [script] if os.path.exists(script) else [sys.executable, "-m", "mlx_lm.fuse"]
+    cmd = base + ["--model", model, "--adapter-path", adapter_path, "--save-path", save_path]
+    if de_quantize:
+        cmd += ["--dequantize"]     # mlx_lm.fuse spelling (no hyphen)
+    if gguf_path:
+        cmd += ["--export-gguf", "--gguf-path", gguf_path]
+    return cmd
+
+
+def _ensure_base_snapshot(model: str) -> None:
+    """mlx_lm.fuse requires a COMPLETE base snapshot, but mlx.finetune fetches only the weights,
+    so fuse fails IncompleteSnapshotError on missing .gitattributes/README.md/config. Best-effort:
+    pull the base's small METADATA files (configs/tokenizer/readme — NOT the *.safetensors weights,
+    which are already present), so the strict check passes. No-op for a local path, and on an
+    HF_HUB_OFFLINE node snapshot_download raises → caught (no surprise egress)."""
+    # A HF repo id is "org/name" — it does NOT exist on disk and is not explicitly rooted. A local
+    # path either exists or starts with /, ~, or . — skip only those. (Don't test `os.path.sep in
+    # model`: every "org/model" repo id contains "/", which skipped the fetch for ALL HF models.)
+    if os.path.exists(model) or model.startswith(("/", "~", ".")):
+        return  # local-path base — nothing to complete
+    try:
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            model,
+            allow_patterns=["*.json", "*.txt", "*.md", ".gitattributes",
+                            "tokenizer*", "*.model", "*.py"],
+        )
+    except Exception:
+        pass  # offline / unreachable → let mlx_lm.fuse surface any real gap
 
 
 def _jsonl(content: Any) -> str:
@@ -385,12 +427,16 @@ class MLXAdapter(BaseAdapter):
                     },
                     "minItems": 1,
                 },
-                "max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 256},
+                "max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 2048},
                 "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0, "default": 0.7},
                 "top_p": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                 "tools": {"type": "array", "items": {"type": "object"},
                           "description": "OpenAI-format tool definitions to forward to the server (enables tool-calling through the mesh; never recorded in evidence)."},
                 "tool_choice": {"description": "OpenAI tool_choice: 'auto' | 'none' | 'required' | {type, function}."},
+                "think": {"type": "boolean",
+                          "description": "opt into a thinking model's chain-of-thought (default OFF; off keeps message.content populated for agent/tool loops)"},
+                "chat_template_kwargs": {"type": "object",
+                          "description": "forwarded to mlx_lm.server's apply_chat_template, e.g. {\"enable_thinking\": false}; overrides the think default"},
             },
             "required": ["messages"],
             "additionalProperties": False,
@@ -402,7 +448,7 @@ class MLXAdapter(BaseAdapter):
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "max_tokens": payload.get("max_tokens", 256),
+            "max_tokens": payload.get("max_tokens", 2048),
             "temperature": payload.get("temperature", 0.7),
         }
         if "top_p" in payload:
@@ -411,6 +457,15 @@ class MLXAdapter(BaseAdapter):
             body["tools"] = payload["tools"]
         if payload.get("tool_choice") is not None:
             body["tool_choice"] = payload["tool_choice"]
+        # Thinking control: a Qwen3-style thinking model puts its CoT in message.reasoning and leaves
+        # message.content EMPTY, which breaks agent/tool loops. mlx_lm.server forwards chat_template_kwargs
+        # into apply_chat_template, so default enable_thinking=false (content always populated). An
+        # explicit chat_template_kwargs wins; think:true opts back into the model's thinking mode.
+        ctk = payload.get("chat_template_kwargs")
+        if ctk is None and not payload.get("think"):
+            ctk = {"enable_thinking": False}
+        if ctk:
+            body["chat_template_kwargs"] = ctk
 
         ctx.emit("mlx_chat_started", {
             "model": model, "message_count": len(messages),
@@ -720,6 +775,68 @@ class MLXAdapter(BaseAdapter):
             "freed_servers": freed,
             "note": note,
         }
+
+    # ------------------------------------------------------------------
+    # fuse — merge the LoRA back into the base (the loop's MERGE step)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.mlx.fuse",
+        version="1.0.0",
+        description=(
+            "Merge a LoRA adapter (from mlx.finetune) back into its base model via mlx_lm.fuse, "
+            "producing a standalone model at save_path — the loop's MERGE step. Set export_gguf to "
+            "also write a GGUF (Llama/Mistral base types only; other bases fuse to safetensors, then "
+            "go through huggingface.quantize_to_gguf). Feed the GGUF to home.model.import "
+            "(ollama create) to serve the tuned model locally."
+        ),
+        category="ai",
+        provider="mlx",
+        risk="medium",
+        side_effects=["process_spawn", "model_write"],
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "description": "Base model the LoRA was trained on (defaults to MLX_MODEL)."},
+                "adapter_path": {"type": "string", "description": "LoRA adapter dir produced by mlx.finetune."},
+                "save_path": {"type": "string", "description": "Output dir for the merged standalone model."},
+                "export_gguf": {"type": "boolean", "default": False, "description": "Also export a GGUF (Llama/Mistral base types only)."},
+                "gguf_path": {"type": "string", "description": "GGUF output path (default: <save_path>/ggml-model-f16.gguf when export_gguf)."},
+                "de_quantize": {"type": "boolean", "default": True, "description": "De-quantize the base to full precision before merging (default True). Required for a QUANTIZED base or the LoRA delta is lost; set False for an already-full-precision base."},
+                "timeout": {"type": "number", "minimum": 1, "default": 1800, "description": "Max seconds for the fuse."},
+            },
+            "required": ["adapter_path", "save_path"],
+            "additionalProperties": False,
+        },
+    )
+    async def fuse(self, ctx: Any, payload: dict) -> dict:
+        model = payload.get("model") or self._config.resolved_default_model()
+        if not model:
+            raise ValueError("No model specified and no MLX_MODEL configured.")
+        adapter_path = str(payload["adapter_path"])
+        save_path = str(payload["save_path"])
+        export_gguf = bool(payload.get("export_gguf", False))
+        gguf_path = payload.get("gguf_path")
+        if export_gguf and not gguf_path:
+            gguf_path = os.path.join(save_path, "ggml-model-f16.gguf")
+        de_quantize = bool(payload.get("de_quantize", True))
+        timeout = float(payload.get("timeout") or 1800)
+        os.makedirs(save_path, exist_ok=True)
+        _ensure_base_snapshot(model)
+        cmd = _fuse_cmd(model, adapter_path, save_path,
+                        gguf_path if export_gguf else None, de_quantize)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           env=_service_safe_env())
+        if r.returncode != 0:
+            ctx.emit("mlx_fuse_failed", {"model": model, "adapter_path": adapter_path,
+                                         "returncode": r.returncode}, redacted=False)
+            raise RuntimeError((r.stderr or r.stdout or "mlx_lm.fuse failed").strip()[:400])
+        gguf_out = gguf_path if (export_gguf and gguf_path and os.path.exists(gguf_path)) else None
+        ctx.emit("mlx_fuse_completed", {"model": model, "save_path": save_path,
+                                        "gguf_path": gguf_out}, redacted=False)
+        return {"model": model, "adapter_path": adapter_path, "save_path": save_path,
+                "gguf_path": gguf_out, "exported_gguf": bool(gguf_out)}
 
     # ------------------------------------------------------------------
     # eval — the flywheel's promotion gate (score the currently-served model)

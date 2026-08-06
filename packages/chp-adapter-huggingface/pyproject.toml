@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-huggingface"
-version = "0.49.0"
+version = "0.49.9"
 description = "CHP adapter for local HuggingFace artifact consumption — pull, pipeline, embed, tokenize, dataset, cache"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,6 +20,7 @@ keywords = ["chp", "capability-host-protocol", "huggingface", "transformers", "n
 torch = ["torch"]
 lifecycle = ["evaluate>=0.4", "gradio-client>=1.0", "peft>=0.10"]
 multimodal = ["diffusers>=0.30", "librosa>=0.10", "soundfile>=0.12"]
+train = ["trl>=0.9", "peft>=0.10", "bitsandbytes>=0.43", "accelerate>=0.30", "datasets>=2.0"]
 
 [project.entry-points."chp.adapters"]
 huggingface = "chp_adapter_huggingface:HuggingFaceAdapter"

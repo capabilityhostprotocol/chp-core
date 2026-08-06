@@ -30,6 +30,7 @@ def keys(host_id: str, *, prefix: str = KEY_PREFIX) -> dict[str, str]:
         "invoke": f"{prefix}/invocations/{host_id}/requests",
         "declarations": f"{prefix}/capabilities/{host_id}/declarations",
         "replay": f"{prefix}/replay/{host_id}/requests",
+        "export": f"{prefix}/export/{host_id}/requests",
         "health": f"{prefix}/health/{host_id}",
         "evidence": f"{prefix}/evidence/{host_id}/stream",
     }
@@ -117,6 +118,13 @@ class ZenohTransport:
         q = {"correlation_id": query} if isinstance(query, str) else query
         return await asyncio.to_thread(self._get, self._k["replay"], q)
 
+    async def export_bundle(self, correlation_id: str) -> JSON:
+        """The host's SIGNED evidence bundle for ``correlation_id`` — the offline-verifiable
+        denial evidence an approval ingests (mirrors HTTP ``export_bundle``; only the carrier
+        differs). ``verify_bundle`` checks the hash chain, root hash, and host signature."""
+        return await asyncio.to_thread(
+            self._get, self._k["export"], {"correlation_id": correlation_id})
+
     async def health(self) -> JSON:
         return await asyncio.to_thread(self._get, self._k["health"])
 
@@ -152,6 +160,7 @@ class ZenohHostServer:
             self._session.declare_queryable(self._k["invoke"], self._on_invoke),
             self._session.declare_queryable(self._k["declarations"], self._on_discover),
             self._session.declare_queryable(self._k["replay"], self._on_replay),
+            self._session.declare_queryable(self._k["export"], self._on_export),
             self._session.declare_queryable(self._k["health"], self._on_health),
         ]
 
@@ -179,6 +188,23 @@ class ZenohHostServer:
         q = json.loads(bytes(query.payload)) if query.payload else {}
         corr = q.get("correlation_id", "")
         self._reply(query, self._k["replay"], {"events": self._host.replay(corr)})
+
+    def _on_export(self, query: Any) -> None:
+        # SIGNED evidence bundle for a correlation — the denial evidence an approval ingests +
+        # offline-verifies. Byte-identical to the HTTP export: same build_bundle + sign_bundle over
+        # the same store, so verify_bundle (hash chain + root + host sig + pinned key) is unchanged.
+        from chp_core import signing
+        from chp_core.types import utc_now
+        q = json.loads(bytes(query.payload)) if query.payload else {}
+        corr = q.get("correlation_id", "")
+        events = self._host.store.export_correlation(corr)
+        bundle = signing.build_bundle(self._host.host_id, events, created_at=utc_now())
+        key_dir = signing.resolve_key_dir(self._host.host_id)
+        key = signing.load_host_key(key_dir)
+        if key is not None and key.can_sign:
+            bundle = signing.sign_bundle(
+                bundle, key, anchors=signing.load_configured_anchors(key_dir) or None)
+        self._reply(query, self._k["export"], bundle)
 
     def _on_health(self, query: Any) -> None:
         desc = self._host.discover()

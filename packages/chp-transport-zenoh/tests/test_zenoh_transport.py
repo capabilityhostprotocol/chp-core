@@ -104,5 +104,29 @@ def test_evidence_pubsub_delivers_completed_event():
         sub.undeclare(); transport.close(); server.close()
 
 
+def test_export_bundle_signed_and_verifiable(tmp_path):
+    """The denial-evidence path: export_bundle over zenoh yields a SIGNED bundle that verify_bundle
+    accepts against the host's pinned key and REJECTS against a wrong key (forged-denial defense)."""
+    from chp_core import signing
+
+    host = _host("zt-exp")
+    kd = signing.resolve_key_dir("zt-exp")
+    key = signing.load_host_key(kd) or signing.generate_keypair(kd)
+    server = ZenohHostServer(host)
+    transport = ZenohTransport("zt-exp")
+    time.sleep(0.4)
+    try:
+        asyncio.run(transport.ainvoke_envelope(InvocationEnvelope.from_mapping(
+            {"capability_id": "math.add", "payload": {"a": 1, "b": 2},
+             "correlation": {"correlation_id": "exp-corr"}})))
+        bundle = asyncio.run(transport.export_bundle("exp-corr"))
+        assert bundle.get("events"), "no events in the exported bundle"
+        assert signing.verify_bundle(bundle, expected_key_id=key.key_id).valid       # right key ✓
+        assert not signing.verify_bundle(bundle, expected_key_id="deadbeef").valid   # wrong key ✗
+    finally:
+        transport.close()
+        server.close()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "--no-header", "-p", "no:cacheprovider"]))

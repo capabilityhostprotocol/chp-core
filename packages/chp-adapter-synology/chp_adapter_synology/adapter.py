@@ -38,6 +38,16 @@ class SynologyBackend(Protocol):
     async def container_start(self, ctx: Any, container_id: str) -> dict[str, Any]: ...
     async def container_stop(self, ctx: Any, container_id: str) -> dict[str, Any]: ...
     async def download_create(self, ctx: Any, uri: str, dest_folder: str) -> dict[str, Any]: ...
+    async def storage_volume_list(self, ctx: Any) -> dict[str, Any]: ...
+    async def disk_smart_health(self, ctx: Any) -> dict[str, Any]: ...
+    async def system_info(self, ctx: Any) -> dict[str, Any]: ...
+    async def system_utilization(self, ctx: Any) -> dict[str, Any]: ...
+    async def backup_task_list(self, ctx: Any) -> dict[str, Any]: ...
+    async def backup_task_run(self, ctx: Any, task_id: int) -> dict[str, Any]: ...
+    async def snapshot_create(self, ctx: Any, share: str, desc: str) -> dict[str, Any]: ...
+    async def container_logs(self, ctx: Any, container_id: str, lines: int) -> dict[str, Any]: ...
+    async def package_list(self, ctx: Any) -> dict[str, Any]: ...
+    async def download_task_control(self, ctx: Any, task_id: str, action: str) -> dict[str, Any]: ...
 
 
 class FakeSynologyBackend:
@@ -98,6 +108,48 @@ class FakeSynologyBackend:
     async def download_create(self, ctx: Any, uri: str, dest_folder: str) -> dict[str, Any]:
         return {"task_id": "DL001", "uri": uri, "dest_folder": dest_folder, "status": "queued"}
 
+    async def storage_volume_list(self, ctx: Any) -> dict[str, Any]:
+        return {"volumes": [{"id": "volume_1", "status": "normal", "fs_type": "btrfs",
+                             "size_total": 8_000_000_000_000, "size_used": 4_200_000_000_000,
+                             "raid_type": "raid1"}]}
+
+    async def disk_smart_health(self, ctx: Any) -> dict[str, Any]:
+        return {"disks": [{"id": "sata1", "model": "WD80EFAX", "status": "normal",
+                          "smart_status": "normal", "temp": 38},
+                         {"id": "sata2", "model": "WD80EFAX", "status": "normal",
+                          "smart_status": "normal", "temp": 37}]}
+
+    async def system_info(self, ctx: Any) -> dict[str, Any]:
+        return {"model": "DS918+", "firmware_ver": "DSM 7.3.2", "serial": "REDACTED",
+                "uptime": 864000, "cpu_series": "Intel Celeron J3455"}
+
+    async def system_utilization(self, ctx: Any) -> dict[str, Any]:
+        return {"cpu": {"user_load": 5, "system_load": 3}, "memory": {"real_usage": 42},
+                "disk": {"read_byte": 120000, "write_byte": 80000}}
+
+    async def backup_task_list(self, ctx: Any) -> dict[str, Any]:
+        return {"tasks": [{"task_id": 1, "name": "Offsite", "status": "backupable",
+                          "last_bkp_result": "success", "last_bkp_time": "2026-07-23 02:00:00"}]}
+
+    async def backup_task_run(self, ctx: Any, task_id: int) -> dict[str, Any]:
+        return {"task_id": task_id, "started": True}
+
+    async def snapshot_create(self, ctx: Any, share: str, desc: str) -> dict[str, Any]:
+        return {"share": share, "snapshot": "GMT+00-2026.07.24-12.00.00", "desc": desc}
+
+    async def container_logs(self, ctx: Any, container_id: str, lines: int) -> dict[str, Any]:
+        return {"container_id": container_id,
+                "lines": [f"log line {i}" for i in range(min(lines, 3))]}
+
+    async def package_list(self, ctx: Any) -> dict[str, Any]:
+        return {"packages": [{"id": "ContainerManager", "name": "Container Manager",
+                             "status": "running", "version": "24.0.2"},
+                            {"id": "HyperBackup", "name": "Hyper Backup",
+                             "status": "running", "version": "4.0.0"}]}
+
+    async def download_task_control(self, ctx: Any, task_id: str, action: str) -> dict[str, Any]:
+        return {"task_id": task_id, "action": action, "ok": True}
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -141,7 +193,8 @@ class _DSMBackend:
         result data ({status_code, json, ...}); raises only if the transport itself
         is unavailable/denied — HTTP status codes are handled by callers."""
         base = self._config.resolved_url().rstrip("/")
-        req: dict[str, Any] = {"method": method, "url": f"{base}{path}", "timeout": 30}
+        req: dict[str, Any] = {"method": method, "url": f"{base}{path}", "timeout": 30,
+                               "verify": self._config.verify_ssl}  # DSM self-signed → verify off
         if params is not None:
             # Param VALUES (incl. passwd, _sid) are never evidenced — the http adapter
             # records only the bare url + sorted param KEYS.
@@ -205,7 +258,9 @@ class _DSMBackend:
 
     async def _entry(self, ctx: Any, http_method: str, api: str, method: str,
                      version: int, **extra: Any) -> Any:
-        """Call entry.cgi with SID + version negotiation, retrying once on 403."""
+        """Call entry.cgi with SID + version negotiation, re-authing once on a stale SID — HTTP 403 OR
+        a DSM body error code 119 ('SID not found') / 106 (session timeout), which arrive as HTTP 200
+        + success:false and so wouldn't otherwise trigger a refresh."""
         sid = await self._sid_or_auth(ctx)
         version = await self._resolve_version(ctx, api, version)
         args = {"api": api, "version": version, "method": method, "_sid": sid, **extra}
@@ -215,8 +270,12 @@ class _DSMBackend:
                 return await self._req(ctx, "GET", "/webapi/entry.cgi", params=args)
             return await self._req(ctx, "POST", "/webapi/entry.cgi", form=args)
 
+        def _stale(d: dict[str, Any]) -> bool:
+            return d.get("status_code") == 403 or \
+                (d.get("json") or {}).get("error", {}).get("code") in (119, 106)
+
         data = await _call()
-        if data.get("status_code") == 403:
+        if _stale(data):
             self._sid = await self._auth(ctx)
             args["_sid"] = self._sid
             data = await _call()
@@ -255,6 +314,48 @@ class _DSMBackend:
     async def download_create(self, ctx: Any, uri: str, dest_folder: str) -> dict[str, Any]:
         return await self._entry(ctx, "POST", "SYNO.DownloadStation.Task", "create", version=3,
                                  uri=uri, destination=dest_folder)
+
+    # --- health / observability (read-only) ---
+    # SYNO.Core.Storage.Volume/Disk .list return code 101 on DSM 7.3; the canonical combined
+    # endpoint SYNO.Storage.CGI.Storage.load_info returns {volumes, disks, pools, ...} in one call.
+    async def _storage_info(self, ctx: Any) -> dict[str, Any]:
+        return await self._entry(ctx, "GET", "SYNO.Storage.CGI.Storage", "load_info", version=1)
+
+    async def storage_volume_list(self, ctx: Any) -> dict[str, Any]:
+        return {"volumes": (await self._storage_info(ctx)).get("volumes", [])}
+
+    async def disk_smart_health(self, ctx: Any) -> dict[str, Any]:
+        return {"disks": (await self._storage_info(ctx)).get("disks", [])}
+
+    async def system_info(self, ctx: Any) -> dict[str, Any]:
+        return await self._entry(ctx, "GET", "SYNO.Core.System", "info", version=1)
+
+    async def system_utilization(self, ctx: Any) -> dict[str, Any]:
+        return await self._entry(ctx, "GET", "SYNO.Core.System.Utilization", "get", version=1)
+
+    async def backup_task_list(self, ctx: Any) -> dict[str, Any]:
+        return await self._entry(ctx, "GET", "SYNO.Backup.Task", "list", version=1,
+                                 additional="last_bkp_result,last_bkp_time")
+
+    async def package_list(self, ctx: Any) -> dict[str, Any]:
+        return await self._entry(ctx, "GET", "SYNO.Core.Package.Server", "list", version=1)
+
+    async def container_logs(self, ctx: Any, container_id: str, lines: int) -> dict[str, Any]:
+        return await self._entry(ctx, "GET", "SYNO.Docker.Container.Log", "get", version=1,
+                                 id=container_id, limit=lines)
+
+    # --- governed writes (approval-gated at the cap layer) ---
+    async def backup_task_run(self, ctx: Any, task_id: int) -> dict[str, Any]:
+        return await self._entry(ctx, "POST", "SYNO.Backup.Task", "backup_start", version=1,
+                                 task_id=task_id)
+
+    async def snapshot_create(self, ctx: Any, share: str, desc: str) -> dict[str, Any]:
+        return await self._entry(ctx, "POST", "SYNO.Core.Share.Snapshot", "create", version=1,
+                                 name=share, desc=desc)
+
+    async def download_task_control(self, ctx: Any, task_id: str, action: str) -> dict[str, Any]:
+        return await self._entry(ctx, "POST", "SYNO.DownloadStation2.Task", action, version=2,
+                                 id=task_id)
 
 
 # ---------------------------------------------------------------------------
@@ -483,3 +584,110 @@ class SynologyAdapter(BaseAdapter):
             raise
         ctx.emit("synology_response", {"op": "download_create", "task_id": result.get("task_id")}, redacted=False)
         return result
+
+    # ------------------------------------------------------------------
+    # DSM health / observability + governed backup — added caps. `_op` DRYs the
+    # request/response/error emit envelope the older caps inline.
+    # ------------------------------------------------------------------
+    async def _op(self, ctx: Any, op: str, backend_coro: Any, **meta: Any) -> Any:
+        ctx.emit("synology_request", {"op": op, **meta}, redacted=False)
+        try:
+            result = await backend_coro
+        except Exception as exc:
+            ctx.emit("synology_error", {"op": op, "error": str(exc)[:_MAX_ERR], **meta},
+                     redacted=False)
+            raise
+        ctx.emit("synology_response", {"op": op, **meta}, redacted=False)
+        return result
+
+    @capability(id="chp.adapters.synology.storage_volume_list", version="1.0.0",
+                description="List DSM storage volumes: capacity, used, RAID/degraded state.",
+                category="edge", provider="synology", risk="low", emits=_EMITS,
+                input_schema={"type": "object", "properties": {}, "additionalProperties": False})
+    async def storage_volume_list(self, ctx: Any, payload: Any) -> Any:
+        return await self._op(ctx, "storage_volume_list", self._backend().storage_volume_list(ctx))
+
+    @capability(id="chp.adapters.synology.disk_smart_health", version="1.0.0",
+                description="Per-disk status + SMART health + temperature.",
+                category="edge", provider="synology", risk="low", emits=_EMITS,
+                input_schema={"type": "object", "properties": {}, "additionalProperties": False})
+    async def disk_smart_health(self, ctx: Any, payload: Any) -> Any:
+        return await self._op(ctx, "disk_smart_health", self._backend().disk_smart_health(ctx))
+
+    @capability(id="chp.adapters.synology.system_info", version="1.0.0",
+                description="DSM model, firmware version, serial, uptime.",
+                category="edge", provider="synology", risk="low", emits=_EMITS,
+                input_schema={"type": "object", "properties": {}, "additionalProperties": False})
+    async def system_info(self, ctx: Any, payload: Any) -> Any:
+        return await self._op(ctx, "system_info", self._backend().system_info(ctx))
+
+    @capability(id="chp.adapters.synology.system_utilization", version="1.0.0",
+                description="Live CPU / memory / disk / network utilization.",
+                category="edge", provider="synology", risk="low", emits=_EMITS,
+                input_schema={"type": "object", "properties": {}, "additionalProperties": False})
+    async def system_utilization(self, ctx: Any, payload: Any) -> Any:
+        return await self._op(ctx, "system_utilization", self._backend().system_utilization(ctx))
+
+    @capability(id="chp.adapters.synology.backup_task_list", version="1.0.0",
+                description="Hyper Backup tasks + last-run status.",
+                category="edge", provider="synology", risk="low", emits=_EMITS,
+                input_schema={"type": "object", "properties": {}, "additionalProperties": False})
+    async def backup_task_list(self, ctx: Any, payload: Any) -> Any:
+        return await self._op(ctx, "backup_task_list", self._backend().backup_task_list(ctx))
+
+    @capability(id="chp.adapters.synology.package_list", version="1.0.0",
+                description="Installed DSM packages + running state.",
+                category="edge", provider="synology", risk="low", emits=_EMITS,
+                input_schema={"type": "object", "properties": {}, "additionalProperties": False})
+    async def package_list(self, ctx: Any, payload: Any) -> Any:
+        return await self._op(ctx, "package_list", self._backend().package_list(ctx))
+
+    @capability(id="chp.adapters.synology.container_logs", version="1.0.0",
+                description="Tail a Container Manager container's logs.",
+                category="edge", provider="synology", risk="low", emits=_EMITS,
+                input_schema={"type": "object", "properties": {
+                    "container_id": {"type": "string", "minLength": 1},
+                    "lines": {"type": "integer", "minimum": 1, "maximum": 1000}},
+                    "required": ["container_id"], "additionalProperties": False})
+    async def container_logs(self, ctx: Any, payload: Any) -> Any:
+        cid, lines = payload["container_id"], payload.get("lines", 100)
+        return await self._op(ctx, "container_logs",
+                              self._backend().container_logs(ctx, cid, lines), container_id=cid)
+
+    @capability(id="chp.adapters.synology.backup_task_run", version="1.0.0",
+                description="Trigger a Hyper Backup task by id (governed).",
+                category="edge", provider="synology", risk="high",
+                side_effects=["backup_start"], emits=_EMITS,
+                input_schema={"type": "object", "properties": {
+                    "task_id": {"type": "integer"}},
+                    "required": ["task_id"], "additionalProperties": False})
+    async def backup_task_run(self, ctx: Any, payload: Any) -> Any:
+        tid = payload["task_id"]
+        return await self._op(ctx, "backup_task_run",
+                              self._backend().backup_task_run(ctx, tid), task_id=tid)
+
+    @capability(id="chp.adapters.synology.snapshot_create", version="1.0.0",
+                description="Create a btrfs snapshot of a shared folder (governed).",
+                category="edge", provider="synology", risk="high",
+                side_effects=["filesystem_snapshot"], emits=_EMITS,
+                input_schema={"type": "object", "properties": {
+                    "share": {"type": "string", "minLength": 1},
+                    "desc": {"type": "string"}},
+                    "required": ["share"], "additionalProperties": False})
+    async def snapshot_create(self, ctx: Any, payload: Any) -> Any:
+        share, desc = payload["share"], payload.get("desc", "chp")
+        return await self._op(ctx, "snapshot_create",
+                              self._backend().snapshot_create(ctx, share, desc), share=share)
+
+    @capability(id="chp.adapters.synology.download_task_control", version="1.0.0",
+                description="Pause / resume / delete a Download Station task.",
+                category="edge", provider="synology", risk="medium",
+                side_effects=["download_control"], emits=_EMITS,
+                input_schema={"type": "object", "properties": {
+                    "task_id": {"type": "string", "minLength": 1},
+                    "action": {"type": "string", "enum": ["pause", "resume", "delete"]}},
+                    "required": ["task_id", "action"], "additionalProperties": False})
+    async def download_task_control(self, ctx: Any, payload: Any) -> Any:
+        tid, action = payload["task_id"], payload["action"]
+        return await self._op(ctx, "download_task_control",
+                              self._backend().download_task_control(ctx, tid, action), action=action)

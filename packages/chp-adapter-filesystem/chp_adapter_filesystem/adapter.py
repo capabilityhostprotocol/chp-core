@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import fnmatch
 import glob as _glob
+import re
 import shutil
 import subprocess
 import time
@@ -395,41 +396,44 @@ class FilesystemAdapter(BaseAdapter):
             raise
 
         t0 = time.monotonic()
-        use_rg = shutil.which("rg") is not None
+        rg = shutil.which("rg")
+        gr = None if rg else shutil.which("grep")
 
-        if use_rg:
-            cmd = ["rg", "--line-number", "--no-heading", "--color=never"]
-            if case_insensitive:
-                cmd.append("-i")
-            if glob_filter:
-                cmd.extend(["-g", glob_filter])
+        if rg or gr:
+            if rg:
+                cmd = ["rg", "--line-number", "--no-heading", "--color=never"]
+                if case_insensitive:
+                    cmd.append("-i")
+                if glob_filter:
+                    cmd.extend(["-g", glob_filter])
+            else:
+                cmd = ["grep", "-rn"]
+                if case_insensitive:
+                    cmd.append("-i")
+                if glob_filter:
+                    cmd.append(f"--include={glob_filter}")
             cmd.extend([pattern, str(resolved)])
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            except subprocess.TimeoutExpired:
+                ctx.emit("fs_error", {"op": "grep", "path": str(resolved), "reason": "timeout"}, redacted=False)
+                raise TimeoutError(f"grep timed out searching {resolved}")
+
+            matches = []
+            truncated = False
+            for line in proc.stdout.splitlines():
+                if len(matches) >= _MAX_GREP_RESULTS:
+                    truncated = True
+                    break
+                # rg and grep -n both output: file:line:text
+                parts = line.split(":", 2)
+                if len(parts) >= 3:
+                    matches.append({"file": parts[0], "line_no": parts[1], "text": parts[2]})
+                elif len(parts) == 2:
+                    matches.append({"file": parts[0], "line_no": parts[1], "text": ""})
         else:
-            cmd = ["grep", "-rn"]
-            if case_insensitive:
-                cmd.append("-i")
-            if glob_filter:
-                cmd.extend([f"--include={glob_filter}"])
-            cmd.extend([pattern, str(resolved)])
-
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        except subprocess.TimeoutExpired:
-            ctx.emit("fs_error", {"op": "grep", "path": str(resolved), "reason": "timeout"}, redacted=False)
-            raise TimeoutError(f"grep timed out searching {resolved}")
-
-        matches = []
-        truncated = False
-        for line in proc.stdout.splitlines():
-            if len(matches) >= _MAX_GREP_RESULTS:
-                truncated = True
-                break
-            # rg and grep -n both output: file:line:text
-            parts = line.split(":", 2)
-            if len(parts) >= 3:
-                matches.append({"file": parts[0], "line_no": parts[1], "text": parts[2]})
-            elif len(parts) == 2:
-                matches.append({"file": parts[0], "line_no": parts[1], "text": ""})
+            # No rg/grep binary on PATH (e.g. stock Windows) — pure-Python search, same result shape.
+            matches, truncated = self._grep_python(resolved, pattern, glob_filter, case_insensitive)
 
         latency_ms = round((time.monotonic() - t0) * 1000)
         ctx.emit("fs_grep", {
@@ -442,6 +446,28 @@ class FilesystemAdapter(BaseAdapter):
         }, redacted=False)
 
         return {"matches": matches, "match_count": len(matches), "truncated": truncated}
+
+    def _grep_python(self, resolved: Path, pattern: str, glob_filter: str | None,
+                     case_insensitive: bool) -> tuple[list[dict], bool]:
+        """Pure-Python recursive grep — used when neither rg nor grep is on PATH (e.g. stock Windows).
+        Same output contract as the subprocess path: {file, line_no (str), text}, capped at
+        _MAX_GREP_RESULTS, filtered by the same fnmatch glob. Undecodable bytes are ignored, not fatal."""
+        rx = re.compile(pattern, re.IGNORECASE if case_insensitive else 0)
+        files = [resolved] if resolved.is_file() else (p for p in resolved.rglob("*") if p.is_file())
+        matches: list[dict] = []
+        for fp in files:
+            if glob_filter and not fnmatch.fnmatch(fp.name, glob_filter):
+                continue
+            try:
+                with fp.open("r", encoding="utf-8", errors="ignore") as fh:
+                    for i, line in enumerate(fh, 1):
+                        if rx.search(line):
+                            if len(matches) >= _MAX_GREP_RESULTS:
+                                return matches, True
+                            matches.append({"file": str(fp), "line_no": str(i), "text": line.rstrip("\n")})
+            except OSError:
+                continue
+        return matches, False
 
     # ------------------------------------------------------------------
     # glob_files

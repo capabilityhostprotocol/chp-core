@@ -23,6 +23,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from chp_core import BaseAdapter, capability
 
 # Cloud metadata / link-local endpoints — never a legitimate HTTP target, the
 # primary SSRF escalation. Blocked by default even without an allowlist. Does
@@ -36,8 +37,6 @@ _METADATA_HOSTS = frozenset({
     "metadata.google.internal",
     "metadata",
 })
-
-from chp_core import BaseAdapter, capability
 
 _EMITS = ["http_request", "http_response", "http_error", "http_circuit_open"]
 
@@ -185,6 +184,11 @@ class HttpAdapter(BaseAdapter):
                     "minimum": 0.1,
                     "description": "Per-request timeout override (seconds).",
                 },
+                "verify": {
+                    "type": "boolean",
+                    "description": "Verify TLS certs (default true). Set false only for a "
+                                   "trusted self-signed host reached over a secure overlay.",
+                },
             },
             "required": ["method", "url"],
             "additionalProperties": False,
@@ -200,6 +204,7 @@ class HttpAdapter(BaseAdapter):
         json_body = payload.get("json_body")
         params = payload.get("params") or {}
         timeout = float(payload.get("timeout") or self._config.timeout)
+        verify = payload.get("verify", True)   # opt-in insecure for a trusted self-signed host
 
         # URL allowlist check
         try:
@@ -240,6 +245,7 @@ class HttpAdapter(BaseAdapter):
                 async with httpx.AsyncClient(
                     timeout=timeout,
                     transport=self._config.transport,
+                    verify=verify,
                 ) as client:
                     resp = await client.request(
                         method,

@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
+import tempfile
+import uuid
 
 import pytest
 
 from chp_core import LocalCapabilityHost, register_adapter
-from chp_core.store import SQLiteEvidenceStore
+from chp_core.host import _stringify_floats
+from chp_core.signing import build_approval_grant, generate_keypair
+from chp_core.store import SQLiteEvidenceStore, _payload_commitment
+from chp_core.types import InvocationEnvelope
 
 from chp_adapter_process import ProcessAdapter, ProcessConfig
 
@@ -20,6 +26,24 @@ def _make_host(config=None):
     host = LocalCapabilityHost(store=SQLiteEvidenceStore(":memory:"))
     register_adapter(host, ProcessAdapter(config))
     return host
+
+
+# process.run is approval-gated (autonomy tier=approval_required) — every invocation needs a valid
+# 0037 grant. The host trusts any correctly-signed grant unless CHP_HOST_APPROVER_KEYS pins one, so
+# a throwaway approver key suffices for exercising the run logic.
+_APPROVER = generate_keypair(tempfile.mkdtemp())
+
+
+def _run(host, payload):
+    """Invoke process.run WITH an approver grant bound to this invocation + payload (past the gate)."""
+    inv = "inv-" + uuid.uuid4().hex[:12]
+    grant = build_approval_grant(
+        _APPROVER, invocation_id=inv, approval_id="ap-" + inv,
+        payload_commitment=_payload_commitment(_stringify_floats(payload)),
+        valid_until="2099-01-01T00:00:00Z")
+    env = InvocationEnvelope(capability_id="chp.adapters.process.run", invocation_id=inv,
+                             payload=payload, approval_ref=grant)
+    return asyncio.run(host.ainvoke_envelope(env))
 
 
 def _cap_events(store):
@@ -45,6 +69,20 @@ class TestShaping:
     def test_adapter_id(self):
         assert ProcessAdapter.adapter_id == "chp.adapters.process"
 
+    def test_run_is_approval_gated(self):
+        # arbitrary execution is consequential on every node — gated by autonomy tier
+        cap = next(c for c in ProcessAdapter().capabilities()
+                   if c.descriptor.id == "chp.adapters.process.run")
+        assert cap.descriptor.autonomy is not None
+        assert cap.descriptor.autonomy.tier == "approval_required"
+
+    def test_run_without_grant_is_denied(self):
+        # no 0037 grant presented → the host denies with approval_required (fail-closed)
+        host = _make_host()
+        r = host.invoke("chp.adapters.process.run", {"command": _PYTHON, "args": ["-c", "pass"]})
+        assert r.outcome == "denied"
+        assert r.denial.code == "approval_required"
+
 
 # --------------------------------------------------------------------------
 # 2. Success path
@@ -53,7 +91,7 @@ class TestShaping:
 class TestSuccessPath:
     def test_echo_succeeds(self):
         host = _make_host()
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "args": ["-c", "print('hello')"]
         })
         assert r.outcome == "success"
@@ -63,7 +101,7 @@ class TestSuccessPath:
 
     def test_exit_code_captured(self):
         host = _make_host()
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "args": ["-c", "import sys; sys.exit(42)"]
         })
         assert r.outcome == "success"
@@ -71,7 +109,7 @@ class TestSuccessPath:
 
     def test_stderr_captured(self):
         host = _make_host()
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON,
             "args": ["-c", "import sys; sys.stderr.write('err-output')"]
         })
@@ -80,7 +118,7 @@ class TestSuccessPath:
 
     def test_duration_ms_positive(self):
         host = _make_host()
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"]
         })
         assert r.data["duration_ms"] >= 0
@@ -93,19 +131,19 @@ class TestSuccessPath:
 class TestAllowlist:
     def test_command_not_in_allowlist_fails(self):
         host = _make_host(ProcessConfig(allowed_commands=["echo"]))
-        r = host.invoke("chp.adapters.process.run", {"command": _PYTHON, "args": ["-c", "pass"]})
+        r = _run(host, {"command": _PYTHON, "args": ["-c", "pass"]})
         assert r.outcome == "failure"
 
     def test_command_in_allowlist_succeeds(self):
         host = _make_host(ProcessConfig(allowed_commands=[_PYTHON]))
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"]
         })
         assert r.outcome == "success"
 
     def test_none_allowlist_permits_all(self):
         host = _make_host(ProcessConfig(allowed_commands=None))
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"]
         })
         assert r.outcome == "success"
@@ -118,7 +156,7 @@ class TestAllowlist:
 class TestTimeout:
     def test_timeout_kills_process(self):
         host = _make_host(ProcessConfig(max_timeout=0.5))
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON,
             "args": ["-c", "import time; time.sleep(10)"],
             "timeout": 0.3,
@@ -129,7 +167,7 @@ class TestTimeout:
 
     def test_timeout_capped_at_max(self):
         host = _make_host(ProcessConfig(max_timeout=5.0))
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"],
             "timeout": 999.0,
         })
@@ -146,7 +184,7 @@ class TestCwdRestriction:
         allowed = tmp_path / "allowed"
         allowed.mkdir()
         host = _make_host(ProcessConfig(working_dir=str(allowed)))
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"],
             "cwd": str(tmp_path),
         })
@@ -154,7 +192,7 @@ class TestCwdRestriction:
 
     def test_cwd_inside_working_dir_succeeds(self, tmp_path):
         host = _make_host(ProcessConfig(working_dir=str(tmp_path)))
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"],
             "cwd": str(tmp_path),
         })
@@ -168,7 +206,7 @@ class TestCwdRestriction:
 class TestUnknownCommand:
     def test_command_not_found_fails(self):
         host = _make_host()
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": "definitely_not_a_real_command_xyz123"
         })
         assert r.outcome == "failure"
@@ -181,21 +219,20 @@ class TestUnknownCommand:
 class TestSchema:
     def test_missing_command_denied(self):
         host = _make_host()
-        r = host.invoke("chp.adapters.process.run", {})
+        r = _run(host, {})
         assert r.outcome == "denied"
 
     def test_extra_field_denied(self):
         host = _make_host()
-        r = host.invoke("chp.adapters.process.run", {
+        r = _run(host, {
             "command": _PYTHON, "injected": "bad"
         })
         assert r.outcome == "denied"
 
     def test_valid_command_not_denied(self):
-        # Regression for rad:72fb420 — valid command must not be denied.
+        # Regression for rad:72fb420 — a valid command (with a grant) must not be denied.
         host = _make_host()
-        r = host.invoke("chp.adapters.process.run",
-                        {"command": _PYTHON, "args": ["-c", "pass"]})
+        r = _run(host, {"command": _PYTHON, "args": ["-c", "pass"]})
         assert r.outcome == "success"
 
     def test_valid_payload_via_arguments_key(self):
@@ -215,7 +252,7 @@ class TestSchema:
 class TestEvidenceHygiene:
     def test_env_additions_values_not_in_evidence(self):
         host = _make_host()
-        host.invoke("chp.adapters.process.run", {
+        _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"],
             "env_additions": {"MY_SECRET": "SUPER_SECRET_VALUE_XYZ"},
         })
@@ -224,7 +261,7 @@ class TestEvidenceHygiene:
 
     def test_env_additions_keys_in_evidence(self):
         host = _make_host()
-        host.invoke("chp.adapters.process.run", {
+        _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"],
             "env_additions": {"MY_SECRET": "value"},
         })
@@ -233,7 +270,7 @@ class TestEvidenceHygiene:
 
     def test_process_start_event_emitted(self):
         host = _make_host()
-        host.invoke("chp.adapters.process.run", {
+        _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"]
         })
         types = [e["event_type"] for e in _cap_events(host.store)]
@@ -241,7 +278,7 @@ class TestEvidenceHygiene:
 
     def test_process_result_event_emitted(self):
         host = _make_host()
-        host.invoke("chp.adapters.process.run", {
+        _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"]
         })
         types = [e["event_type"] for e in _cap_events(host.store)]
@@ -249,7 +286,7 @@ class TestEvidenceHygiene:
 
     def test_process_timeout_event_emitted(self):
         host = _make_host(ProcessConfig(max_timeout=0.5))
-        host.invoke("chp.adapters.process.run", {
+        _run(host, {
             "command": _PYTHON,
             "args": ["-c", "import time; time.sleep(10)"],
             "timeout": 0.3,
@@ -259,7 +296,7 @@ class TestEvidenceHygiene:
 
     def test_no_lifecycle_events_in_evidence(self):
         host = _make_host()
-        host.invoke("chp.adapters.process.run", {
+        _run(host, {
             "command": _PYTHON, "args": ["-c", "pass"]
         })
         lifecycle = {"execution_started", "execution_completed", "execution_failed"}
@@ -269,7 +306,7 @@ class TestEvidenceHygiene:
     def test_stdout_preview_truncated_in_evidence(self):
         big_output = "A" * 2000
         host = _make_host()
-        host.invoke("chp.adapters.process.run", {
+        _run(host, {
             "command": _PYTHON,
             "args": ["-c", f"print('{'A' * 2000}')"],
         })

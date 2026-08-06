@@ -17,25 +17,29 @@ import sys
 
 from chp_core import BaseAdapter, capability
 
-from .backends import KeychainBackend, MemoryBackend
+from pathlib import Path
+
+from .backends import EncryptedFileBackend, KeychainBackend, MemoryBackend
 
 _EMITS = ["secrets_get", "secrets_set", "secrets_delete", "secrets_list", "secrets_error"]
 
 
 def _default_backend() -> Any:
-    """Durable-by-default backend: macOS Keychain when available, else in-memory.
-
-    The previous default (MemoryBackend) lost all secrets on host restart. On
-    darwin we prefer the Keychain so credentials survive restarts; if the
-    Keychain is unavailable for any reason we fall back to MemoryBackend rather
-    than fail construction.
+    """Durable-by-default backend, per platform — credentials MUST survive a host restart
+    (MemoryBackend, the old default, lost them all every restart; now frequent with the
+    self-healing agent). macOS → Keychain; Windows/Linux → an encrypted file
+    (``~/.chp/secrets.enc`` + 0600 key). Any failure falls back to MemoryBackend rather than
+    breaking construction — the node still runs, secrets are just ephemeral until fixed.
     """
     if sys.platform == "darwin":
         try:
             return KeychainBackend()
         except Exception:
             return MemoryBackend()
-    return MemoryBackend()
+    try:
+        return EncryptedFileBackend(Path.home() / ".chp" / "secrets.enc")
+    except Exception:
+        return MemoryBackend()
 
 
 @dataclass

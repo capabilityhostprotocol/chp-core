@@ -54,15 +54,23 @@ class FakeBackend:
         self.tools: list[Any] = []
         self.tool_results: list[Any] = []
 
-    def make_tool(self, name: str, description: str, func: Callable[[dict], Any]) -> Any:
-        t = {"name": name, "func": func}
+    def make_tool(self, name: str, description: str, func: Callable[[dict], Any],
+                  input_schema: dict | None = None) -> Any:
+        t = {"name": name, "func": func, "input_schema": input_schema}
         self.tools.append(t)
         return t
 
     def build_model(self, model_type: str, model_id: str, api_base: str, api_key: str) -> Any:
         return {"model_id": model_id, "type": model_type}
 
-    def run_agent(self, model: Any, tools: list[Any], task: str, max_steps: int) -> dict:
+    def build_agent(self, model: Any, tools: list[Any], agent_type: str = "code",
+                    max_steps: int = 6, *, name=None, description=None, managed_agents=None) -> Any:
+        return {"name": name, "description": description, "tools": tools, "agent_type": agent_type}
+
+    def run_agent(self, model: Any, tools: list[Any], task: str, max_steps: int,
+                  agent_type: str = "code", managed_agents=None) -> dict:
+        self.agent_type = agent_type
+        self.managed_agents = managed_agents
         # Simulate the agent deciding to call the first tool with a payload.
         if tools:
             result = tools[0]["func"]({"text": "hello from agent"})
@@ -164,6 +172,32 @@ class TestRun:
         # tool-invocation evidence present (tool id only, no payload)
         assert any("smolagents_tool_invoked" in t for t in types) or True  # replay may be empty in-memory
 
+    def test_agent_type_routes_to_backend(self):
+        fake = FakeBackend()
+        host = _make_host(fake)
+        result = _invoke(host, "chp.adapters.smolagents.run", {
+            "task": "use tool", "tools": ["chp.adapters.echo.shout"], "agent_type": "tool"})
+        assert result.success
+        assert fake.agent_type == "tool"        # ToolCallingAgent selected via config
+        # default is CodeAgent when unspecified
+        fake2 = FakeBackend()
+        _invoke(_make_host(fake2), "chp.adapters.smolagents.run",
+                {"task": "x", "tools": ["chp.adapters.echo.shout"]})
+        assert fake2.agent_type == "code"
+
+    def test_managed_agents_built_and_delegated(self):
+        fake = FakeBackend()
+        host = _make_host(fake)
+        result = _invoke(host, "chp.adapters.smolagents.run", {
+            "task": "delegate the memory work", "tools": [],
+            "managed_agents": [{"name": "memory_agent", "description": "handles memory ops",
+                                "tools": ["chp.adapters.echo.shout"], "agent_type": "tool"}]})
+        assert result.success
+        assert fake.managed_agents and len(fake.managed_agents) == 1     # sub-agent built + passed
+        sub = fake.managed_agents[0]
+        assert sub["name"] == "memory_agent" and sub["agent_type"] == "tool"
+        assert sub["tools"]                                              # sub-agent got its own tools
+
 
 # ---------------------------------------------------------------------------
 # Conformance — adapter imports no forbidden I/O; smolagents isolated in _backends
@@ -185,3 +219,102 @@ class TestConformance:
 
         violations = check_source_file(inspect.getfile(mod))
         assert not violations, f"_backends.py has conformance violations: {violations}"
+
+
+class TestCHPCapModel:
+    """The governed model backend: model calls route through a CHP capability, not a raw URL."""
+
+    def test_routes_through_cap_and_maps_content_and_tool_calls(self):
+        from chp_adapter_smolagents._backends import make_chp_model
+
+        captured: dict = {}
+
+        def fake_invoke(payload: dict) -> dict:
+            captured.update(payload)  # what the shim forwarded to local_llm.chat
+            return {"message": {
+                "content": "hello from the cap",
+                "tool_calls": [{"id": "call_1",
+                                "function": {"name": "get_weather", "arguments": {"city": "Tokyo"}}}],
+            }}
+
+        model = make_chp_model("qwen3:8b", fake_invoke)
+        msg = model.generate([{"role": "user", "content": "hi"}])
+
+        # forwarded to the cap: model id + normalized messages
+        assert captured["model"] == "qwen3:8b"
+        assert captured["messages"][-1]["content"] == "hi"
+        # mapped back into a smolagents ChatMessage
+        assert msg.content == "hello from the cap"
+        assert msg.tool_calls[0].function.name == "get_weather"
+        assert msg.tool_calls[0].function.arguments == {"city": "Tokyo"}
+
+    def test_no_tool_calls_yields_none(self):
+        from chp_adapter_smolagents._backends import make_chp_model
+        model = make_chp_model("m", lambda p: {"message": {"content": "plain answer"}})
+        msg = model.generate([{"role": "user", "content": "hi"}])
+        assert msg.content == "plain answer"
+        assert msg.tool_calls is None
+
+
+class TestScopedTools:
+    """Tools expose the cap's real input_schema as typed inputs (not an opaque payload)."""
+
+    def test_make_tool_typed_from_schema(self):
+        from chp_adapter_smolagents._backends import make_tool
+        captured: dict = {}
+        schema = {"type": "object",
+                  "properties": {"key": {"type": "string", "description": "the key"},
+                                 "value": {"type": "integer"},
+                                 "scope": {"type": "string"}},
+                  "required": ["key", "value"]}
+        t = make_tool("memory_set", "Store a value",
+                      lambda p: (captured.update(p), {"ok": True})[1], schema)
+        assert set(t.inputs) == {"key", "value", "scope"}          # typed inputs, not "payload"
+        assert t.inputs["key"]["type"] == "string" and t.inputs["key"]["description"] == "the key"
+        assert t.inputs["value"]["type"] == "integer"
+        assert t.inputs["scope"].get("nullable") is True           # optional
+        assert "nullable" not in t.inputs["key"]                   # required
+        assert t.forward(key="k", value=5) == {"ok": True}         # scope omitted (optional)
+        assert captured == {"key": "k", "value": 5}                # None-valued optionals dropped
+
+    def test_make_tool_falls_back_to_payload(self):
+        from chp_adapter_smolagents._backends import make_tool
+        t = make_tool("x", "d", lambda p: p, None)   # UNKNOWN schema -> opaque payload
+        assert list(t.inputs) == ["payload"]
+        assert t.forward({"a": 1}) == {"a": 1}
+
+    def test_make_tool_declared_empty_is_no_arg(self):
+        # DECLARED-but-empty schema (e.g. system.resource.usage) -> a real NO-ARG tool, NOT payload:object
+        # (an all-opaque tool set 400s some models).
+        from chp_adapter_smolagents._backends import make_tool
+        captured: dict = {}
+        t = make_tool("system_resource_usage", "Host capacity",
+                      lambda p: (captured.update(called=p), {"ok": True})[1], {})
+        assert t.inputs == {}                       # no params, not an opaque "payload"
+        assert t.forward() == {"ok": True}          # callable with no args
+        assert captured == {"called": {}}
+
+
+class TestToolCallsFromContent:
+    """Parse tool calls a model emitted as TEXT in content (structured channel empty)."""
+
+    def test_extractor_nested_flat_and_dedup(self):
+        from chp_adapter_smolagents._backends import _tool_calls_from_content
+        content = ('go:\n```\n{"id":"c1","type":"function","function":{"name":"memory_set",'
+                   '"arguments":{"key":"k","value":5}}}\n```\nagain '
+                   '{"function":{"name":"memory_set","arguments":{"key":"k","value":5}}} '
+                   'then {"name":"memory_get","arguments":{"key":"k"}}')
+        calls = _tool_calls_from_content(content)
+        assert [c["name"] for c in calls] == ["memory_set", "memory_get"]   # deduped repeat
+        assert calls[0]["arguments"] == {"key": "k", "value": 5}
+        assert calls[1]["arguments"] == {"key": "k"}
+        assert _tool_calls_from_content("no tool calls here") == []
+
+    def test_shim_populates_tool_calls_from_content(self):
+        from chp_adapter_smolagents._backends import make_chp_model
+        content = '{"function":{"name":"memory_set","arguments":{"key":"k","value":5}}}'
+        model = make_chp_model("m", lambda p: {"message": {"content": content}})
+        msg = model.generate([{"role": "user", "content": "go"}])
+        assert msg.tool_calls and len(msg.tool_calls) == 1
+        assert msg.tool_calls[0].function.name == "memory_set"
+        assert msg.tool_calls[0].function.arguments == {"key": "k", "value": 5}

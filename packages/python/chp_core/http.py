@@ -1335,13 +1335,16 @@ class RemoteCapabilityHost:
         result = remote.invoke("data.query", {"q": "..."})
     """
 
-    def __init__(self, base_url: str, *, timeout: int = 30, api_key: str | None = None,
+    def __init__(self, base_url: str, *, timeout: int | None = None, api_key: str | None = None,
                  retries: int = 0, retry_cap_s: float = 30.0,
                  wire_version: str | None = None,
                  client_cert: str | None = None, client_key: str | None = None,
                  cafile: str | None = None) -> None:
         self._base = base_url.rstrip("/")
-        self._timeout = timeout
+        # default socket timeout is tunable via CHP_HTTP_TIMEOUT (seconds) so slow bulk
+        # invocations (e.g. git status over a large repo on an external drive) don't abort a
+        # batch; an explicit timeout arg still wins. Backward-compatible default 30.
+        self._timeout = timeout if timeout is not None else int(os.environ.get("CHP_HTTP_TIMEOUT", "30"))
         self._api_key = api_key  # never emitted in evidence or logs
         # Mutual-TLS client credentials (§5, proposal 0031). When base_url is https
         # and a client_cert is set, present it on every connection so the server can

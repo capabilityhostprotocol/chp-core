@@ -196,6 +196,19 @@ def test_inference_capacity_reports_memory_ceiling():
     assert "fit" not in d                                    # no model → no fit verdict
 
 
+def test_inference_capacity_nvidia_uses_real_vram(monkeypatch):
+    # Regression for rad:7b81b02 — a Windows/NVIDIA node reported 0 VRAM/RAM. With a GPU present,
+    # gpu_memory_gb must come from nvidia-smi (discrete VRAM), not a RAM fraction, and be nonzero.
+    from chp_adapter_host import adapter as A
+    monkeypatch.setattr(A, "_nvidia_vram", lambda: ("NVIDIA GeForce RTX 4070 Ti", 12.0))
+    monkeypatch.setattr(A, "_total_ram_gb", lambda: 32.0)
+    d = A._inference_capacity()
+    assert d["gpu_memory_gb"] == 12.0                 # real VRAM, not 32*0.5
+    assert d["gpu_model"] == "NVIDIA GeForce RTX 4070 Ti"
+    assert d["ram_gb"] == 32.0 and d["unified_memory"] is False
+    assert d["gpu_ceiling_source"] == "nvidia-smi"
+
+
 def test_inference_capacity_fit_verdict():
     # a huge model must NOT fit a tiny ceiling; a tiny model must fit cold
     from chp_adapter_host.adapter import _estimate_fit

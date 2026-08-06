@@ -37,6 +37,11 @@ class FakeHFBackend:
         dim = 384
         return [[0.1] * dim for _ in texts]
 
+    def rerank(self, model, query, documents, device, cache_dir) -> list[float]:
+        # deterministic fake relevance: # of query words present in each doc
+        q = set(query.lower().split())
+        return [float(sum(w in q for w in d.lower().split())) for d in documents]
+
     def tokenize(self, model, operation, texts, ids, cache_dir) -> dict:
         if operation == "decode":
             return {"decoded": ["hello world"] * len(ids or []), "text_count": len(ids or [])}
@@ -178,7 +183,7 @@ class FakeHFBackend:
     def call_space(self, space_id, api_name, inputs, token) -> Any:
         return f"fake_result_from_{space_id}"
 
-    def finetune(self, model, dataset_repo_id, output_dir, task_type, num_epochs, batch_size, learning_rate, max_steps, cache_dir, token) -> dict:
+    def finetune(self, model, dataset_repo_id, output_dir, task_type, num_epochs, batch_size, learning_rate, max_steps, cache_dir, token, options=None) -> dict:
         return {
             "output_dir": output_dir,
             "model": model,

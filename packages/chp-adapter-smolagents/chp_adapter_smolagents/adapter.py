@@ -56,6 +56,8 @@ class SmolagentsConfig:
     model_id: str = ""
     api_base: str = ""
     api_key: str = ""
+    model_cap_id: str = "chp.adapters.local_llm.chat"  # used when model_type == "chp_cap"
+    model_timeout: float = 300.0  # a governed model call may warm a cold model; don't cut it short
     max_steps: int = 6
     tool_timeout: float = 120.0
     allowed_tools: list[str] | None = None  # None → any capability id may be exposed
@@ -120,7 +122,18 @@ class SmolagentsAdapter(BaseAdapter):
                     "description": "CHP capability ids to expose to the agent as tools, e.g. ['chp.adapters.huggingface.search_models']",
                 },
                 "model_id": {"type": "string", "description": "Override the configured model id"},
+                "model_type": {"type": "string", "enum": ["chp_cap", "openai_server", "mlx", "transformers"],
+                               "description": "Override the model backend for this run — e.g. 'openai_server' + api_base to reach a governed cross-node inference gateway (tools run here, inference on a GPU node)"},
+                "api_base": {"type": "string", "description": "OpenAI-compatible base URL for model_type=openai_server (e.g. a chp-home inference gateway on localhost)"},
                 "max_steps": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Override the configured max agent steps"},
+                "agent_type": {"type": "string", "enum": ["code", "tool"],
+                               "description": "code=CodeAgent (Python over tools, needs a capable code model); tool=ToolCallingAgent (JSON tool_calls, reliable with small/local models)"},
+                "tool_schemas": {"type": "object",
+                                 "description": "optional {cap_id: {input_schema, description}} so each tool gets a typed, scoped signature the model can call (vs an opaque payload object)"},
+                "managed_agents": {"type": "array", "items": {"type": "object"},
+                                   "description": "specialist sub-agents the manager can delegate to: [{name, description, tools:[cap_ids], agent_type?}] — multi-agent orchestrator-workers"},
+                "num_ctx": {"type": "integer", "minimum": 256, "maximum": 262144,
+                            "description": "context window for the model's completions (forwarded to the model cap, e.g. local_llm.chat) — raise it when exposing many tools so their schemas don't overflow the default context"},
             },
             "required": ["task"],
             "additionalProperties": False,
@@ -130,7 +143,13 @@ class SmolagentsAdapter(BaseAdapter):
         task: str = payload["task"]
         tool_ids: list[str] = payload.get("tools") or []
         model_id: str = payload.get("model_id") or self._config.resolved_model_id()
+        # per-run backend override: point one run at a cross-node inference gateway (openai_server +
+        # api_base) without reconfiguring the node's default (usually chp_cap → local_llm.chat).
+        model_type: str = payload.get("model_type") or self._config.model_type
+        api_base: str = payload.get("api_base") or self._config.resolved_api_base()
         max_steps: int = payload.get("max_steps") or self._config.max_steps
+        agent_type: str = payload.get("agent_type") or "code"
+        num_ctx = payload.get("num_ctx")   # forwarded to the model cap so many-tool prompts fit
 
         if not model_id:
             raise ValueError("No model_id specified and none configured (set SMOLAGENTS_MODEL).")
@@ -153,15 +172,23 @@ class SmolagentsAdapter(BaseAdapter):
                 return res.data
             return _call
 
-        tools = [
-            be.make_tool(
-                _tool_name(cap_id),
-                f"Invoke CHP capability '{cap_id}'. Call it as {_tool_name(cap_id)}(payload={{...}}) "
-                "where payload is the capability's input dict. Returns the capability's result dict.",
-                _make_bridge(cap_id),
-            )
-            for cap_id in tool_ids
-        ]
+        # Scoped tool definitions: the caller supplies each cap's input_schema + description via
+        # `tool_schemas` (so the model gets a typed signature, not an opaque payload). The caller
+        # already knows the tool list, so it scopes the definitions — conformance-clean (no direct
+        # host introspection). Falls back to an opaque payload when a schema isn't supplied.
+        tool_schemas: dict[str, Any] = payload.get("tool_schemas") or {}
+
+        def _build_tools(cap_ids: list[str]) -> list:
+            built = []
+            for cap_id in cap_ids:
+                spec = tool_schemas.get(cap_id) or {}
+                desc_text = spec.get("description") or (
+                    f"Invoke CHP capability '{cap_id}'. Returns the capability's result dict.")
+                built.append(be.make_tool(_tool_name(cap_id), desc_text, _make_bridge(cap_id),
+                                          spec.get("input_schema")))
+            return built
+
+        tools = _build_tools(tool_ids)
 
         ctx.emit("smolagents_run_started", {
             "task_length": len(task),
@@ -172,11 +199,33 @@ class SmolagentsAdapter(BaseAdapter):
 
         t0 = time.monotonic()
         try:
-            model = be.build_model(
-                self._config.model_type, model_id,
-                self._config.resolved_api_base(), self._config.resolved_api_key(),
-            )
-            result = await asyncio.to_thread(be.run_agent, model, tools, task, max_steps)
+            if model_type == "chp_cap":
+                # Model completions served by a governed CHP capability over the mesh, not a raw URL.
+                def _model_invoke(model_payload: dict) -> Any:
+                    if num_ctx and isinstance(model_payload, dict):
+                        model_payload.setdefault("num_ctx", num_ctx)   # thread ctx to local_llm.chat
+                    fut = asyncio.run_coroutine_threadsafe(
+                        ctx.ainvoke(self._config.model_cap_id, model_payload), loop)
+                    res = fut.result(timeout=self._config.model_timeout)
+                    if not getattr(res, "success", False):
+                        raise RuntimeError(getattr(res, "error", "model capability failed"))
+                    return res.data
+                model = be.make_chp_model(model_id, _model_invoke)
+            else:
+                model = be.build_model(
+                    model_type, model_id,
+                    api_base, self._config.resolved_api_key(),
+                )
+            # Multi-agent delegation: build each managed sub-agent (its own scoped tools + name +
+            # description) so the manager can delegate subtasks to it by name (orchestrator-workers).
+            managed_agents = []
+            for sub in (payload.get("managed_agents") or []):
+                managed_agents.append(be.build_agent(
+                    model, _build_tools(sub.get("tools") or []),
+                    sub.get("agent_type", "tool"), max_steps,
+                    name=sub["name"], description=sub["description"]))
+            result = await asyncio.to_thread(be.run_agent, model, tools, task, max_steps,
+                                             agent_type, managed_agents or None)
         except Exception as exc:
             ctx.emit("smolagents_run_failed", {
                 "model_id": model_id, "error": str(exc)[:500],

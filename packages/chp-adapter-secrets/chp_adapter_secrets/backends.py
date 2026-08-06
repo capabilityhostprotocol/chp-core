@@ -1,4 +1,4 @@
-"""Secrets backends: MemoryBackend, EnvBackend, FileBackend, KeychainBackend."""
+"""Secrets backends: MemoryBackend, EnvBackend, FileBackend, EncryptedFileBackend, KeychainBackend."""
 
 from __future__ import annotations
 
@@ -108,6 +108,80 @@ class FileBackend:
     def delete(self, key: str) -> bool:
         if self._read_only:
             raise PermissionError("FileBackend is read-only")
+        if key in self._data:
+            del self._data[key]
+            self._save()
+            return True
+        return False
+
+    def list_keys(self) -> list[str]:
+        return sorted(self._data.keys())
+
+
+class EncryptedFileBackend:
+    """Durable, encrypted-at-rest secrets for non-macOS nodes (Windows/Linux).
+
+    The prior non-darwin default was ``MemoryBackend`` — all secrets lost on restart (now frequent
+    with the self-healing agent). This stores the secret map as a Fernet-encrypted blob (AES-128-CBC
+    + HMAC via ``cryptography``, already a required dependency), with the key in a sibling 0600 key
+    file generated on first use. Survives restart (unlike Memory) AND is encrypted at rest (unlike
+    the plaintext ``FileBackend``).
+
+    Threat model: defends disk/backup exposure with an owner-only key. It does NOT gate the key on the
+    login session the way an OS keyring would — Windows DPAPI / Linux libsecret are a hardening
+    follow-up. Values are never logged; only key names surface in evidence (adapter-level).
+    """
+
+    def __init__(self, path: str | Path, *, key_path: str | Path | None = None) -> None:
+        from cryptography.fernet import Fernet
+        self._path = Path(path)
+        self._key_path = Path(key_path) if key_path else self._path.with_suffix(".key")
+        self._fernet = Fernet(self._load_or_create_key())
+        self._data: dict[str, str] = self._load()
+
+    def _write_0600(self, path: Path, data: bytes) -> None:
+        # Create with 0600 from the start (umask can't loosen explicit open-flags mode).
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass  # Windows NTFS ignores POSIX modes; the user-profile ACL protects it
+
+    def _load_or_create_key(self) -> bytes:
+        from cryptography.fernet import Fernet
+        if self._key_path.exists():
+            try:
+                if (self._key_path.stat().st_mode & 0o077) != 0:
+                    os.chmod(self._key_path, 0o600)   # tighten a loose pre-existing key
+            except OSError:
+                pass
+            return self._key_path.read_bytes()
+        key = Fernet.generate_key()
+        self._write_0600(self._key_path, key)
+        return key
+
+    def _load(self) -> dict[str, str]:
+        if not self._path.exists():
+            return {}
+        try:
+            return json.loads(self._fernet.decrypt(self._path.read_bytes()).decode())
+        except Exception:
+            return {}   # unreadable/corrupt/wrong-key → start empty rather than crash the node
+
+    def _save(self) -> None:
+        self._write_0600(self._path, self._fernet.encrypt(json.dumps(self._data).encode()))
+
+    def get(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self._data[key] = value
+        self._save()
+
+    def delete(self, key: str) -> bool:
         if key in self._data:
             del self._data[key]
             self._save()
