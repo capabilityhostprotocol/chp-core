@@ -28,6 +28,9 @@ _EMITS = [
     "hf_pipeline_started",
     "hf_pipeline_completed",
     "hf_pipeline_failed",
+    "hf_rerank_started",
+    "hf_rerank_completed",
+    "hf_rerank_failed",
     "hf_embed_started",
     "hf_embed_completed",
     "hf_embed_failed",
@@ -68,6 +71,9 @@ _EMITS = [
     "hf_apply_adapter_started",
     "hf_apply_adapter_completed",
     "hf_apply_adapter_failed",
+    "hf_merge_adapter_started",
+    "hf_merge_adapter_completed",
+    "hf_merge_adapter_failed",
     "hf_call_space_started",
     "hf_call_space_completed",
     "hf_call_space_failed",
@@ -389,6 +395,58 @@ class HuggingFaceAdapter(BaseAdapter):
             "text_count": len(texts),
             "latency_ms": latency_ms,
         }
+
+    # ------------------------------------------------------------------
+    # rerank
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.huggingface.rerank",
+        version="1.0.0",
+        description=("Rerank documents by relevance to a query with a locally-cached cross-encoder "
+                     "(BAAI/bge-reranker-base default) — the rerank stage of two-stage retrieve→rerank. "
+                     "Returns results sorted by score desc (optional top_k). Query/doc text never in evidence."),
+        category="ai",
+        risk="medium",
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Query to rank documents against."},
+                "documents": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                              "description": "Candidate documents to rerank."},
+                "model": {"type": "string", "description": "Cross-encoder model (default BAAI/bge-reranker-base)."},
+                "top_k": {"type": "integer", "minimum": 1, "description": "Return only the top-k (default: all)."},
+                "device": {"type": "string", "description": "Device: cpu, cuda, mps, auto"},
+            },
+            "required": ["query", "documents"],
+            "additionalProperties": False,
+        },
+    )
+    async def rerank(self, ctx: Any, payload: dict) -> dict:
+        query: str = payload["query"]
+        documents: list[str] = payload["documents"]
+        model: str = payload.get("model") or "BAAI/bge-reranker-base"
+        top_k = payload.get("top_k")
+        device: str = payload.get("device") or self._config.default_device
+
+        ctx.emit("hf_rerank_started", {"model": model, "doc_count": len(documents), "top_k": top_k},
+                 redacted=False)
+        t0 = time.monotonic()
+        try:
+            scores = await asyncio.to_thread(self._backend().rerank, model, query, documents, device,
+                                             self._config.resolved_cache_dir())
+        except Exception as exc:
+            ctx.emit("hf_rerank_failed", {"model": model, "error": str(exc)[:500]}, redacted=False)
+            raise
+        ranked = sorted(({"index": i, "score": s} for i, s in enumerate(scores)),
+                        key=lambda r: r["score"], reverse=True)
+        if top_k:
+            ranked = ranked[:int(top_k)]
+        latency_ms = round((time.monotonic() - t0) * 1000)
+        ctx.emit("hf_rerank_completed", {"model": model, "doc_count": len(documents),
+                                         "returned": len(ranked), "latency_ms": latency_ms}, redacted=False)
+        return {"model": model, "results": ranked, "latency_ms": latency_ms}
 
     # ------------------------------------------------------------------
     # tokenize
@@ -1130,6 +1188,72 @@ class HuggingFaceAdapter(BaseAdapter):
         return {**result, "latency_ms": latency_ms}
 
     # ------------------------------------------------------------------
+    # merge_adapter — the loop's MERGE step on the CUDA route
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.huggingface.merge_adapter",
+        version="1.0.0",
+        description=(
+            "Merge a PEFT LoRA adapter (local dir from a QLoRA fine-tune, or a hub id) back INTO "
+            "the base weights via merge_and_unload, saving a standalone model at output_dir with its "
+            "tokenizer + chat template — the loop's MERGE step. Feed output_dir to quantize_to_gguf "
+            "then home.model.import (ollama create) to serve the tuned model. Paths logged; weights "
+            "never emitted."
+        ),
+        category="ai",
+        provider="huggingface",
+        risk="medium",
+        side_effects=["model_write"],
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "base_model": {"type": "string", "description": "Base model the LoRA was trained on."},
+                "adapter_path": {"type": "string", "description": "LoRA adapter — local dir (from a fine-tune) or a hub repo id."},
+                "output_dir": {"type": "string", "description": "Output dir for the merged standalone model."},
+            },
+            "required": ["base_model", "adapter_path", "output_dir"],
+            "additionalProperties": False,
+        },
+    )
+    async def merge_adapter(self, ctx: Any, payload: dict) -> dict:
+        base_model: str = payload["base_model"]
+        adapter_path: str = payload["adapter_path"]
+        output_dir: str = payload["output_dir"]
+
+        ctx.emit("hf_merge_adapter_started", {
+            "base_model": base_model,
+            "adapter_path": adapter_path,
+            "output_dir": output_dir,
+        }, redacted=False)
+
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.to_thread(
+                self._backend().merge_adapter,
+                base_model,
+                adapter_path,
+                output_dir,
+                self._config.resolved_cache_dir(),
+                await self._get_token(ctx),
+            )
+        except Exception as exc:
+            ctx.emit("hf_merge_adapter_failed", {
+                "adapter_path": adapter_path,
+                "error": str(exc)[:500],
+            }, redacted=False)
+            raise
+
+        latency_ms = round((time.monotonic() - t0) * 1000)
+        ctx.emit("hf_merge_adapter_completed", {
+            "output_dir": output_dir,
+            "base_model": base_model,
+            "latency_ms": latency_ms,
+        }, redacted=False)
+        return {**result, "latency_ms": latency_ms}
+
+    # ------------------------------------------------------------------
     # call_space
     # ------------------------------------------------------------------
 
@@ -1202,9 +1326,12 @@ class HuggingFaceAdapter(BaseAdapter):
         id="chp.adapters.huggingface.finetune",
         version="1.0.0",
         description=(
-            "Fine-tune a HuggingFace classification model locally using transformers.Trainer. "
-            "Governance: model, dataset, hyperparameters, and final loss logged in evidence. "
-            "No training content or intermediate weights emitted."
+            "Fine-tune a model locally. task_type='text-classification' (transformers.Trainer) or "
+            "'causal-lm' (the GPU route: 4-bit NF4 QLoRA via TRL SFTTrainer + PEFT LoRA over a text "
+            "field → saves a LoRA adapter that feeds merge_adapter→quantize_to_gguf→import). Causal-LM "
+            "4-bit needs a CUDA GPU (else set load_in_4bit=false, or use mlx.finetune on Apple Silicon). "
+            "Governance: model, dataset, hyperparameters, and final loss logged; no training content or "
+            "weights emitted."
         ),
         category="ai",
         risk="high",
@@ -1212,28 +1339,43 @@ class HuggingFaceAdapter(BaseAdapter):
         input_schema={
             "type": "object",
             "properties": {
-                "model": {"type": "string", "description": "Base model to fine-tune, e.g. 'distilbert-base-uncased'"},
-                "dataset_repo_id": {"type": "string", "description": "Hub dataset for training, e.g. 'imdb'"},
-                "output_dir": {"type": "string", "description": "Local path to save the fine-tuned model"},
-                "task_type": {"type": "string", "enum": ["text-classification"], "default": "text-classification"},
+                "model": {"type": "string", "description": "Base model to fine-tune (classification: 'distilbert-base-uncased'; causal-lm: e.g. 'Qwen/Qwen3-8B')"},
+                "dataset_repo_id": {"type": "string", "description": "Hub dataset for training, e.g. 'imdb' (or use inline 'dataset' for causal-lm)"},
+                "dataset": {"type": "array", "items": {"type": "object"},
+                            "description": "causal-lm: inline training records (each with the text field) — train on mesh data with no Hub dataset"},
+                "output_dir": {"type": "string", "description": "Local path to save the fine-tuned model / LoRA adapter"},
+                "task_type": {"type": "string", "enum": ["text-classification", "causal-lm"], "default": "text-classification"},
                 "num_epochs": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3},
                 "batch_size": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8},
                 "learning_rate": {"type": "number", "minimum": 1e-7, "maximum": 0.1, "default": 5e-5},
                 "max_steps": {"type": "integer", "minimum": 1, "description": "Override num_epochs with a fixed step count"},
+                "text_field": {"type": "string", "description": "causal-lm: dataset column holding the training text (default: text/content/prompt)"},
+                "load_in_4bit": {"type": "boolean", "description": "causal-lm: 4-bit NF4 QLoRA (default true; needs CUDA)"},
+                "lora_r": {"type": "integer", "minimum": 1, "maximum": 256, "description": "causal-lm: LoRA rank (default 16)"},
+                "lora_alpha": {"type": "integer", "minimum": 1, "description": "causal-lm: LoRA alpha (default 32)"},
+                "lora_dropout": {"type": "number", "minimum": 0, "maximum": 1, "description": "causal-lm: LoRA dropout (default 0.05)"},
+                "max_seq_len": {"type": "integer", "minimum": 1, "description": "causal-lm: max sequence length (default 1024)"},
             },
-            "required": ["model", "dataset_repo_id", "output_dir"],
+            "required": ["model", "output_dir"],
             "additionalProperties": False,
         },
     )
     async def finetune(self, ctx: Any, payload: dict) -> dict:
         model: str = payload["model"]
-        dataset_repo_id: str = payload["dataset_repo_id"]
+        dataset_repo_id: str = payload.get("dataset_repo_id") or ""
         output_dir: str = payload["output_dir"]
+        if not dataset_repo_id and not payload.get("dataset"):
+            raise ValueError("finetune needs a dataset_repo_id (Hub) or an inline 'dataset' (records)")
         task_type: str = payload.get("task_type", "text-classification")
         num_epochs: int = payload.get("num_epochs", 3)
         batch_size: int = payload.get("batch_size", 8)
         learning_rate: float = payload.get("learning_rate", 5e-5)
         max_steps: int | None = payload.get("max_steps")
+        # causal-lm QLoRA knobs (ignored by the classification path)
+        options = {k: payload[k] for k in
+                   ("text_field", "load_in_4bit", "lora_r", "lora_alpha", "lora_dropout",
+                    "max_seq_len", "dataset")
+                   if k in payload}
 
         ctx.emit("hf_finetune_started", {
             "model": model,
@@ -1243,6 +1385,9 @@ class HuggingFaceAdapter(BaseAdapter):
             "batch_size": batch_size,
             "learning_rate": learning_rate,
             "max_steps": max_steps,
+            # never emit the inline dataset (training content) — only its shape
+            "options": {**{k: v for k, v in options.items() if k != "dataset"},
+                        "dataset_records": len(options["dataset"]) if "dataset" in options else 0},
         }, redacted=False)
 
         t0 = time.monotonic()
@@ -1259,6 +1404,7 @@ class HuggingFaceAdapter(BaseAdapter):
                 max_steps,
                 self._config.resolved_cache_dir(),
                 await self._get_token(ctx),
+                options,
             )
         except Exception as exc:
             ctx.emit("hf_finetune_failed", {

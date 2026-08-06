@@ -377,6 +377,21 @@ class TestGrep:
         files = [m["file"] for m in r.data["matches"]]
         assert any("a.py" in f for f in files)
 
+    def test_grep_pure_python_when_no_binary(self, tmp_path, monkeypatch):
+        # Windows has neither rg nor grep on PATH — grep must still work via the pure-Python path.
+        import chp_adapter_filesystem.adapter as mod
+        monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+        (tmp_path / "a.py").write_text("def foo():\n    API_KEY = 'x'\n")
+        (tmp_path / "b.txt").write_text("def foo(): pass\n")
+        host = _make_host()
+        r = host.invoke("chp.adapters.filesystem.grep", {
+            "pattern": r"API_KEY", "path": str(tmp_path), "glob": "*.py",
+        })
+        assert r.outcome == "success"
+        assert r.data["match_count"] == 1
+        m = r.data["matches"][0]
+        assert "a.py" in m["file"] and m["line_no"] == "2" and "API_KEY" in m["text"]
+
     def test_grep_with_glob_filter(self, tmp_path):
         (tmp_path / "main.py").write_text("SECRET = 'value'\n")
         (tmp_path / "main.txt").write_text("SECRET = 'value'\n")

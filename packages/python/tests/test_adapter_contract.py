@@ -123,6 +123,22 @@ def test_aggregate_health_worst_wins_and_fail_safe() -> None:
     assert agg["adapters"]["broken"]["status"] == "unavailable"
 
 
+def test_register_replace_overwrites_else_skips() -> None:
+    # re-registering a cap id is SKIPPED by default (dedup on startup), but replace=True OVERWRITES
+    # so an adapter re-created with new config (e.g. changed filesystem scope) takes effect live.
+    from chp_core.adapters import register_capability_once
+    h = _host()
+    d = CapabilityDescriptor(id="dup.cap", version="1.0.0", description=".")
+    assert register_capability_once(h, d, lambda _c, _p: {"v": 1}) is not None
+    assert _run(h.ainvoke("dup.cap", {})).data == {"v": 1}
+    # default: already registered -> skipped (None), original handler stays
+    assert register_capability_once(h, d, lambda _c, _p: {"v": 2}) is None
+    assert _run(h.ainvoke("dup.cap", {})).data == {"v": 1}
+    # replace=True: overwrites -> new handler wins
+    assert register_capability_once(h, d, lambda _c, _p: {"v": 2}, replace=True) is not None
+    assert _run(h.ainvoke("dup.cap", {})).data == {"v": 2}
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v", "--no-header", "-p", "no:cacheprovider", "--no-cov"]))

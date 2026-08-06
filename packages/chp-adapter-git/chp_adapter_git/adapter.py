@@ -8,7 +8,7 @@ Evidence hygiene (MUST PRESERVE):
   first 80 chars of each commit subject.
 * Unstaged/staged file content — NEVER in evidence; only file path lists.
 
-Seven capabilities:
+Capabilities:
 
 * ``status``          — working tree status: branch, staged/unstaged/untracked counts
 * ``inspect_repo``    — branch, HEAD SHA, remotes, contributor count
@@ -17,6 +17,9 @@ Seven capabilities:
 * ``precommit_check`` — staged file list + unstaged changes count
 * ``checkout_branch`` — create or switch to a branch
 * ``commit``          — stage specified files and commit with a message
+* ``push`` / ``pull`` / ``merge`` — remote + integration operations
+* ``discover_repos``  — bounded walk for git repositories under a root
+* ``bundle``          — single-file snapshot (``git bundle --all``), verified + hashed
 """
 
 from __future__ import annotations
@@ -528,6 +531,123 @@ class GitAdapter(BaseAdapter):
             "files_staged": len(files),
         }
         ctx.emit("git_response", {"operation": "commit", "sha7": sha7, "files_staged": result["files_staged"]})
+        return result
+
+    # ------------------------------------------------------------------
+    # discover_repos
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.git.discover_repos",
+        version="0.1.0",
+        description="Bounded filesystem walk for git repositories under a root: repo paths "
+                    "+ count. Depth- and count-capped; hidden and vendored trees skipped. "
+                    "Root defaults to the node's configured scope, so a mesh orchestrator can "
+                    "discover repos on ANY node without knowing its local filesystem layout.",
+        category="developer_tooling",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "root": {"type": "string",
+                         "description": "Directory to scan (defaults to the node's configured scope)"},
+                "max_depth": {"type": "integer", "minimum": 1, "maximum": 6},
+                "max_repos": {"type": "integer", "minimum": 1, "maximum": 500},
+                "follow_symlinks": {"type": "boolean",
+                                    "description": "Descend symlinked dirs (default true; "
+                                                   "max_depth/max_repos still bound the walk)"},
+            },
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["git", "discover", "repositories"],
+    )
+    async def discover_repos(self, ctx: Any, payload: dict) -> dict:
+        # Default to the node's configured scope: a control-plane orchestrator doesn't know each
+        # node's local path (Unix vs Windows), so omitting root scans the node's own scope.
+        root = os.path.realpath(payload.get("root") or self._config._effective_repo_path())
+        max_depth = int(payload.get("max_depth") or 3)
+        max_repos = int(payload.get("max_repos") or 200)
+        follow = payload.get("follow_symlinks", True)  # symlinked repos (e.g. to external
+        # drives) are otherwise never descended; max_depth/max_repos still bound the walk.
+        ctx.emit("git_request", {"operation": "discover_repos", "root": root,
+                                 "max_depth": max_depth, "follow_symlinks": follow})
+        if not os.path.isdir(root):
+            ctx.emit("git_error", {"operation": "discover_repos", "error": "root not a directory"})
+            raise RuntimeError(f"discover root is not a directory: {root}")
+
+        skip = {"node_modules", ".venv", "venv", "__pycache__", ".cache"}
+        repos: list[str] = []
+        truncated = False
+        for dirpath, dirnames, _files in os.walk(root, followlinks=follow):
+            depth = os.path.relpath(dirpath, root).count(os.sep)
+            if ".git" in dirnames:
+                repos.append(dirpath)
+                dirnames[:] = []  # a repo's insides are not scanned further
+                if len(repos) >= max_repos:
+                    truncated = True
+                    break
+                continue
+            if depth >= max_depth - 1:
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in skip]
+
+        result = {"root": root, "repos": sorted(repos), "count": len(repos),
+                  "truncated": truncated}
+        ctx.emit("git_response", {"operation": "discover_repos", "count": len(repos),
+                                  "truncated": truncated})
+        return result
+
+    # ------------------------------------------------------------------
+    # bundle
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.git.bundle",
+        version="0.1.0",
+        description="Single-file repository snapshot via `git bundle create --all`, then "
+                    "`git bundle verify` and size. Content-hashing of the snapshot belongs "
+                    "to whatever transports it (e.g. a governed artifact transfer) — this "
+                    "adapter does no raw file IO. Evidence carries counts — never content.",
+        category="developer_tooling",
+        risk="medium",
+        side_effects=["filesystem_write"],
+        input_schema={
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string"},
+                "dest_path": {"type": "string",
+                              "description": "Absolute path the .bundle file is written to"},
+            },
+            "required": ["dest_path"],
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["git", "bundle", "backup", "snapshot"],
+    )
+    async def bundle(self, ctx: Any, payload: dict) -> dict:
+        repo = self._repo(payload)
+        dest = os.path.realpath(payload["dest_path"])
+        ctx.emit("git_request", {"operation": "bundle", "repo_path": repo, "dest_path": dest})
+        try:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            self._git("bundle", "create", dest, "--all", repo=repo)
+            self._git("bundle", "verify", dest, repo=repo)  # integrity before anything trusts it
+            head_sha = self._git("rev-parse", "HEAD", repo=repo)
+        except RuntimeError as exc:
+            ctx.emit("git_error", {"operation": "bundle", "error": str(exc)})
+            raise
+
+        result = {
+            "dest_path": dest,
+            "size_bytes": os.path.getsize(dest),
+            "head_sha7": head_sha[:7],
+            "verified": True,
+        }
+        ctx.emit("git_response", {"operation": "bundle",
+                                  "size_bytes": result["size_bytes"],
+                                  "head_sha7": result["head_sha7"]})
         return result
 
     # ------------------------------------------------------------------

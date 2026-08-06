@@ -41,8 +41,31 @@ class _ComposedBackend:
         data = result.data
         status = data.get("status_code")
         if status is None or status >= 400:
-            raise RuntimeError(f"local_llm HTTP {status} for {method} {path}")
+            # surface the backend's own reason (ollama/llama.cpp put it in json.error or the body) —
+            # without it a tools-schema 400 is undiagnosable.
+            body = data.get("json") or data.get("text") or data.get("body") or ""
+            reason = body.get("error") if isinstance(body, dict) else str(body)
+            detail = f": {str(reason)[:300]}" if reason else ""
+            raise RuntimeError(f"local_llm HTTP {status} for {method} {path}{detail}")
         return data.get("json") or {}
+
+
+# Ollama puts generation params under "options"; tools/think/keep_alive stay top-level.
+# Passing them top-level (the old bug) makes Ollama silently ignore temperature/num_ctx.
+_OLLAMA_OPTION_KEYS = ("temperature", "num_ctx", "top_p", "top_k", "seed", "stop", "repeat_penalty")
+
+
+def _ollama_body(base: dict[str, Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    opts: dict[str, Any] = dict(kwargs.pop("options", None) or {})
+    if "max_tokens" in kwargs:
+        opts["num_predict"] = kwargs.pop("max_tokens")
+    for k in _OLLAMA_OPTION_KEYS:
+        if k in kwargs:
+            opts[k] = kwargs.pop(k)
+    if opts:
+        base["options"] = opts
+    base.update(kwargs)  # remaining: tools, think, keep_alive, format, ...
+    return base
 
 
 class _OllamaBackend(_ComposedBackend):
@@ -53,14 +76,28 @@ class _OllamaBackend(_ComposedBackend):
         return await self._http("POST", "/api/show", {"name": model})
 
     async def generate(self, model: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": model, "prompt": prompt, "stream": False}
-        body.update(kwargs)
+        body = _ollama_body({"model": model, "prompt": prompt, "stream": False}, kwargs)
         return await self._http("POST", "/api/generate", body)
 
     async def chat(self, model: str, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": model, "messages": messages, "stream": False}
-        body.update(kwargs)
+        body = _ollama_body({"model": model, "messages": messages, "stream": False}, kwargs)
         return await self._http("POST", "/api/chat", body)
+
+
+def _openai_body(base: dict[str, Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Map the adapter's semantic params to OpenAI top-level; drop Ollama-only keys."""
+    opts = kwargs.pop("options", None) or {}
+    if "num_predict" in opts and "max_tokens" not in kwargs:
+        kwargs["max_tokens"] = opts["num_predict"]
+    if "temperature" in opts and "temperature" not in kwargs:
+        kwargs["temperature"] = opts["temperature"]
+    for k in ("num_ctx", "think", "keep_alive", "top_k"):  # not OpenAI params
+        kwargs.pop(k, None)
+    for k in ("temperature", "max_tokens", "top_p", "tools", "seed", "stop"):
+        if k in kwargs:
+            base[k] = kwargs.pop(k)
+    base.update(kwargs)
+    return base
 
 
 class _LlamaCppBackend(_ComposedBackend):
@@ -73,8 +110,7 @@ class _LlamaCppBackend(_ComposedBackend):
         return await self._http("GET", f"/v1/models/{model}")
 
     async def generate(self, model: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": model, "prompt": prompt}
-        body.update(kwargs)
+        body = _openai_body({"model": model, "prompt": prompt}, kwargs)
         data = await self._http("POST", "/v1/completions", body)
         choice = (data.get("choices") or [{}])[0]
         usage = data.get("usage", {})
@@ -85,8 +121,7 @@ class _LlamaCppBackend(_ComposedBackend):
         }
 
     async def chat(self, model: str, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": model, "messages": messages}
-        body.update(kwargs)
+        body = _openai_body({"model": model, "messages": messages}, kwargs)
         data = await self._http("POST", "/v1/chat/completions", body)
         choice = (data.get("choices") or [{}])[0]
         usage = data.get("usage", {})

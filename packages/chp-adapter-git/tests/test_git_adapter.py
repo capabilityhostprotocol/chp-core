@@ -5,6 +5,8 @@ All tests use FakeGitBackend — no real git repository required.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from chp_core import LocalCapabilityHost, register_adapter
 from chp_core.store import SQLiteEvidenceStore
@@ -863,7 +865,7 @@ class TestMerge:
 # ---------------------------------------------------------------------------
 
 class TestShaping:
-    def test_ten_capabilities_registered(self):
+    def test_twelve_capabilities_registered(self):
         adapter = GitAdapter()
         caps = list(adapter.capabilities())
         ids = {c.descriptor.id for c in caps}
@@ -877,7 +879,9 @@ class TestShaping:
         assert "chp.adapters.git.push" in ids
         assert "chp.adapters.git.pull" in ids
         assert "chp.adapters.git.merge" in ids
-        assert len(ids) == 10
+        assert "chp.adapters.git.discover_repos" in ids
+        assert "chp.adapters.git.bundle" in ids
+        assert len(ids) == 12
 
     def test_low_risk_read_capabilities(self):
         adapter = GitAdapter()
@@ -907,3 +911,93 @@ class TestShaping:
             schema = cap.descriptor.input_schema
             assert schema.get("additionalProperties") is False, \
                 f"{cap.descriptor.id} missing additionalProperties: false"
+
+
+# ---------------------------------------------------------------------------
+# discover_repos + bundle — these two exercise the real filesystem (and, for
+# bundle, the real git binary): a fake backend cannot produce a bundle file.
+# ---------------------------------------------------------------------------
+class TestDiscoverRepos:
+    @pytest.mark.asyncio
+    async def test_finds_repos_and_skips_vendored(self, tmp_path):
+        for repo in ("alpha", "nested/beta"):
+            (tmp_path / repo / ".git").mkdir(parents=True)
+        (tmp_path / "node_modules" / "dep" / ".git").mkdir(parents=True)  # skipped
+        (tmp_path / "plain").mkdir()
+
+        host = _make_host(FakeGitBackend())
+        result = await host.ainvoke("chp.adapters.git.discover_repos",
+                                    {"root": str(tmp_path)})
+        assert result.outcome == "success"
+        found = {os.path.basename(p) for p in result.data["repos"]}
+        assert found == {"alpha", "beta"} and result.data["count"] == 2
+        assert result.data["truncated"] is False
+
+    @pytest.mark.asyncio
+    async def test_missing_root_errors(self, tmp_path):
+        host = _make_host(FakeGitBackend())
+        result = await host.ainvoke("chp.adapters.git.discover_repos",
+                                    {"root": str(tmp_path / "nope")})
+        assert result.outcome != "success"
+
+    @pytest.mark.asyncio
+    async def test_root_defaults_to_node_scope(self, tmp_path):
+        # Omitting root scans the node's configured scope (default_repo_path) — lets a mesh
+        # orchestrator discover repos on any node without knowing its local filesystem layout.
+        (tmp_path / "gamma" / ".git").mkdir(parents=True)
+        host = _make_host(FakeGitBackend(), repo_path=str(tmp_path))
+        result = await host.ainvoke("chp.adapters.git.discover_repos", {})
+        assert result.outcome == "success"
+        assert {os.path.basename(p) for p in result.data["repos"]} == {"gamma"}
+
+    @pytest.mark.asyncio
+    async def test_max_repos_truncates(self, tmp_path):
+        for i in range(3):
+            (tmp_path / f"r{i}" / ".git").mkdir(parents=True)
+        host = _make_host(FakeGitBackend())
+        result = await host.ainvoke("chp.adapters.git.discover_repos",
+                                    {"root": str(tmp_path), "max_repos": 2})
+        assert result.data["count"] == 2 and result.data["truncated"] is True
+
+
+def _real_repo(tmp_path):
+    import subprocess as sp
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["git", "init", "-q"],
+                ["git", "config", "user.email", "t@t"],
+                ["git", "config", "user.name", "t"]):
+        sp.run(cmd, cwd=repo, check=True, capture_output=True)
+    (repo / "f.txt").write_text("hello")
+    sp.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    sp.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, capture_output=True)
+    return repo
+
+
+class TestBundle:
+    @pytest.mark.asyncio
+    async def test_bundle_creates_verified_hashed_snapshot(self, tmp_path):
+        repo = _real_repo(tmp_path)
+        dest = tmp_path / "out" / "repo.bundle"
+        host = _make_host(SubprocessGitBackend(), repo_path=str(repo))
+        result = await host.ainvoke("chp.adapters.git.bundle",
+                                    {"repo_path": str(repo), "dest_path": str(dest)})
+        assert result.outcome == "success"
+        assert result.data["verified"] is True
+        assert result.data["size_bytes"] == dest.stat().st_size > 0
+        assert result.data["head_sha7"]
+
+        # the snapshot is a REAL restorable bundle: clone from it
+        import subprocess as sp
+        clone = tmp_path / "restored"
+        sp.run(["git", "clone", "-q", str(dest), str(clone)], check=True,
+               capture_output=True)
+        assert (clone / "f.txt").read_text() == "hello"
+
+    @pytest.mark.asyncio
+    async def test_bundle_bad_repo_errors(self, tmp_path):
+        host = _make_host(SubprocessGitBackend(), repo_path=str(tmp_path))
+        result = await host.ainvoke("chp.adapters.git.bundle",
+                                    {"repo_path": str(tmp_path),
+                                     "dest_path": str(tmp_path / "x.bundle")})
+        assert result.outcome != "success"

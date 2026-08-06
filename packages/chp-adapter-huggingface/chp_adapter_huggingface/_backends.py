@@ -51,6 +51,15 @@ class HFBackend(Protocol):
         cache_dir: str,
     ) -> list[list[float]]: ...
 
+    def rerank(
+        self,
+        model: str,
+        query: str,
+        documents: list[str],
+        device: str,
+        cache_dir: str,
+    ) -> list[float]: ...
+
     def tokenize(
         self,
         model: str,
@@ -152,6 +161,15 @@ class HFBackend(Protocol):
         token: str,
     ) -> dict: ...
 
+    def merge_adapter(
+        self,
+        base_model: str,
+        adapter_path: str,
+        output_dir: str,
+        cache_dir: str,
+        token: str,
+    ) -> dict: ...
+
     def call_space(
         self,
         space_id: str,
@@ -172,6 +190,7 @@ class HFBackend(Protocol):
         max_steps: int | None,
         cache_dir: str,
         token: str,
+        options: dict | None = None,
     ) -> dict: ...
 
     def quantize_to_gguf(
@@ -222,6 +241,27 @@ class HFBackend(Protocol):
         device: str,
         cache_dir: str,
     ) -> dict: ...
+
+
+def _qlora_plan(options: dict | None, cuda_available: bool) -> dict:
+    """Resolve causal-LM QLoRA settings from options + hardware. 4-bit NF4 needs a CUDA GPU
+    (bitsandbytes); requesting it without one fails closed with a pointer to the alternatives, rather
+    than silently training full-precision or crashing deep in the trainer. Returns the concrete plan."""
+    opts = options or {}
+    load_in_4bit = bool(opts.get("load_in_4bit", True))
+    if load_in_4bit and not cuda_available:
+        raise RuntimeError(
+            "causal-LM QLoRA 4-bit (bitsandbytes NF4) requires a CUDA GPU. Run it on a CUDA node, "
+            "pass load_in_4bit=false for a plain (unquantized) LoRA, or use chp.adapters.mlx.finetune "
+            "on Apple Silicon.")
+    return {
+        "load_in_4bit": load_in_4bit,
+        "lora_r": int(opts.get("lora_r", 16)),
+        "lora_alpha": int(opts.get("lora_alpha", 32)),
+        "lora_dropout": float(opts.get("lora_dropout", 0.05)),
+        "max_seq_len": int(opts.get("max_seq_len", 1024)),
+        "text_field": opts.get("text_field"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +381,34 @@ class _RealHFBackend:
             vectors.append([float(v) for v in vec])
 
         return vectors
+
+    def rerank(
+        self,
+        model: str,
+        query: str,
+        documents: list[str],
+        device: str,
+        cache_dir: str,
+    ) -> list[float]:
+        """Cross-encoder relevance scores for (query, doc) pairs — a reranker model is an
+        AutoModelForSequenceClassification whose single logit IS the score (bge-reranker, ms-marco
+        cross-encoders). More precise than bi-encoder cosine; the rerank stage of two-stage retrieval."""
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        rd = _resolve_device(device)   # transformers PIPELINE index (-1=cpu); torch.to() needs a real device
+        tdev = rd if isinstance(rd, str) else ("cpu" if rd < 0 else f"cuda:{rd}")
+        tok = self._cached(("rerank-tok", model, cache_dir),
+                           lambda: AutoTokenizer.from_pretrained(model, cache_dir=cache_dir or None))
+        mdl = self._cached(
+            ("rerank-model", model, tdev, cache_dir),
+            lambda: AutoModelForSequenceClassification.from_pretrained(
+                model, cache_dir=cache_dir or None).to(tdev).eval())
+        pairs = [[query, d] for d in documents]
+        with torch.no_grad():
+            enc = tok(pairs, padding=True, truncation=True, max_length=512, return_tensors="pt").to(tdev)
+            logits = mdl(**enc).logits.view(-1).float()
+        return [float(x) for x in logits]
 
     def tokenize(
         self,
@@ -650,6 +718,38 @@ class _RealHFBackend:
             "lora_alpha": getattr(config, "lora_alpha", None),
         }
 
+    def merge_adapter(
+        self,
+        base_model: str,
+        adapter_path: str,
+        output_dir: str,
+        cache_dir: str,
+        token: str,
+    ) -> dict:
+        """Merge a PEFT LoRA adapter (local dir or hub id) back INTO the base weights and save a
+        standalone full-precision model dir — the loop's MERGE step on the CUDA route. The tokenizer
+        (with its chat template) is saved alongside so convert_hf_to_gguf preserves the chat format
+        (a merged model that can't format chats is the classic silent failure). Feed output_dir to
+        quantize_to_gguf → home.model.import (ollama create)."""
+        from peft import PeftModel
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        base = AutoModelForCausalLM.from_pretrained(
+            base_model, cache_dir=cache_dir or None, token=token or None)
+        peft_model = PeftModel.from_pretrained(
+            base, adapter_path, cache_dir=cache_dir or None, token=token or None)
+        merged = peft_model.merge_and_unload()
+        os.makedirs(output_dir, exist_ok=True)
+        merged.save_pretrained(output_dir)
+        tok = AutoTokenizer.from_pretrained(
+            base_model, cache_dir=cache_dir or None, token=token or None)
+        tok.save_pretrained(output_dir)
+        return {
+            "output_dir": output_dir,
+            "base_model": base_model,
+            "adapter_path": adapter_path,
+        }
+
     def call_space(
         self,
         space_id: str,
@@ -667,6 +767,28 @@ class _RealHFBackend:
         return result
 
     def finetune(
+        self,
+        model: str,
+        dataset_repo_id: str,
+        output_dir: str,
+        task_type: str,
+        num_epochs: int,
+        batch_size: int,
+        learning_rate: float,
+        max_steps: int | None,
+        cache_dir: str,
+        token: str,
+        options: dict | None = None,
+    ) -> dict:
+        if task_type == "causal-lm":
+            return self._finetune_causal_lm(model, dataset_repo_id, output_dir, num_epochs,
+                                            batch_size, learning_rate, max_steps, cache_dir,
+                                            token, options or {})
+        return self._finetune_classification(model, dataset_repo_id, output_dir, task_type,
+                                             num_epochs, batch_size, learning_rate, max_steps,
+                                             cache_dir, token)
+
+    def _finetune_classification(
         self,
         model: str,
         dataset_repo_id: str,
@@ -735,6 +857,83 @@ class _RealHFBackend:
             "steps": train_result.global_step,
         }
 
+    def _finetune_causal_lm(
+        self,
+        model: str,
+        dataset_repo_id: str,
+        output_dir: str,
+        num_epochs: int,
+        batch_size: int,
+        learning_rate: float,
+        max_steps: int | None,
+        cache_dir: str,
+        token: str,
+        options: dict,
+    ) -> dict:
+        """Causal-LM QLoRA (the GPU route): 4-bit NF4 base + PEFT LoRA + TRL SFTTrainer over a text
+        field → saves a LoRA ADAPTER (feeds hf.merge_adapter → quantize_to_gguf → home.model.import).
+        4-bit needs CUDA (see _qlora_plan); pass load_in_4bit=false for a plain LoRA off-GPU."""
+        import torch
+        from datasets import load_dataset as hf_load_dataset
+        from peft import LoraConfig, prepare_model_for_kbit_training
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from trl import SFTConfig, SFTTrainer
+
+        plan = _qlora_plan(options, torch.cuda.is_available())
+        inline = options.get("dataset")   # inline records (mesh facts) — like mlx.finetune; no Hub needed
+        if inline:
+            from datasets import Dataset
+            train_ds = Dataset.from_list(inline)
+        else:
+            train_ds = hf_load_dataset(dataset_repo_id, token=token or None,
+                                       cache_dir=cache_dir or None)["train"]
+        feats = train_ds.features
+        text_field = plan["text_field"] or next(
+            (c for c in ("text", "content", "prompt") if c in feats), list(feats)[0])
+
+        tokenizer = AutoTokenizer.from_pretrained(model, cache_dir=cache_dir or None, token=token or None)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model_kwargs: dict = {"cache_dir": cache_dir or None, "token": token or None}
+        if plan["load_in_4bit"]:
+            model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.bfloat16)
+            model_kwargs["device_map"] = "auto"
+        model_obj = AutoModelForCausalLM.from_pretrained(model, **model_kwargs)
+        if plan["load_in_4bit"]:
+            model_obj = prepare_model_for_kbit_training(model_obj)
+
+        lora = LoraConfig(r=plan["lora_r"], lora_alpha=plan["lora_alpha"],
+                          lora_dropout=plan["lora_dropout"], bias="none",
+                          task_type="CAUSAL_LM", target_modules="all-linear")
+
+        # TRL renamed SFTConfig.max_seq_length -> max_length (and moves fields between releases), so
+        # build the kwargs and keep only what THIS TRL's SFTConfig accepts — version-tolerant.
+        import inspect
+        _sft_kwargs = {
+            "output_dir": output_dir, "num_train_epochs": num_epochs,
+            "per_device_train_batch_size": batch_size, "learning_rate": learning_rate,
+            "max_steps": max_steps or -1, "logging_steps": 10, "report_to": "none",
+            "push_to_hub": False, "dataset_text_field": text_field,
+            "max_length": plan["max_seq_len"], "max_seq_length": plan["max_seq_len"],
+        }
+        _accepted = set(inspect.signature(SFTConfig.__init__).parameters)
+        sft_args = SFTConfig(**{k: v for k, v in _sft_kwargs.items() if k in _accepted})
+        trainer = SFTTrainer(model=model_obj, args=sft_args, train_dataset=train_ds,
+                             peft_config=lora, processing_class=tokenizer)
+
+        train_result = trainer.train()
+        trainer.save_model(output_dir)   # the LoRA adapter — merge_adapter turns it into a full model
+
+        return {
+            "output_dir": output_dir, "model": model, "dataset": dataset_repo_id,
+            "task_type": "causal-lm", "adapter": True, "load_in_4bit": plan["load_in_4bit"],
+            "lora_r": plan["lora_r"], "text_field": text_field,
+            "final_loss": round(train_result.training_loss, 6), "steps": train_result.global_step,
+        }
+
     def quantize_to_gguf(
         self,
         model_path: str,
@@ -744,6 +943,7 @@ class _RealHFBackend:
         quantize_bin: str | None,
     ) -> dict:
         import subprocess
+        import sys
         import tempfile
 
         conv_script = convert_script or "/opt/homebrew/bin/convert_hf_to_gguf.py"
@@ -758,7 +958,10 @@ class _RealHFBackend:
         os.close(tmp_fd)
         try:
             conv = subprocess.run(
-                ["python3", conv_script, model_path, "--outtype", "f16", "--outfile", tmp_gguf],
+                # sys.executable, NOT PATH "python3": convert_hf_to_gguf needs transformers/torch,
+                # which live in the adapter's own venv (e.g. an MLX fine-tune node), not necessarily
+                # in whatever python3 the convert script's shebang or PATH resolves to.
+                [sys.executable, conv_script, model_path, "--outtype", "f16", "--outfile", tmp_gguf],
                 capture_output=True, text=True, timeout=3600,
             )
             if conv.returncode != 0:

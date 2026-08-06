@@ -91,6 +91,12 @@ from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
 from .redaction import DEFAULT_SENSITIVE_KEYS, redact_payload
+from .environment import (
+    DEFAULT_ENVIRONMENT,
+    ENVIRONMENTS,
+    current_environment,
+    validate_environment,
+)
 from .types import (
     Actor,
     AgentSessionDescriptor,
@@ -196,6 +202,10 @@ __all__ = [
     "capability",
     "ConversationEvent",
     "CorrelationContext",
+    "ENVIRONMENTS",
+    "DEFAULT_ENVIRONMENT",
+    "current_environment",
+    "validate_environment",
     "DEFAULT_SENSITIVE_KEYS",
     "DenialReason",
     "ExecutionEvidence",

@@ -820,32 +820,41 @@ class LocalCapabilityHost:
             return envelope, None, self._deny(envelope, autonomy_denial)
 
         if descriptor.input_schema:
+            # Import OUTSIDE the validate try: with `import jsonschema` inside a try whose
+            # `except jsonschema.ValidationError` references it, an import failure leaves the name
+            # unbound and evaluating the except clause raises UnboundLocalError (masking the real
+            # error, propagating past the catch-all, and crashing every schema-bearing invocation).
+            # Bind it (or None) first, then validate only when available.
             try:
                 import jsonschema
-                jsonschema.validate(envelope.payload, descriptor.input_schema)
-            except jsonschema.ValidationError as exc:
-                return envelope, None, self._deny(
-                    envelope,
-                    DenialReason(
-                        code="input_schema_validation_failed",
-                        message=exc.message,
-                        retryable=False,
-                        details={
-                            "schema_id": descriptor.input_schema.get("$id"),
-                            "path": list(exc.absolute_path) or None,
-                        },
-                    ),
-                )
-            except Exception as exc:
-                return envelope, None, self._deny(
-                    envelope,
-                    DenialReason(
-                        code="input_schema_validation_failed",
-                        message=f"Schema validation error: {exc}",
-                        retryable=False,
-                        details={"schema_id": descriptor.input_schema.get("$id")},
-                    ),
-                )
+            except ImportError:
+                jsonschema = None
+            if jsonschema is not None:
+                try:
+                    jsonschema.validate(envelope.payload, descriptor.input_schema)
+                except jsonschema.ValidationError as exc:
+                    return envelope, None, self._deny(
+                        envelope,
+                        DenialReason(
+                            code="input_schema_validation_failed",
+                            message=exc.message,
+                            retryable=False,
+                            details={
+                                "schema_id": descriptor.input_schema.get("$id"),
+                                "path": list(exc.absolute_path) or None,
+                            },
+                        ),
+                    )
+                except Exception as exc:
+                    return envelope, None, self._deny(
+                        envelope,
+                        DenialReason(
+                            code="input_schema_validation_failed",
+                            message=f"Schema validation error: {exc}",
+                            retryable=False,
+                            details={"schema_id": descriptor.input_schema.get("$id")},
+                        ),
+                    )
 
         safety_denial = self._check_safety(descriptor, envelope)
         if safety_denial is not None:
@@ -1232,8 +1241,18 @@ class LocalCapabilityHost:
         start failing on a strict result contract they never enforced."""
         if not descriptor.output_schema:
             return None, {}
+        # Import OUTSIDE the validate try (same hazard as input_schema above): with `import
+        # jsonschema` inside a try whose `except jsonschema.ValidationError` references it, an
+        # ImportError leaves the name unbound and evaluating the except clause raises — crashing
+        # every output-schema check when jsonschema isn't installed (chp-core is dependency-free).
+        # Bind it (or None) first; skip validation when unavailable, mirroring input_schema.
         try:
             import jsonschema
+        except ImportError:
+            jsonschema = None
+        if jsonschema is None:
+            return None, {}
+        try:
             jsonschema.validate(data, descriptor.output_schema)
             return None, {}
         except jsonschema.ValidationError as exc:

@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
+from .environment import current_environment
+
 JSON = dict[str, Any]
 
 CORE_EVIDENCE_TYPES = {
@@ -241,6 +243,9 @@ class CorrelationContext:
     parent_correlation_id: str | None = None
     trace_id: str | None = None
     baggage: JSON = field(default_factory=dict)
+    # deployment tier this invocation ran in (dev/test/pilot/prod) — recorded in evidence so a
+    # record is provably attributed to its environment. Defaults to the process's CHP_ENV.
+    environment: str = field(default_factory=current_environment)
 
     @classmethod
     def from_mapping(cls, value: JSON | None) -> "CorrelationContext":
@@ -256,6 +261,7 @@ class CorrelationContext:
             parent_correlation_id=value.get("parent_correlation_id"),
             trace_id=value.get("trace_id"),
             baggage=dict(baggage) if isinstance(baggage, dict) else {},
+            environment=str(value.get("environment") or current_environment()),
         )
 
     def to_dict(self) -> JSON:

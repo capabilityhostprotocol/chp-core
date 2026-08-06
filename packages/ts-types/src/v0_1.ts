@@ -147,6 +147,8 @@ export interface CorrelationContext {
   parent_correlation_id?: string | null;
   trace_id?: string | null;
   baggage?: Record<string, JsonPrimitive>;
+  /** Deployment tier this invocation ran in — recorded so evidence is attributed to its environment. */
+  environment?: "dev" | "test" | "pilot" | "prod";
 }
 
 export interface InvocationEnvelope {

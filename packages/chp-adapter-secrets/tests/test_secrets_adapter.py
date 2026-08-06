@@ -426,11 +426,15 @@ class TestDefaultBackend:
         # On macOS the Keychain is available; falls back to Memory only on init failure.
         assert isinstance(_default_backend(), (KeychainBackend, MemoryBackend))
 
-    def test_default_backend_non_darwin_is_memory(self, monkeypatch):
+    def test_default_backend_non_darwin_is_encrypted_file(self, monkeypatch, tmp_path):
+        # non-darwin now defaults to a DURABLE encrypted file (was MemoryBackend, which lost
+        # secrets on restart). Redirect HOME so it writes to a temp dir, not the real ~/.chp.
         import sys as _sys
         from chp_adapter_secrets.adapter import _default_backend
+        from chp_adapter_secrets.backends import EncryptedFileBackend
         monkeypatch.setattr(_sys, "platform", "linux")
-        assert isinstance(_default_backend(), MemoryBackend)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert isinstance(_default_backend(), EncryptedFileBackend)
 
     def test_two_adapters_have_independent_stores(self):
         host1 = _make_host()
@@ -518,3 +522,51 @@ class TestKeychainBackend:
 
         dump = str([e["payload"] for e in host.store.all()])
         assert secret_val not in dump
+
+
+# ── EncryptedFileBackend (durable non-darwin default) ─────────────────────────
+
+def test_encrypted_backend_persists_across_restart(tmp_path):
+    from chp_adapter_secrets.backends import EncryptedFileBackend
+    p = tmp_path / "secrets.enc"
+    b = EncryptedFileBackend(p)
+    b.set("TAILSCALE_API_KEY", "tskey-abc123")
+    b.set("HF_TOKEN", "hf_xyz")
+    # a fresh instance == a node restart: secrets survive (Memory backend lost them)
+    b2 = EncryptedFileBackend(p)
+    assert b2.get("TAILSCALE_API_KEY") == "tskey-abc123"
+    assert sorted(b2.list_keys()) == ["HF_TOKEN", "TAILSCALE_API_KEY"]
+
+
+def test_encrypted_at_rest(tmp_path):
+    from chp_adapter_secrets.backends import EncryptedFileBackend
+    p = tmp_path / "secrets.enc"
+    EncryptedFileBackend(p).set("K", "super-secret-value")
+    blob = p.read_bytes()
+    assert b"super-secret-value" not in blob and b"\"K\"" not in blob   # ciphertext, not plaintext JSON
+
+
+def test_encrypted_backend_key_file_is_0600(tmp_path):
+    import os
+    from chp_adapter_secrets.backends import EncryptedFileBackend
+    p = tmp_path / "secrets.enc"
+    EncryptedFileBackend(p).set("K", "v")
+    keyfile = p.with_suffix(".key")
+    assert keyfile.exists() and (os.stat(keyfile).st_mode & 0o077) == 0   # owner-only
+
+
+def test_encrypted_backend_delete_persists(tmp_path):
+    from chp_adapter_secrets.backends import EncryptedFileBackend
+    p = tmp_path / "secrets.enc"
+    b = EncryptedFileBackend(p)
+    b.set("A", "1"); b.set("B", "2")
+    assert b.delete("A") is True
+    assert EncryptedFileBackend(p).list_keys() == ["B"]   # deletion survived reload
+
+
+def test_encrypted_backend_corrupt_starts_empty(tmp_path):
+    from chp_adapter_secrets.backends import EncryptedFileBackend
+    p = tmp_path / "secrets.enc"
+    EncryptedFileBackend(p).set("A", "1")             # creates the key
+    p.write_bytes(b"not a valid fernet token")        # corrupt the blob
+    assert EncryptedFileBackend(p).list_keys() == []  # doesn't crash the node

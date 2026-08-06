@@ -303,3 +303,39 @@ class TestConformance:
 
         violations = check_source_file(inspect.getfile(mod))
         assert not violations, f"MLXAdapter has conformance violations: {violations}"
+
+
+def test_ensure_base_snapshot_repo_id_fetches(monkeypatch, tmp_path):
+    """A HF repo id ('org/name') MUST reach snapshot_download — the bug was a guard that treated
+    every 'org/model' as a local path (it contains '/') and skipped the fetch for ALL HF models."""
+    import huggingface_hub
+    called = {}
+    monkeypatch.setattr(huggingface_hub, "snapshot_download",
+                        lambda model, **k: called.update(model=model, patterns=k.get("allow_patterns")))
+    from chp_adapter_mlx.adapter import _ensure_base_snapshot
+    _ensure_base_snapshot("mlx-community/Llama-3.2-1B-Instruct-bf16")
+    assert called.get("model") == "mlx-community/Llama-3.2-1B-Instruct-bf16", "repo id must be fetched"
+    assert ".gitattributes" in called["patterns"] and "*.md" in called["patterns"]
+
+
+def test_ensure_base_snapshot_local_path_noop(tmp_path, monkeypatch):
+    """A real local-path base must be a no-op: never call snapshot_download."""
+    import huggingface_hub
+    monkeypatch.setattr(huggingface_hub, "snapshot_download",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not fetch a local path")))
+    from chp_adapter_mlx.adapter import _ensure_base_snapshot
+    _ensure_base_snapshot(str(tmp_path))          # exists on disk
+    _ensure_base_snapshot("/abs/base/dir")        # explicitly rooted
+    _ensure_base_snapshot("~/base")               # home-rooted
+
+
+def test_ensure_base_snapshot_unreachable_is_caught(monkeypatch):
+    """An unreachable/offline base must be swallowed so fuse still surfaces the real error."""
+    import huggingface_hub
+
+    def boom(*a, **k):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", boom)
+    from chp_adapter_mlx.adapter import _ensure_base_snapshot
+    _ensure_base_snapshot("org/model")  # bare repo id → tries snapshot → caught, no raise

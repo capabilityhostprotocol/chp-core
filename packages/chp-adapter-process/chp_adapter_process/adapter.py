@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from chp_core import BaseAdapter, capability
+from chp_core import AutonomyProfile, BaseAdapter, capability
 
 _EMITS = ["process_start", "process_result", "process_timeout", "process_error"]
 
@@ -80,6 +80,10 @@ class ProcessAdapter(BaseAdapter):
         description="Execute a CLI command with arguments.",
         category="execution",
         risk="high",
+        # Arbitrary code execution is consequential on EVERY node: gate it by approval. The host denies
+        # each invocation with approval_required unless a valid 0037 grant is presented, so governed
+        # callers (mint/present a grant) proceed and ungoverned ones park → resolved via HITL (A2).
+        autonomy=AutonomyProfile(tier="approval_required"),
         input_schema={
             "type": "object",
             "properties": {

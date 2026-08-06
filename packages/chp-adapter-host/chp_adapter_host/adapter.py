@@ -154,33 +154,85 @@ def _free_mem_gb() -> float | None:
     return round(free * page / 1e9, 1) if free else None
 
 
+def _total_ram_gb() -> float:
+    """Total system RAM (GB), cross-platform. Darwin: sysctl; Linux: /proc/meminfo; Windows:
+    ctypes GlobalMemoryStatusEx (os.sysconf is absent on Windows — the bug that returned 0)."""
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            b = int(_facts_sh(["sysctl", "-n", "hw.memsize"]) or 0)
+            return round(b / 1e9, 1) if b else 0.0
+        if system == "Linux":
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal"):
+                        return round(int(line.split()[1]) * 1024 / 1e9, 1)  # kB → GB
+        if system == "Windows":
+            import ctypes
+
+            class _MS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            ms = _MS()
+            ms.dwLength = ctypes.sizeof(_MS)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))  # type: ignore[attr-defined]
+            return round(ms.ullTotalPhys / 1e9, 1)
+    except Exception:
+        return 0.0
+    # Last resort (POSIX with sysconf): pages × page size
+    try:
+        return round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9, 1)
+    except Exception:
+        return 0.0
+
+
+def _nvidia_vram() -> tuple[str, float] | None:
+    """(model, total VRAM GB) of GPU 0 via nvidia-smi — cross-platform (incl. the Windows path
+    the old code missed), or None if no NVIDIA GPU."""
+    smi = shutil.which("nvidia-smi") or r"C:\Windows\System32\nvidia-smi.exe"
+    try:
+        out = subprocess.run(
+            [smi, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=8)
+        if out.returncode != 0 or not out.stdout.strip():
+            return None
+        name, mem = out.stdout.strip().splitlines()[0].split(",")
+        return name.strip(), round(int(mem.strip()) / 1024, 1)  # MiB → GB
+    except Exception:
+        return None
+
+
 def _inference_capacity() -> dict[str, Any]:
     """What this node can serve: the memory ceiling an LLM (weights + KV cache) must fit under, plus
-    free memory. Apple-Silicon aware (unified memory); a conservative fallback elsewhere."""
+    free memory. NVIDIA (discrete VRAM), Apple-Silicon (unified memory), and CPU-only aware —
+    cross-platform, so a Windows NVIDIA node reports real VRAM instead of 0."""
     is_darwin = platform.system() == "Darwin"
     arch = platform.machine()
-    unified = is_darwin and arch == "arm64"
-    ram_bytes = int(_facts_sh(["sysctl", "-n", "hw.memsize"]) or 0) if is_darwin else 0
-    if not ram_bytes:
-        try:
-            ram_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-        except Exception:
-            ram_bytes = 0
-    ram_gb = round(ram_bytes / 1e9, 1)
-    # Metal GPU ceiling: iogpu.wired_limit_mb if raised, else the OS default (~75% of unified RAM on
-    # Apple Silicon; ~25% is reserved for macOS + framework + KV/runtime overhead).
-    wired_mb = int(_facts_sh(["sysctl", "-n", "iogpu.wired_limit_mb"]) or 0) if is_darwin else 0
-    if wired_mb > 0:
-        gpu_gb = round(wired_mb * 1024 * 1024 / 1e9, 1)
-    elif unified:
-        gpu_gb = round(ram_gb * 0.75, 1)
+    ram_gb = _total_ram_gb()
+    nvidia = _nvidia_vram()
+    gpu_model: str | None = None
+    if nvidia:
+        gpu_model, gpu_gb = nvidia          # discrete GPU: real VRAM is the ceiling
+        unified = False
+        source = "nvidia-smi"
+    elif is_darwin and arch == "arm64":
+        unified = True
+        # Metal GPU ceiling: iogpu.wired_limit_mb if raised, else the OS default (~75% of unified RAM;
+        # ~25% reserved for macOS + framework + KV/runtime overhead).
+        wired_mb = int(_facts_sh(["sysctl", "-n", "iogpu.wired_limit_mb"]) or 0)
+        gpu_gb = round(wired_mb * 1024 * 1024 / 1e9, 1) if wired_mb > 0 else round(ram_gb * 0.75, 1)
+        gpu_model = "Apple Silicon GPU"
+        source = "iogpu.wired_limit_mb" if wired_mb > 0 else "~75% unified RAM (default)"
     else:
-        gpu_gb = round(ram_gb * 0.5, 1)
+        unified = False
+        gpu_gb = round(ram_gb * 0.5, 1)     # CPU-only estimate (no discrete GPU detected)
+        source = "~50% RAM (estimate, no discrete GPU)"
     return {"platform": platform.platform(), "arch": arch, "cpu_count": os.cpu_count(),
             "unified_memory": unified, "ram_gb": ram_gb, "gpu_memory_gb": gpu_gb,
-            "free_gb": _free_mem_gb(),
-            "gpu_ceiling_source": ("iogpu.wired_limit_mb" if wired_mb > 0 else
-                                   "~75% unified RAM (default)" if unified else "~50% RAM (estimate)")}
+            "gpu_model": gpu_model, "free_gb": _free_mem_gb(), "gpu_ceiling_source": source}
 
 
 def _guess_layers(params_b: float) -> int:

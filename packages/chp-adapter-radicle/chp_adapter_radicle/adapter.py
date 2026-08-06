@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import os
 import re
+import tarfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from chp_core import BaseAdapter, capability
@@ -248,6 +250,69 @@ class RadicleAdapter(BaseAdapter):
                 repos.append({"rid": rid, "name": name, "visibility": visibility})
         ctx.emit("radicle_response", {"operation": "list_repos", "count": len(repos)})
         return {"repos": repos, "count": len(repos)}
+
+    # ------------------------------------------------------------------
+    # snapshot (governed backup of the Radicle home)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.radicle.snapshot",
+        version=_RAD_CLI_VERSION,
+        description="Snapshot the local Radicle home (identity keys, config, storage) into a tar.gz "
+                    "artifact for governed backup. Storage holds COBs (issues/patches) under "
+                    "refs/namespaces — which working-tree git bundles miss — plus the seeded repos.",
+        category="developer_tooling",
+        risk="medium",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "dest_path": {"type": "string",
+                              "description": "Absolute path to write the tar.gz snapshot to"},
+                "include": {"type": "array",
+                            "items": {"type": "string", "enum": ["keys", "config", "storage"]},
+                            "description": "Parts of the radicle home to include (default: all three)"},
+                "rad_home": {"type": "string",
+                             "description": "Radicle home (default: $RAD_HOME or ~/.radicle)"},
+            },
+            "required": ["dest_path"],
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["radicle", "backup", "snapshot", "cobs"],
+    )
+    async def snapshot(self, ctx: Any, payload: dict) -> dict:
+        include = payload.get("include") or ["keys", "config", "storage"]
+        home = Path(payload.get("rad_home") or os.environ.get("RAD_HOME")
+                    or (Path.home() / ".radicle"))
+        dest = Path(payload["dest_path"])
+        ctx.emit("radicle_request",
+                 {"operation": "snapshot", "rad_home": str(home), "include": include})
+        # selector → concrete path under the radicle home. The private key rides along as-is;
+        # it is encrypted-at-rest when `rad auth` set a passphrase (aes256-ctr/bcrypt header).
+        members = {"keys": home / "keys", "config": home / "config.json",
+                   "storage": home / "storage"}
+        try:
+            if not home.is_dir():
+                raise RuntimeError(f"radicle home not found: {home}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            included: list[str] = []
+            tmp = dest.with_name(dest.name + ".partial")
+            with tarfile.open(tmp, "w:gz") as tar:
+                for sel in include:
+                    src = members.get(sel)
+                    if src is not None and src.exists():
+                        tar.add(str(src), arcname=f"radicle/{src.name}")
+                        included.append(sel)
+            os.replace(tmp, dest)
+        except Exception as exc:
+            ctx.emit("radicle_error", {"operation": "snapshot", "error": str(exc)})
+            raise
+        # sha256 is computed downstream by the fabric transfer (publish_file) — the content
+        # address / integrity check lives there, so the snapshot cap does no raw file reads.
+        size = dest.stat().st_size
+        ctx.emit("radicle_response",
+                 {"operation": "snapshot", "size": size, "included": included})
+        return {"path": str(dest), "size": size, "included": included}
 
     # ------------------------------------------------------------------
     # identity
