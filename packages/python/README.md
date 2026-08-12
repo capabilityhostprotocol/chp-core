@@ -1,8 +1,61 @@
 # chp-core
 
-Reference local host for CHP v0.1.
+The reference local host for the [Capability Host Protocol](https://capabilityhostprotocol.com) —
+the open protocol for declaring, **governing**, and **proving** what agents, tools, and systems do.
 
-This package is intentionally small:
+> See what your agents and tools actually did — and what governed it.
+
+## Try it in two minutes
+
+Your coding agent reads files, runs commands, calls tools. This puts a governed boundary at the
+point of action — no application code changes:
+
+```bash
+pip install chp-core
+chp hooks install                     # Claude Code
+chp hooks install --all-harnesses     # ...or Claude Code + Codex + Gemini CLI
+```
+
+Use your agent normally, then look at what it did:
+
+```bash
+chp session list
+chp session tree <session_id>
+```
+
+Every tool call becomes a typed evidence event, hash-chained and stored locally in
+`~/.chp/evidence.sqlite`. A denial is a first-class event with a reason code — not a swallowed
+exception — and the chain is tamper-evident, so someone who did not run the agent can still tell
+whether the record is intact.
+
+**Docs:** [docs.capabilityhostprotocol.com](https://docs.capabilityhostprotocol.com) ·
+**Source:** [github.com/capabilityhostprotocol/chp-core](https://github.com/capabilityhostprotocol/chp-core)
+
+## Install
+
+```bash
+pip install chp-core                 # zero runtime dependencies
+pip install 'chp-core[schema]'       # enforce capabilities' declared input_schema
+pip install 'chp-core[signing]'      # ed25519 — signed hosts, bundles, mandates
+```
+
+Without `[schema]`, a capability's declared `input_schema` is **not** enforced — the host warns at
+registration and `chp host verify` reports it rather than letting the gap pass silently. Without
+`[signing]`, evidence stays at the hash-chain tier rather than the signed tier.
+
+```bash
+chp host verify     # smoke-tests the host and evidence store in under a second
+```
+
+From a checkout of this repository:
+
+```bash
+python -m pip install -e packages/python
+```
+
+## What this package is
+
+Intentionally small:
 
 - register capabilities
 - discover declarations
@@ -11,18 +64,6 @@ This package is intentionally small:
 - emit append-only SQLite evidence
 - replay evidence by correlation ID
 - optionally serve discovery, invocation, and replay over local HTTP
-
-## Install
-
-```bash
-pip install chp-core
-```
-
-From this repository:
-
-```bash
-python -m pip install -e packages/python
-```
 
 ## Quick Example
 
@@ -175,9 +216,6 @@ chp work run \
 chp work summary chp-dev-001
 chp work replay chp-dev-001
 chp work explain chp-dev-001
-chp work validate-demo endpoint --correlation-id chp-demo-validation
-chp work check-alignment --correlation-id chp-alignment
-chp work check-messaging --correlation-id chp-messaging
 ```
 
 ## Tests
