@@ -34,3 +34,9 @@ pythonpath = ["."]
 
 [tool.hatch.build.targets.wheel]
 packages = ["chp_adapter_host"]
+
+# Apache-2.0 §4(a): recipients of a distribution must receive a copy of the
+# License. Included from the repo root so it cannot drift from canonical.
+[tool.hatch.build.targets.wheel.force-include]
+"../../LICENSE" = "chp_adapter_host/LICENSE"
+"../../NOTICE" = "chp_adapter_host/NOTICE"

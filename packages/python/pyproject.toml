@@ -70,3 +70,12 @@ exclude_lines = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["chp_core"]
+
+# Apache-2.0 §4(a): every recipient of a distribution must get a copy of the
+# License. The wheel shipped only a `License: Apache-2.0` metadata field and no
+# text, so an installed copy carried no licence at all. The canonical file lives at
+# the repo root (and is what the sync manifest publishes), so include it from there
+# rather than maintaining a second copy that can drift.
+[tool.hatch.build.targets.wheel.force-include]
+"../../LICENSE" = "chp_core/LICENSE"
+"../../NOTICE" = "chp_core/NOTICE"
