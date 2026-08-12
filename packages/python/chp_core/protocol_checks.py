@@ -1563,6 +1563,14 @@ def check_messaging(repo_root: Path) -> JSON:
         )
 
     for path in LEGACY_MESSAGING_FILES:
+        # Absent passes: the check exists so a legacy doc that IS shipped carries a
+        # banner. Unpublishing it is the stronger outcome, not a violation — without
+        # this, dropping one from the sync manifest turns the mirror's own gate red
+        # and the file can never be removed.
+        if not (repo_root / path).exists():
+            add_check(checks, f"legacy_doc_labeled_{safe_check_name(path)}", True,
+                      {"path": path, "reason": "not present — nothing to mislabel"})
+            continue
         text = read_text(repo_root / path)
         first_lines = "\n".join(text.splitlines()[:8]).lower()
         add_check(
