@@ -21,6 +21,7 @@
       "description": "CHP adapter \u2014 anchore.io API as governed capabilities (openapi-backed, generated)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -29,7 +30,8 @@
       "category": "platform",
       "description": "effect pre-authorization (single-use, action-bound approval grants)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-asyncapi",
@@ -38,6 +40,7 @@
       "description": "AsyncAPI spec parsing and channel-based messaging",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -47,6 +50,7 @@
       "description": "Queryable audit log over the host evidence store",
       "status": "certified",
       "tier": 1,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -56,6 +60,7 @@
       "description": "Machine-to-machine OAuth2 client credentials and JWT validation",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -65,6 +70,7 @@
       "description": "AWS infrastructure operations as governed capabilities",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -74,6 +80,7 @@
       "description": "Azure infrastructure operations as governed capabilities",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -82,7 +89,8 @@
       "category": "platform",
       "description": "governed headless-browser navigation with a network-enforced domain allowlist",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-calendar",
@@ -91,6 +99,7 @@
       "description": "Calendar event management",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -100,6 +109,7 @@
       "description": "Codebase capability scanner \u2014 surfaces candidate adapters & capabilities (powers onboarding)",
       "status": "experimental",
       "tier": 1,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -109,6 +119,7 @@
       "description": "Run package test suites as governed evidence-producing invocations",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -117,7 +128,8 @@
       "category": "platform",
       "description": "sovereign frontier (MoE) text generation via a local colibri server (github.com/JustVugg/colibri)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-composition",
@@ -126,6 +138,7 @@
       "description": "Compose capabilities into named reusable workflows",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -135,6 +148,7 @@
       "description": "Static and runtime violation checker for capability implementations",
       "status": "certified",
       "tier": 1,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -144,6 +158,7 @@
       "description": "Docker/OCI container execution",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -153,6 +168,7 @@
       "description": "Governed work handoff and delegation lifecycle",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -162,6 +178,7 @@
       "description": "bounded recursive self-improvement (propose + gate new capabilities)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -171,6 +188,7 @@
       "description": "Document search, retrieval, and management",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -180,6 +198,7 @@
       "description": "Outbound email via SMTP or Resend",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -188,7 +207,8 @@
       "category": "platform",
       "description": "on-mesh model eval with signed, portable scorecards",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-evaluation",
@@ -197,6 +217,7 @@
       "description": "LLM and capability evaluation rubrics",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -206,6 +227,7 @@
       "description": "File extraction and format conversion",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -215,6 +237,7 @@
       "description": "Governed file read/write/list with path allowlist",
       "status": "certified",
       "tier": 1,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -224,6 +247,7 @@
       "description": "the recursive flywheel's decision steps (curate + promotion gate + evaluate_and_gate)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -233,6 +257,7 @@
       "description": "Structured form definition, submission, and retrieval",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -242,6 +267,7 @@
       "description": "Google Cloud Platform infrastructure operations",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -251,6 +277,7 @@
       "description": "Git repository inspection and operations",
       "status": "certified",
       "tier": 1,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -260,6 +287,7 @@
       "description": "GitHub repository, pull request, issue, and CI inspection as governed capabilities",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -268,7 +296,8 @@
       "category": "platform",
       "description": "sovereign code/artifact knowledge graph via graphify (BYO mesh backend)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-graphql",
@@ -277,6 +306,7 @@
       "description": "GraphQL queries and mutations as governed capabilities",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -286,6 +316,7 @@
       "description": "gRPC service discovery and unary call invocation",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -295,6 +326,7 @@
       "description": "Report and update the CHP host runtime on a node (governed self-update)",
       "status": "certified",
       "tier": 1,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -304,6 +336,7 @@
       "description": "Governed HTTP client with URL allowlist",
       "status": "certified",
       "tier": 1,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -313,6 +346,7 @@
       "description": "Local HuggingFace artifact consumption \u2014 pull, pipeline, embed, tokenize, dataset, cache",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -322,6 +356,7 @@
       "description": "Jira Cloud issue management",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -331,6 +366,7 @@
       "description": "Run any capability as a polled background job",
       "status": "certified",
       "tier": 1,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -340,6 +376,7 @@
       "description": "Enterprise Kafka event stream operations",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -349,6 +386,7 @@
       "description": "Knowledge graph with injectable graph backend",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -358,6 +396,7 @@
       "description": "Kubernetes cluster management as governed capabilities",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -367,6 +406,7 @@
       "description": "Govern macOS launchd (LaunchAgent) services",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -376,6 +416,7 @@
       "description": "Linear project management via GraphQL",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -385,6 +426,7 @@
       "description": "Bridge CHP capabilities to LLM tool-calling APIs (OpenAI, Anthropic, generic)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -393,7 +435,8 @@
       "category": "platform",
       "description": "hardware-aware LLM model fit, ranking, and discovery (wraps the llmfit CLI)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-local-llm",
@@ -402,6 +445,7 @@
       "description": "Local LLM inference via Ollama (primary) or llama.cpp (fallback)",
       "status": "experimental",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -411,6 +455,7 @@
       "description": "Matrix messaging + human-in-the-loop approvals as governed CHP capabilities (composes through chp.adapters.http)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -420,6 +465,7 @@
       "description": "Wrap Model Context Protocol (MCP) server tools as governed CHP capabilities",
       "status": "certified",
       "tier": 1,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -429,6 +475,7 @@
       "description": "Governed scoped key-value memory for agents",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -438,6 +485,7 @@
       "description": "Conversation transcript storage across JSONL and remote CHP backends",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -447,6 +495,7 @@
       "description": "Apple Silicon native text generation via a local mlx_lm server",
       "status": "experimental",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -456,6 +505,7 @@
       "description": "NATS messaging (pub/sub/request-reply) as governed capabilities",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -464,7 +514,8 @@
       "category": "platform",
       "description": "personal notes over a markdown/Obsidian vault",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-notification",
@@ -473,6 +524,7 @@
       "description": "Multi-channel notification routing",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -482,6 +534,7 @@
       "description": "Notion pages and databases as governed capabilities",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -491,6 +544,7 @@
       "description": "Any REST API described by an OpenAPI spec as governed CHP capabilities",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -500,6 +554,7 @@
       "description": "Organizational hierarchy and people lookup",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -509,6 +564,7 @@
       "description": "Observable agent cognition (planning and reflection)",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -518,6 +574,7 @@
       "description": "Governed PostgreSQL query, mutation, and schema introspection",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -527,6 +584,7 @@
       "description": "Operate a self-hosted Postiz social scheduler via its Public API",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -536,6 +594,7 @@
       "description": "Per-agent/per-user preference storage",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -545,6 +604,7 @@
       "description": "Governed subprocess/CLI execution",
       "status": "experimental",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -554,6 +614,7 @@
       "description": "Radicle p2p code forge (sync, patch, issue, repo identity)",
       "status": "certified",
       "tier": 2,
+      "published": true,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -563,6 +624,7 @@
       "description": "Raspberry Pi physical-world access (GPIO, camera, system stats)",
       "status": "certified",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -572,6 +634,7 @@
       "description": "Governed capability discovery registry over the host catalog",
       "status": "certified",
       "tier": 1,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -581,6 +644,7 @@
       "description": "Release pipeline operations (bump, sync, tag, publish)",
       "status": "certified",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -590,6 +654,7 @@
       "description": "Browser/UI automation (RPA)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -599,6 +664,7 @@
       "description": "Risk assessment and guardrail evaluation",
       "status": "certified",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -607,7 +673,8 @@
       "category": "platform",
       "description": "rootless isolation-boundary command execution (evidence-recorded)",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-scout",
@@ -616,6 +683,7 @@
       "description": "FastContext repo scout subagent",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -625,6 +693,7 @@
       "description": "Sovereign LLM-driven structured web/document extraction (self-hosted ScrapeGraphAI)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -634,6 +703,7 @@
       "description": "Runtime credential injection from env/file/memory backends",
       "status": "certified",
       "tier": 1,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -642,7 +712,8 @@
       "category": "platform",
       "description": "host and lifecycle-manage long-running services on the mesh",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-sglang",
@@ -651,6 +722,7 @@
       "description": "SGLang inference server (CUDA/Linux primary, CPU fallback)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -660,6 +732,7 @@
       "description": "Slack messaging, interactive approvals, and signed-interaction ingest",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -669,6 +742,7 @@
       "description": "Code-writing meta-agent (smolagents) whose tools are CHP capabilities",
       "status": "certified",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -678,6 +752,7 @@
       "description": "CSV and spreadsheet read/write",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -687,6 +762,7 @@
       "description": "Governed finite state machines",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -696,6 +772,7 @@
       "description": "Run the offline steward fleet (emission/conformance/doc/onboarding/demand) on-demand",
       "status": "experimental",
       "tier": 1,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -705,6 +782,7 @@
       "description": "Synology DSM file operations, tasks, and Container Manager",
       "status": "certified",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -714,6 +792,7 @@
       "description": "Tailscale mesh networking for multi-host CHP clusters",
       "status": "certified",
       "tier": 1,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -723,6 +802,7 @@
       "description": "Metal-accelerated text embeddings via a local Text Embeddings Inference server",
       "status": "certified",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -732,6 +812,7 @@
       "description": "emit agent/LLM runs as standard OpenTelemetry GenAI spans",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -741,6 +822,7 @@
       "description": "Multi-hop transformation path planner",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -750,6 +832,7 @@
       "description": "Semantic embedding search with injectable backend",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -759,6 +842,7 @@
       "description": "Vercel deployment platform as governed capabilities",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -768,6 +852,7 @@
       "description": "Apple Silicon native text generation via a local vLLM server",
       "status": "certified",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -777,6 +862,7 @@
       "description": "Inbound webhook signature verification and event normalization",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -785,7 +871,8 @@
       "category": "platform",
       "description": "bounded sovereign web search via a self-hosted SearxNG",
       "status": "experimental",
-      "tier": 2
+      "tier": 2,
+      "published": false
     },
     {
       "id": "chp-adapter-wiremock",
@@ -794,6 +881,7 @@
       "description": "CHP adapter \u2014 WireMock admin API as governed capabilities (openapi-backed; test the factory)",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
@@ -803,6 +891,7 @@
       "description": "Durable workflow execution tracking with injectable backend",
       "status": "experimental",
       "tier": 2,
+      "published": false,
       "publisher_key_id": "d20d8b42b94c3375"
     }
   ],

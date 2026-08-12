@@ -9,6 +9,7 @@ description = "Capability Host Protocol — local execution evidence for agents,
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Project Auxo, Inc." }]
 keywords = ["chp", "capability-host-protocol", "agents", "observability", "governance", "evidence", "replay"]
 classifiers = [
@@ -77,5 +78,3 @@ packages = ["chp_core"]
 # the repo root (and is what the sync manifest publishes), so include it from there
 # rather than maintaining a second copy that can drift.
 [tool.hatch.build.targets.wheel.force-include]
-"../../LICENSE" = "chp_core/LICENSE"
-"../../NOTICE" = "chp_core/NOTICE"

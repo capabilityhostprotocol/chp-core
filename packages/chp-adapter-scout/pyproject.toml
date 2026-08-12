@@ -8,6 +8,7 @@ version = "0.50.0"
 description = "CHP capability adapter — FastContext repo scout subagent"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Auxo" }]
 keywords = ["chp", "capability-host-protocol", "scout", "fastcontext", "agent", "adapter"]
 classifiers = [
@@ -38,8 +39,3 @@ asyncio_mode = "strict"
 [tool.hatch.build.targets.wheel]
 packages = ["chp_adapter_scout"]
 
-# Apache-2.0 §4(a): recipients of a distribution must receive a copy of the
-# License. Included from the repo root so it cannot drift from canonical.
-[tool.hatch.build.targets.wheel.force-include]
-"../../LICENSE" = "chp_adapter_scout/LICENSE"
-"../../NOTICE" = "chp_adapter_scout/NOTICE"
