@@ -8,6 +8,7 @@ version = "0.50.0"
 description = "CHP adapter for local HuggingFace artifact consumption — pull, pipeline, embed, tokenize, dataset, cache"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "chp-core",
     "huggingface_hub>=0.24",
@@ -32,8 +33,3 @@ packages = ["chp_adapter_huggingface"]
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 
-# Apache-2.0 §4(a): recipients of a distribution must receive a copy of the
-# License. Included from the repo root so it cannot drift from canonical.
-[tool.hatch.build.targets.wheel.force-include]
-"../../LICENSE" = "chp_adapter_huggingface/LICENSE"
-"../../NOTICE" = "chp_adapter_huggingface/NOTICE"

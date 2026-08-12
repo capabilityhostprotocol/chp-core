@@ -9,6 +9,7 @@ description = "CHP multi-host router, config-driven adapter host server, and por
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Project Auxo, Inc." }]
 keywords = ["chp", "capability-host-protocol", "agents", "governance", "evidence", "mesh", "onboarding"]
 classifiers = [
@@ -37,8 +38,3 @@ chp-host = "chp_host.cli:main"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 
-# Apache-2.0 §4(a): recipients of a distribution must receive a copy of the
-# License. Included from the repo root so it cannot drift from canonical.
-[tool.hatch.build.targets.wheel.force-include]
-"../../LICENSE" = "chp_host/LICENSE"
-"../../NOTICE" = "chp_host/NOTICE"
