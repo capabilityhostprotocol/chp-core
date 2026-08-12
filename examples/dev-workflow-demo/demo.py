@@ -12,8 +12,12 @@ Then uses a MultiHostRouter to:
   3. Replay the stitched evidence timeline for that correlation.
 
 Run it:  python demo.py
-Needs:   pip install -e chp-core/packages/python  chp-dev/packages/chp-host
+Needs:   pip install chp-core chp-host
          plus chp-adapter-git/-github/-radicle/-process/-container
+
+NOTE: chp-adapter-container is not part of the public distribution; the other four are.
+The demo also inspects a local chp-dev checkout, so paths are specific to this
+workspace — treat it as a worked reference rather than a runnable public example.
 """
 
 from __future__ import annotations

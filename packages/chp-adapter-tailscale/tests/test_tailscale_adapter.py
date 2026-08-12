@@ -7,7 +7,7 @@ matching the Tailscale HTTP API v2 shape. No live Tailscale account needed.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -86,12 +86,15 @@ def _cfg(**kw) -> TailscaleConfig:
 # ---------------------------------------------------------------------------
 
 class TestShaping:
-    def test_three_capabilities(self):
+    def test_capabilities(self):
         ids = {c.descriptor.id for c in TailscaleAdapter().capabilities()}
         assert ids == {
             "chp.adapters.tailscale.devices",
             "chp.adapters.tailscale.chp_hosts",
             "chp.adapters.tailscale.verify_mesh",
+            "chp.adapters.tailscale.serve",
+            "chp.adapters.tailscale.funnel",
+            "chp.adapters.tailscale.funnel_status",
         }
 
     def test_adapter_id(self):
@@ -406,3 +409,80 @@ class TestConfig:
     def test_custom_port_by_tag(self):
         cfg = TailscaleConfig(port_by_tag={"tag:custom": 9000})
         assert cfg.port_for(["tag:custom"]) == 9000
+
+
+# ---------------------------------------------------------------------------
+# serve / funnel (local tailscale CLI via process.run)
+# ---------------------------------------------------------------------------
+
+class _FakeCli:
+    """Fake tailscale CLI runner: (args, timeout) -> (rc, stdout, stderr); records calls.
+    serve/funnel run the CLI directly via subprocess, NOT through the gated process.run cap."""
+
+    def __init__(self, rc: int = 0, stdout: str = "", stderr: str = "") -> None:
+        self.calls: list[list[str]] = []
+        self._rc, self._out, self._err = rc, stdout, stderr
+
+    async def __call__(self, args: list[str], timeout: float) -> tuple[int, str, str]:
+        self.calls.append(list(args))
+        return self._rc, self._out, self._err
+
+
+def _adapter(cli: _FakeCli) -> TailscaleAdapter:
+    return TailscaleAdapter(TailscaleConfig(cli_runner=cli))
+
+
+def test_serve_enables_and_returns_tailnet_url() -> None:
+    cli = _FakeCli(stdout="Available within your tailnet:\nhttps://nuc.tail1234.ts.net/")
+    out = asyncio.run(_adapter(cli).serve(FakeCtx(), {"port": 8099}))
+    assert out["ok"] is True
+    assert out["scope"] == "tailnet"
+    assert out["url"] == "https://nuc.tail1234.ts.net/"
+    assert cli.calls[-1] == ["serve", "--bg", "8099"]   # direct CLI, not process.run
+
+
+def test_funnel_exposes_publicly_and_warns() -> None:
+    cli = _FakeCli(stdout="Available on the internet:\nhttps://nuc.tail1234.ts.net/")
+    out = asyncio.run(_adapter(cli).funnel(FakeCtx(), {"port": 8099}))
+    assert out["public"] is True
+    assert out["public_url"] == "https://nuc.tail1234.ts.net/"
+    assert out["warning"] and "public internet" in out["warning"]
+    assert cli.calls[-1] == ["funnel", "--bg", "8099"]
+
+
+def test_funnel_off_withdraws_without_warning() -> None:
+    cli = _FakeCli(stdout="")
+    out = asyncio.run(_adapter(cli).funnel(FakeCtx(), {"port": 8099, "off": True}))
+    assert out["public"] is False
+    assert out["warning"] is None
+    assert cli.calls[-1] == ["funnel", "8099", "off"]
+
+
+def test_funnel_status_extracts_urls() -> None:
+    cli = _FakeCli(stdout="https://nuc.tail1234.ts.net/ (Funnel on)\nproxy http://127.0.0.1:8099")
+    out = asyncio.run(_adapter(cli).funnel_status(FakeCtx(), {}))
+    assert out["ok"] is True
+    assert "https://nuc.tail1234.ts.net/" in out["urls"]
+    assert cli.calls[-1] == ["serve", "status"]
+
+
+def test_funnel_multi_port_uses_explicit_https_target() -> None:
+    # funnel_port lets one node host several services: gateway on 8443 while another app keeps 443.
+    # tailscale prints the URL already carrying the port; we surface it as-is.
+    cli = _FakeCli(stdout="Available on the internet:\nhttps://nuc.tail1234.ts.net:8443/")
+    out = asyncio.run(_adapter(cli).funnel(FakeCtx(), {"port": 8000, "funnel_port": 8443}))
+    assert cli.calls[-1] == ["funnel", "--bg", "--https=8443", "http://127.0.0.1:8000"]
+    assert out["public_url"] == "https://nuc.tail1234.ts.net:8443/"
+
+
+def test_funnel_multi_port_off_targets_the_port() -> None:
+    cli = _FakeCli(stdout="")
+    asyncio.run(_adapter(cli).funnel(FakeCtx(), {"port": 8000, "funnel_port": 8443, "off": True}))
+    assert cli.calls[-1] == ["funnel", "--https=8443", "off"]
+
+
+def test_funnel_port_443_keeps_bare_url() -> None:
+    cli = _FakeCli(stdout="Available on the internet:\nhttps://nuc.tail1234.ts.net/")
+    out = asyncio.run(_adapter(cli).funnel(FakeCtx(), {"port": 4007, "funnel_port": 443}))
+    assert cli.calls[-1] == ["funnel", "--bg", "--https=443", "http://127.0.0.1:4007"]
+    assert out["public_url"] == "https://nuc.tail1234.ts.net/"  # 443 → no port suffix

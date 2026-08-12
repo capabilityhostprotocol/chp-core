@@ -1,31 +1,68 @@
 # CHP Quickstart
 
-## 1. Install
+Two ways in. Start with the first — it needs no application code.
+
+## 1. Govern the agent you already use (2 minutes)
 
 ```bash
-pip install 'chp-core[signing]' chp-host
+pip install chp-core
+chp hooks install                     # Claude Code
+chp hooks install --all-harnesses     # ...or Claude Code + Codex + Gemini CLI
 ```
 
-The `[signing]` extra pulls the ed25519 backend — you want it for anything
-beyond local experiments: serving a **signed** host, verifying bundles and
-provenance statements, issuing mandates. Plain `pip install chp-core` works
-too and stays at the hash-chain tier.
+Now use your agent exactly as you normally would. Every tool call it makes — `Bash`, `Read`,
+`Edit`, `Write`, `WebFetch` — is captured as a typed evidence event, hash-chained,
+stored locally in `~/.chp/evidence.sqlite`.
 
-Adapters install the same way as you need them
-(`pip install chp-adapter-http chp-adapter-filesystem chp-adapter-audit`, …).
-
-Then take the guided first run:
+Then look at what it actually did:
 
 ```bash
-chp                 # prints the start-here path
-chp serve-demo      # a governed demo host with a copy-pasteable first invoke
+chp session list                  # sessions CHP has recorded
+chp session tree <session_id>     # every call in one, as a replayable tree
+chp session autonomy-report <session_id>
+```
+
+The point is not the log. A denial is a first-class event with a reason code, not a
+swallowed exception; the chain is tamper-evident, so an inspector who did not run
+the agent can still tell whether the record is intact.
+
+Nothing to configure, and nothing to change in your code.
+
+## 2. Install
+
+```bash
+pip install chp-core
+```
+
+`chp-core` has **zero runtime dependencies**. Two extras are worth knowing:
+
+```bash
+pip install 'chp-core[schema]'    # enforce capabilities' declared input_schema
+pip install 'chp-core[signing]'   # ed25519 — signed hosts, bundles, mandates
+```
+
+Without `[schema]`, a capability's declared `input_schema` is **not enforced** —
+the host says so at registration and `chp host verify` reports it. Without
+`[signing]` evidence stays at the hash-chain tier rather than the signed tier.
+For anything beyond local experiments you want both.
+
+TypeScript (second implementation, currently alpha):
+
+```bash
+npm install @capabilityhostprotocol/sdk
+```
+
+Check the install:
+
+```bash
+chp host verify     # smoke-tests the host and evidence store in under a second
 ```
 
 Contributors working from this repository can use editable installs
-(`pip install -e packages/python packages/chp-host`) or the full-node
-bootstrap scripts (`scripts/bootstrap-mac.sh primary`, `scripts/bootstrap-linux.sh`).
+(`pip install -e packages/python packages/chp-host`) or the full-node bootstrap
+scripts (`scripts/bootstrap-mac.sh primary`, `scripts/bootstrap-linux.sh`).
 
-## 2. Declare And Invoke A Capability
+## 3. Declare and invoke your own capability
 
 ```python
 from chp_core import LocalCapabilityHost, capability
@@ -49,29 +86,51 @@ result = host.invoke(
     correlation_id="quickstart-001",
 )
 
+print(result.outcome)       # "success"
 print(result.data)          # {"message": "Hello CHP"}
-print(result.evidence_ids)  # list of evidence event IDs
+print(result.evidence_ids)  # the evidence events this invocation emitted
+
+for event in host.replay("quickstart-001"):
+    print(event.event_type)  # execution_started, greeted, execution_completed
 ```
 
 Use `await host.ainvoke(...)` inside an async event loop.
 
-## 3. Serve A Host Over HTTP
+Or drive the same thing from the CLI against the built-in demo host:
 
 ```bash
-# Profile mode (recommended)
-chp-host serve --profile environments/profiles/mac-dev.json
+chp serve-demo                                                    # a governed host on :8765
+chp invoke demo.echo --payload '{"text":"hello"}' \
+    --correlation-id first-run                                    # in another terminal
+chp replay first-run                                              # its evidence chain
+chp keygen                                                        # sign evidence (signed tier)
+```
 
-# Adapter list mode
+## 4. Serve a host over HTTP
+
+```bash
+# Expose your own host via a factory function
+chp serve-http --module your_app:create_host --port 8765
+
+# Or run the adapter host
 chp-host serve --adapters http,filesystem,audit --port 8803
 
-# Check the host
+# Check it
 curl http://localhost:8803/health
 curl http://localhost:8803/capabilities | python3 -m json.tool | head -40
 ```
 
-## 4. Use With Claude Desktop (MCP)
+`chp-host serve --profile <file>` takes a profile written by `chp-host init`
+(below); the flag expects a path you supply, not one that ships with the package.
 
-`chp-host mcp` exposes all CHP capabilities as MCP tools. Add to
+Capability adapters install as separate packages
+(`pip install chp-adapter-http chp-adapter-filesystem chp-adapter-audit`). Adapter
+releases trail the core release train, so pin what you depend on and check
+`pip index versions chp-adapter-<name>` rather than assuming parity with `chp-core`.
+
+## 5. Use with Claude Desktop (MCP)
+
+`chp-host mcp` exposes CHP capabilities as MCP tools. Add to
 `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
@@ -90,7 +149,7 @@ Restart Claude Desktop. Every tool call is wrapped in CHP evidence.
 See `docs/claude-desktop-mcp.md` for the full setup guide including multi-host
 mesh mode and persistent evidence stores.
 
-## 5. Set Up A Persistent Node
+## 6. Set up a persistent node
 
 ```bash
 # One command from zero to a boot-persistent service
@@ -101,7 +160,7 @@ chp-host status
 curl http://localhost:8803/health
 ```
 
-## 6. Mesh Multiple Nodes
+## 7. Mesh multiple nodes
 
 ```bash
 # On the primary — generate an invite key for a worker
@@ -117,7 +176,7 @@ chp-host mesh list                        # ✓ OK
 chp-host gateway                          # zero-arg: reads ~/.chp/mesh.json
 ```
 
-## 7. Query Evidence
+## 8. Query evidence
 
 ```bash
 # Via adapter (requires audit adapter)
@@ -129,18 +188,18 @@ sqlite3 ~/.chp/mac.sqlite \
   "SELECT capability_id, outcome, started_at FROM invocations ORDER BY started_at DESC LIMIT 10;"
 ```
 
-## 8. Run Conformance
+## 9. Run conformance
 
 ```bash
 python -m pytest packages/python/tests/ packages/chp-host/tests/ -q --no-cov
 ```
 
-## Read Next
+## Read next
 
+- `docs/why-chp.md` — why the protocol exists
 - `docs/claude-desktop-mcp.md` — Claude Desktop / MCP integration guide
+- `docs/adapter-authoring.md` — writing your own capability adapter
 - `docs/wire-protocol.md` — HTTP wire protocol
-- `docs/why-chp.md` — design philosophy
 - `docs/comparisons/chp-vs-mcp.md` — CHP vs MCP
-- `docs/design/capability-adapter-layer.md` — adapter architecture
 - `docs/security/threat-model-v0.1.md` — security model
-- `spec/chp-v0.1.md` — protocol specification
+- `spec/README.md` — the specification index

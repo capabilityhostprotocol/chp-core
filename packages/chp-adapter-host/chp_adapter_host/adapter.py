@@ -344,6 +344,61 @@ class HostAdapter(BaseAdapter):
         return info
 
     @capability(
+        id="chp.adapters.host.invoke",
+        version="1.0.0",
+        description="Invoke a capability on ANOTHER CHP host over the normative HTTP binding (federated "
+                    "invocation). The remote host runs the capability and signs its OWN evidence; the caller "
+                    "layers its governance on top. This is the reusable client primitive for product-layer "
+                    "bridges — e.g. an agent gateway reaching a chp-home control's governed agent-run so a "
+                    "contributed node does the work — so no product hand-rolls RemoteCapabilityHost (the "
+                    "same lesson as consuming chp-transport-zenoh). base_url is caller/operator-supplied; "
+                    "treat it as the destination allowlist boundary.",
+        category="infrastructure",
+        risk="medium",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "base_url": {"type": "string",
+                             "description": "The remote CHP host's HTTP binding, e.g. http://100.80.22.83:8802."},
+                "capability_id": {"type": "string", "description": "Capability id to invoke on the remote host."},
+                "payload": {"type": "object", "description": "Payload for the remote capability.",
+                            "additionalProperties": True},
+                "version": {"type": "string", "description": "Optional capability version to request."},
+                "api_key": {"type": "string",
+                            "description": "Bearer token the remote host authenticates the caller with (if required)."},
+                "timeout": {"type": "integer", "minimum": 1, "maximum": 3600,
+                            "description": "Per-call timeout in seconds (default 120)."},
+            },
+            "required": ["base_url", "capability_id"],
+            "additionalProperties": False,
+        },
+        emits=["host_remote_invoked"],
+        tags=["host", "invoke", "remote", "federation"],
+    )
+    async def invoke(self, ctx: Any, payload: dict) -> dict:
+        from chp_core.http import RemoteCapabilityHost
+        base_url = str(payload["base_url"])
+        capability_id = str(payload["capability_id"])
+        remote = RemoteCapabilityHost(base_url, timeout=int(payload.get("timeout") or 120),
+                                      api_key=payload.get("api_key") or None)
+        result = await remote.ainvoke(capability_id, payload.get("payload") or {},
+                                      version=payload.get("version") or None)
+        outcome = getattr(result, "outcome", None)
+        try:
+            remote_host_key_id = (remote.identity() or {}).get("key_id")
+        except Exception:  # noqa: BLE001 — identity is best-effort provenance, not part of the result
+            remote_host_key_id = None
+        ctx.emit("host_remote_invoked",
+                 {"base_url": base_url, "capability_id": capability_id, "outcome": outcome})
+        return {
+            "outcome": outcome,
+            "data": getattr(result, "data", None),
+            "error": getattr(result, "error", None),
+            "invocation_id": getattr(result, "invocation_id", None),
+            "remote_host_key_id": remote_host_key_id,
+        }
+
+    @capability(
         id="chp.adapters.host.facts",
         version="1.0.0",
         description="Introspect THIS node's setup in one call: host/arch/python, toolchain (claude/codex/rad/"

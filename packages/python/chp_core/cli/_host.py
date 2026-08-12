@@ -17,7 +17,15 @@ def cmd_host_verify(args: argparse.Namespace) -> int:
 
     store_dir: str | None = getattr(args, "store_dir", None)
 
-    @capability(id="verify.ping", version="1.0.0", description="Verify host liveness.")
+    # The schema is not decoration: it drives the invocation down the input-schema
+    # validation path, which is where a missing/misused jsonschema used to 500 every
+    # call on a default install. A schema-less ping would pass a broken host.
+    @capability(
+        id="verify.ping",
+        version="1.0.0",
+        description="Verify host liveness.",
+        input_schema={"type": "object", "properties": {}},
+    )
     def ping() -> dict:  # type: ignore[return-value]
         return {"pong": True}
 
@@ -55,6 +63,16 @@ def cmd_host_verify(args: argparse.Namespace) -> int:
             return 1
 
     print("chp host is healthy — evidence recorded and replayed")
+    from ..host import jsonschema_module
+    if jsonschema_module() is None:
+        print(
+            "WARN: input-schema validation is OFF — jsonschema is not installed, so a "
+            "capability's declared input_schema is not enforced on this host.\n"
+            "      Close the gap:  pip install 'chp-core[schema]'",
+            file=sys.stderr,
+        )
+    else:
+        print("input-schema validation: enforced")
     return 0
 
 

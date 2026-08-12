@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .policy import PolicyConfig, PreToolResult, evaluate_policy
+from .policy import PolicyConfig, PreToolResult, evaluate_policy, floor_violation
 from .redaction import redact_payload
 from .store import SQLiteEvidenceStore
 from .types import AssuranceMetadata, CorrelationContext, ExecutionEvidence, new_id, utc_now
@@ -207,11 +207,18 @@ def process_pre_tool_use(
     cap_id = capability_id_for_tool(tool_name, tool_map, agent_prefix)
     capability_risk = CAPABILITY_RISK_MAP.get(cap_id)
 
-    result = (
-        evaluate_policy(cap_id, tool_input, policy, capability_risk=capability_risk)
-        if policy is not None
-        else PreToolResult(should_block=False, capability_id=cap_id)
-    )
+    # Fail-closed floor FIRST — the catastrophic set is refused regardless of whether a (tunable)
+    # policy file loaded, so the gate can't silently vanish if ~/.chp/policy.json is missing/broken.
+    floor = floor_violation(str(tool_input.get("command", "")))
+    if floor is not None:
+        result = PreToolResult(should_block=True, capability_id=cap_id, reason=floor,
+                               decision="deny", matched_rule="absolute_floor")
+    else:
+        result = (
+            evaluate_policy(cap_id, tool_input, policy, capability_risk=capability_risk)
+            if policy is not None
+            else PreToolResult(should_block=False, capability_id=cap_id)
+        )
 
     _append_event(
         store_path=store_path,

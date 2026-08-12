@@ -2,7 +2,7 @@
 
 The Capability Host Protocol (CHP) is a set of layered documents. This index is the
 **v0.9 release candidate for the *protocol*** — the consolidated normative surface as of
-**v0.8.3** (33 shipped proposals), frozen additive-only as the RC baseline.
+**v0.9.2** (38 proposals shipped, 0001–0038), frozen additive-only as the RC baseline.
 
 > ## ⚠️ This is a *protocol* RC, not a product v1.0 — read first
 >
@@ -20,7 +20,7 @@ The Capability Host Protocol (CHP) is a set of layered documents. This index is 
 | # | Document | Layer | Current version |
 |---|---|---|---|
 | 1 | [chp-v0.1.md](chp-v0.1.md) | Core object model: capabilities, hosts, envelopes, evidence, correlation, replay, outcomes, denial semantics, conformance MUSTs | 0.1 (stable base) |
-| 2 | [chp-v0.2.md](chp-v0.2.md) | Evidence integrity + everything additive since: assurance tiers, canonicalization, hash chains, signed bundles, anchors (§3), key lifecycle, selective disclosure (§14), sealed payloads (§16), mandates (§10), transport/auth + mTLS (§5), Merkle store head (§12), Rekor anchors (§12) | v0.2 → **v0.8.3** |
+| 2 | [chp-v0.2.md](chp-v0.2.md) | Evidence integrity + everything additive since: assurance tiers, canonicalization, hash chains, signed bundles, anchors (§3), key lifecycle, selective disclosure (§14), sealed payloads (§16), mandates (§10), transport/auth + mTLS (§5), Merkle store head (§12), Rekor anchors (§12) | v0.2 → **v0.9.2** |
 | 3 | [chp-governance-v0.2.md](chp-governance-v0.2.md) | Governance vocabulary: the reserved denial codes, risk tiers, autonomy/approval/safety/identity event families, namespacing | v0.2 (additive) |
 | 4 | [chp-invocation-pipeline.md](chp-invocation-pipeline.md) | The normative **12-gate** governed-invocation ordering + per-code trigger predicates | v0.2 → v0.7.4 |
 | 5 | [chp-http-binding.md](chp-http-binding.md) | The **normative** HTTP wire binding: routes, auth (key / token / mTLS), the 200-for-processed rule | v0.2 → v0.8.1 |
@@ -31,12 +31,12 @@ The Capability Host Protocol (CHP) is a set of layered documents. This index is 
 | 10 | [test-vectors/](test-vectors/) | Byte-exact fixtures + `verify.mjs` (the stdlib reference verifier) | pinned |
 
 Supporting: [CHANGELOG.md](CHANGELOG.md) (protocol history, every entry names its
-regression gate) · [proposals/](proposals/) (the 33 numbered proposals + the evolution
+regression gate) · [proposals/](proposals/) (the 38 numbered proposals + the evolution
 rule) · [`schemas/`](../schemas/) (JSON Schemas for every object) ·
 [`conformance/`](../conformance/) (the runner; `--suite wire` against a live host is the
 conformance claim; `--suite transport` adds live mTLS + Zenoh checks).
 
-## The normative surface at v0.8.3 (one-screen map)
+## The normative surface at v0.9.2 (one-screen map)
 
 - **Objects:** `InvocationEnvelope`, `InvocationResult`, `ExecutionEvidence`, signed
   `bundle`, `mandate`, `store-head` / `store-head-anchor`, `auth-token`,
@@ -44,13 +44,13 @@ conformance claim; `--suite transport` adds live mTLS + Zenoh checks).
 - **Pipeline:** **12 gates** (chp-invocation-pipeline.md) — id → resolution (+ capability
   version negotiation) → enabled → mode → mandate (+ `max_invocations`) → policy →
   invariants → autonomy → input schema → safety → execute → **output schema**.
-- **Reserved denial codes (15, closed set):** `capability_not_found`,
-  `capability_disabled`, `unsupported_mode`, `policy_blocked`,
-  `input_schema_validation_failed`, `output_schema_validation_failed`, `invariant_failed`,
-  `budget_exceeded`, `approval_required`, `safety_blocked`, `mandate_invalid`,
-  `mandate_exhausted`, `capability_version_unsupported`, `host_unreachable`,
-  `version_unsupported`. Source of truth: `DenialReason.RESERVED_CODES` (mirrored in the
-  schema + reserved-names.md; a guard enforces all three agree).
+- **Reserved denial codes (17, closed set):** `capability_not_found`,
+  `capability_disabled`, `unsupported_mode`, `policy_blocked`, `escalation_required`,
+  `evidence_required`, `input_schema_validation_failed`, `output_schema_validation_failed`,
+  `invariant_failed`, `budget_exceeded`, `approval_required`, `safety_blocked`,
+  `mandate_invalid`, `mandate_exhausted`, `capability_version_unsupported`,
+  `host_unreachable`, `version_unsupported`. Source of truth: `DenialReason.RESERVED_CODES`
+  (mirrored in the schema + reserved-names.md; a guard enforces all three agree).
 - **Canonicalizations (2):** `chp-stable-v1` (default), `chp-jcs-v1` (RFC 8785) — the
   `canonicalization` field dispatches.
 - **Evidence-hash schemes:** `chp-event-hash-v1` (inline), `chp-event-hash-v2` (payload

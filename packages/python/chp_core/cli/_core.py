@@ -645,8 +645,17 @@ def request_json(method: str, url: str, body: JSON | None = None) -> JSON:
     try:
         with urlopen(request, timeout=5) as response:
             value = json.loads(response.read().decode("utf-8"))
-    except HTTPError:
-        raise  # the server answered — let callers surface its error body
+    except HTTPError as exc:
+        # The server answered. Render ITS error — a governance tool must never fail by
+        # traceback: every command routes through here, so no caller has to repeat this.
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("error", {})
+        except Exception:
+            detail = {}
+        code = detail.get("code") or f"http_{exc.code}"
+        message = detail.get("message") or exc.reason
+        print(f"{url} → {exc.code} {code}: {message}", file=sys.stderr)
+        raise SystemExit(1) from None
     except (URLError, OSError) as exc:
         base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
         reason = getattr(exc, "reason", exc)

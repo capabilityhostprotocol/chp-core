@@ -25,13 +25,54 @@ Capabilities:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from chp_core import BaseAdapter, capability
 
 _EMITS = ["git_request", "git_response", "git_error"]
+
+_git_ensured = False
+
+
+def ensure_git_installed() -> None:
+    """Ensure the ``git`` binary is available; install it best-effort if missing.
+
+    Mesh nodes don't always ship git (a minimal NUC image, a fresh container), which
+    otherwise breaks every git capability with 'command not found'. Check once; if absent,
+    install via the platform package manager (with ``sudo -n`` when not root). Raise a clear
+    error if it genuinely can't be installed, rather than failing opaquely later."""
+    global _git_ensured
+    if _git_ensured or shutil.which("git"):
+        _git_ensured = True
+        return
+    is_root = getattr(os, "geteuid", lambda: 1)() == 0
+    sudo = [] if is_root else (["sudo", "-n"] if shutil.which("sudo") else None)
+    if sudo is None:
+        raise RuntimeError("git is not installed and cannot be auto-installed (no root and no sudo)")
+    # (manager, install steps). apt needs an index refresh first; brew refuses to run as root.
+    managers = [
+        ("apt-get", [["apt-get", "update"], ["apt-get", "install", "-y", "git"]]),
+        ("dnf", [["dnf", "install", "-y", "git"]]),
+        ("yum", [["yum", "install", "-y", "git"]]),
+        ("apk", [["apk", "add", "--no-cache", "git"]]),
+        ("brew", [["brew", "install", "git"]]),
+    ]
+    for mgr, steps in managers:
+        if not shutil.which(mgr):
+            continue
+        prefix = [] if mgr == "brew" else sudo
+        try:
+            for step in steps:
+                subprocess.run(prefix + step, check=True, capture_output=True, timeout=300)
+        except Exception:  # noqa: BLE001 — try the next available manager
+            continue
+        if shutil.which("git"):
+            _git_ensured = True
+            return
+    raise RuntimeError("git is not installed and auto-install via the platform package manager failed")
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +92,7 @@ class SubprocessGitBackend:
     """Production backend: delegates to the ``git`` binary via subprocess."""
 
     def run(self, *args: str, cwd: str | None = None) -> str:
+        ensure_git_installed()
         result = subprocess.run(
             ["git", *args],
             cwd=cwd,

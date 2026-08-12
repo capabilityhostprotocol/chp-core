@@ -113,6 +113,14 @@ class ProcessAdapter(BaseAdapter):
         },
         emits=_EMITS,
         tags=["process", "cli"],
+        # Adapter-first approval descriptor: the adapter declares how an approver sees a gated run —
+        # the kind, a summary template, and the command/args as reviewable content — so the product
+        # (chp-home) renders it generically and owns none of the process shape.
+        metadata={"approval": {
+            "kind": "execute",
+            "summary": "Run: {command}",
+            "content": {"type": "command", "fields": {"command": "command", "args": "args"}},
+        }},
     )
     async def run(self, ctx: Any, payload: dict) -> dict:
         command = payload["command"]

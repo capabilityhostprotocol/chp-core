@@ -53,3 +53,42 @@ def test_missing_registry_skips(tmp_path):
     result = check_registry_alignment(tmp_path)
     assert result.get("skipped") is True
     assert result["passed"] is True
+
+
+def _manifest(root, *, public):
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
+    body = "[sync]\n# a comment\npackages/python/\n" + "".join(
+        f"packages/{p}/\n" for p in public
+    )
+    (root / "scripts" / "sync-manifest.txt").write_text(body)
+
+
+def test_private_adapter_is_out_of_scope(tmp_path):
+    """registry/adapters.json is a PUBLIC catalog. An adapter the manifest keeps
+    private must not force a choice between a red gate and disclosing it."""
+    _layout(tmp_path, packages=["chp-adapter-http", "chp-adapter-secret"],
+            registered=["chp-adapter-http"])
+    _manifest(tmp_path, public=["chp-adapter-http"])
+    result = check_registry_alignment(tmp_path)
+    assert _passed(result) is True
+    assert result["checks"][0]["details"]["scope"] == "public"
+
+
+def test_public_adapter_still_must_be_registered(tmp_path):
+    """The exemption is scoped to private packages — it must not swallow a real
+    unregistered PUBLIC adapter."""
+    _layout(tmp_path, packages=["chp-adapter-http", "chp-adapter-new"],
+            registered=["chp-adapter-http"])
+    _manifest(tmp_path, public=["chp-adapter-http", "chp-adapter-new"])
+    result = check_registry_alignment(tmp_path)
+    assert _passed(result) is False
+    assert "chp-adapter-new" in result["checks"][0]["details"]["unregistered"]
+
+
+def test_no_manifest_falls_back_to_all_packages(tmp_path):
+    """The public mirror has no manifest — every package present is in scope."""
+    _layout(tmp_path, packages=["chp-adapter-http", "chp-adapter-new"],
+            registered=["chp-adapter-http"])
+    result = check_registry_alignment(tmp_path)
+    assert _passed(result) is False
+    assert result["checks"][0]["details"]["scope"] == "all packages"

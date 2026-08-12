@@ -9,8 +9,13 @@ Stands up two differentiated CHP hosts over HTTP —
   3. runs a **stitched** cross-host replay under a shared correlation.
 
 Run it:  python demo.py
-Needs:   pip install -e chp-core/packages/python  chp-dev/packages/chp-host
+Needs:   pip install chp-core chp-host
          plus the chp-adapter-aws/-kubernetes/-vector/-knowledge-graph packages.
+
+NOTE: those four adapters are not part of the public distribution, so this demo does
+not run from a clone of the public mirror alone. For a multi-host walkthrough you can
+actually execute today, see examples/capability-host-endpoint-demo/ and the mesh
+section of docs/quickstart.md.
 """
 
 from __future__ import annotations

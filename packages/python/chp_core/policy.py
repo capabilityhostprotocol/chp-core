@@ -64,6 +64,40 @@ REQUIRED_NEXT_ACTION: dict[str, str] = {
 }
 
 
+# The non-negotiable floor: catastrophic, irreversible commands that must be refused regardless of
+# whether a (tunable) policy file loaded — so the gate can't silently vanish when ~/.chp/policy.json is
+# missing or unparseable. The policy FILE is the extensible layer; this CODE is the guaranteed minimum.
+# Matched quote-masked (see floor_violation) so it doesn't fire on a mention inside a string literal.
+_ABSOLUTE_FLOOR: list[tuple[str, str]] = [
+    (r"--no-verify", "CHP floor: never bypass verification hooks (--no-verify)"),
+    (r"rm\s+-[rfRF]*r[rfRF]*\s+(/|~|\$HOME)(\s|/|\*|$)", "CHP floor: catastrophic recursive delete of a root/home target"),
+    (r"\bmkfs", "CHP floor: filesystem format"),
+    (r"\bdd\s+if=.*of=/dev/", "CHP floor: dd write to a raw device"),
+    (r":\(\)\s*\{\s*:\s*\|", "CHP floor: fork bomb"),
+    (r">\s*/dev/(sd|disk|nvme|hd)", "CHP floor: overwrite of a raw disk device"),
+]
+_ABSOLUTE_FLOOR_RX = [(re.compile(p, re.IGNORECASE), reason) for p, reason in _ABSOLUTE_FLOOR]
+
+
+def floor_violation(command: str) -> str | None:
+    """Return the reason if ``command`` hits the non-negotiable floor, else None. Policy-independent
+    and fail-closed: this is what keeps the catastrophic set refused even with no policy file."""
+    masked = mask_quoted(command or "")
+    for rx, reason in _ABSOLUTE_FLOOR_RX:
+        if rx.search(masked):
+            return reason
+    return None
+
+
+def mask_quoted(s: str) -> str:
+    """Blank out single/double-quoted spans so a dangerous pattern MENTIONED inside a string literal
+    (a ``git commit -m "...--no-verify..."`` message, an ``echo``) doesn't trip a rule meant for the
+    real flag/command. ponytail: naive — doesn't track escaped quotes or ``$(...)``; a crafted-quoting
+    bypass degrades to the prior substring behavior (over-block), never to under-blocking a BARE
+    command, since a command inside quotes isn't being executed as a command."""
+    return re.sub(r"'[^']*'|\"[^\"]*\"", "", s)
+
+
 @dataclass
 class BlockPattern:
     capability_id: str
@@ -73,6 +107,10 @@ class BlockPattern:
     # The decision this rule renders when it matches (proposal 0036). Default "deny"
     # keeps every pre-0036 policy file behaving exactly as before.
     decision: str = "deny"
+    # When true, match against the field with quoted spans masked out (see mask_quoted) — so a rule for
+    # a real shell flag doesn't fire on that flag mentioned inside a string literal. Default False
+    # preserves prior exact-substring behavior for every existing policy file.
+    unquoted: bool = False
 
 
 @dataclass
@@ -140,6 +178,7 @@ def _parse_policy(data: dict[str, Any]) -> PolicyConfig:
             pattern=p["pattern"],
             reason=p.get("reason", "blocked by policy pattern"),
             decision=decision,
+            unquoted=bool(p.get("unquoted", False)),
         ))
     allowed = data.get("allowed_capability_ids")
     version = data.get("version")
@@ -210,9 +249,14 @@ def evaluate_policy(
     # decision (default "deny").
     if decision == "allow":
         for bp in policy.block_patterns:
-            if bp.capability_id != capability_id:
+            # "*" matches any capability — a standard rule (e.g. no `--no-verify`) must fire
+            # regardless of which harness derived the id (claude_code.* / codex.* / gemini.*),
+            # otherwise it silently fails open for harnesses whose id doesn't match.
+            if bp.capability_id != "*" and bp.capability_id != capability_id:
                 continue
             value = str(tool_input.get(bp.field, ""))
+            if bp.unquoted:
+                value = mask_quoted(value)
             try:
                 matched = bool(re.search(bp.pattern, value, re.IGNORECASE))
             except re.error:

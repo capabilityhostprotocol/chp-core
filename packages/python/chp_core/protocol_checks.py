@@ -107,14 +107,44 @@ def check_sync_integrity(repo_root: Path) -> JSON:
     }
 
 
+def _public_adapter_packages(repo_root: Path) -> set[str] | None:
+    """Adapter package names the sync manifest actually publishes, or None.
+
+    registry/adapters.json is a PUBLIC catalog. Requiring an entry for an adapter
+    that the manifest deliberately keeps private would force a choice between a
+    red gate and disclosing unreleased product work — so private adapters are out
+    of scope for the registry check, not exempted case by case.
+
+    None = no manifest (e.g. the public mirror), so fall back to checking every
+    package present.
+    """
+    manifest = repo_root / "scripts" / "sync-manifest.txt"
+    if not manifest.exists():
+        return None
+    public: set[str] = set()
+    section = ""
+    for raw in manifest.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line in ("[sync]", "[exclude]"):
+            section = line
+            continue
+        if section == "[sync]" and line.startswith("packages/chp-adapter-"):
+            public.add(line.rstrip("/").split("/", 1)[1])
+    return public
+
+
 def check_registry_alignment(repo_root: Path) -> JSON:
-    """Every adapter package present must have a registry/adapters.json entry.
+    """Every PUBLISHED adapter package must have a registry/adapters.json entry.
 
     Subset-safe by design: it only asserts package -> entry, never the reverse.
-    chp-dev has all 66 adapter packages; chp-core syncs a subset but the full
+    chp-dev has all the adapter packages; chp-core syncs a subset but the full
     registry — so "entry without package" is expected there and must not fail.
     The reverse (orphan-entry) drift is validated at the source by
     scripts/gen-registry.py --check.
+
+    Scoped to what the sync manifest publishes — see _public_adapter_packages.
     """
     checks: list[JSON] = []
     registry_path = repo_root / "registry" / "adapters.json"
@@ -125,8 +155,10 @@ def check_registry_alignment(repo_root: Path) -> JSON:
 
     registry = read_json(registry_path)
     registered = {a.get("id") for a in registry.get("official", [])}
+    public = _public_adapter_packages(repo_root)
     pkg_ids = sorted(
-        p.name for p in (repo_root / "packages").glob("chp-adapter-*") if p.is_dir()
+        p.name for p in (repo_root / "packages").glob("chp-adapter-*")
+        if p.is_dir() and (public is None or p.name in public)
     )
     unregistered = [pid for pid in pkg_ids if pid not in registered]
     add_check(
@@ -136,6 +168,7 @@ def check_registry_alignment(repo_root: Path) -> JSON:
         {
             "unregistered": unregistered[:10],
             "total_unregistered": len(unregistered),
+            "scope": "public" if public is not None else "all packages",
             "hint": "run: python scripts/gen-registry.py to append, then assign category/tier/status",
         },
     )
