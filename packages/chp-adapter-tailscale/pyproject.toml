@@ -7,6 +7,7 @@ name = "chp-adapter-tailscale"
 version = "0.50.0"
 description = "CHP adapter — Tailscale mesh networking for multi-host CHP clusters"
 requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
 dependencies = ["chp-core"]
 
 [project.entry-points."chp.adapters"]
@@ -15,3 +16,9 @@ tailscale = "chp_adapter_tailscale:TailscaleAdapter"
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 testpaths = ["tests"]
+
+# Apache-2.0 §4(a): recipients of a distribution must receive a copy of the
+# License. Included from the repo root so it cannot drift from canonical.
+[tool.hatch.build.targets.wheel.force-include]
+"../../LICENSE" = "chp_adapter_tailscale/LICENSE"
+"../../NOTICE" = "chp_adapter_tailscale/NOTICE"
