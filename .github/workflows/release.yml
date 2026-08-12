@@ -232,6 +232,73 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+  # ── Verify what ACTUALLY reached PyPI ─────────────────────────────────────
+  # The publish legs above are deliberately fail-soft (continue-on-error) because
+  # adapters without a trusted publisher 403 by design. The cost is that a leg which
+  # uploaded NOTHING is indistinguishable from one that worked: v0.50.0 reported the
+  # whole matrix green while PyPI still served 0.28.0 for filesystem/http/git/mcp.
+  #
+  # So: soft on the publish, LOUD on the report. This job asks PyPI what it actually
+  # serves and names every package that did not ship. It does not gate create-release
+  # — the release record still stands — it just makes the gap impossible to miss.
+  verify-published:
+    name: Verify PyPI has the tagged version
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }}
+    needs: [publish-python, publish-host, publish-adapters]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Compare every package manifest against the PyPI simple index
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Expecting $VERSION on PyPI for every published package."
+          echo ""
+          behind=""
+          # Derived from the tree, not a hardcoded list — a new adapter cannot be
+          # silently omitted from this check the way it can from the matrix.
+          for pyproject in packages/python/pyproject.toml \
+                           packages/chp-host/pyproject.toml \
+                           packages/chp-adapter-*/pyproject.toml; do
+            [ -f "$pyproject" ] || continue
+            name=$(sed -n 's/^name = "\(.*\)"/\1/p' "$pyproject" | head -1)
+            [ -n "$name" ] || continue
+            # Normalise to the simple-index form (PEP 503).
+            slug=$(echo "$name" | tr '[:upper:]_.' '[:lower:]--')
+            html=$(curl -sf --max-time 20 "https://pypi.org/simple/${slug}/" || echo "")
+            if [ -z "$html" ]; then
+              echo "  ?  $name — no PyPI project (never published)"
+              behind="$behind $name(absent)"
+            elif echo "$html" | grep -qF "${VERSION}"; then
+              echo "  ok $name $VERSION"
+            else
+              latest=$(echo "$html" | grep -oE '\-[0-9]+\.[0-9]+\.[0-9]+' | tr -d '-' | sort -V | tail -1)
+              echo "  ✗  $name — PyPI serves ${latest:-unknown}, expected $VERSION"
+              behind="$behind $name"
+            fi
+          done
+          echo ""
+          if [ -n "$behind" ]; then
+            {
+              echo "## Packages that did NOT publish at $VERSION"
+              echo ""
+              for p in $behind; do echo "- \`$p\`"; done
+              echo ""
+              echo "These legs reported success because the PyPI publish step is"
+              echo "\`continue-on-error: true\` — a 403 from a missing trusted publisher is"
+              echo "swallowed. Register each at:"
+              echo ""
+              echo "    https://pypi.org/manage/project/<name>/settings/publishing/"
+              echo "    Repository: capabilityhostprotocol/chp-core"
+              echo "    Workflow:   release.yml"
+              echo "    Environment: release"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "FAILED: the following did not reach PyPI at $VERSION:$behind"
+            exit 1
+          fi
+          echo "All packages present on PyPI at $VERSION." >> "$GITHUB_STEP_SUMMARY"
+
   # ── Create GitHub Release ─────────────────────────────────────────────────
   create-release:
     name: Create GitHub Release
