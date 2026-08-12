@@ -1,12 +1,69 @@
 # Capability Host Protocol
 
+[![PyPI](https://img.shields.io/pypi/v/chp-core?label=chp-core)](https://pypi.org/project/chp-core/)
+[![Python](https://img.shields.io/pypi/pyversions/chp-core)](https://pypi.org/project/chp-core/)
+[![npm](https://img.shields.io/npm/v/@capabilityhostprotocol/sdk?label=%40capabilityhostprotocol%2Fsdk)](https://www.npmjs.com/package/@capabilityhostprotocol/sdk)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-capabilityhostprotocol.com-informational)](https://docs.capabilityhostprotocol.com)
+
 CHP is the open protocol for declaring, **governing**, and **proving** what agents, tools, and systems do — the single signed plane where a human approval, an agent's action, and a system call become the same governed, tamper-evident, replayable event.
 
 The hook is simple:
 
 > See what your agents and tools actually did — and what governed it.
 
+## Try it in two minutes
+
+Your coding agent reads files, runs commands, calls tools. This puts a governed boundary at the point of action — no application code changes:
+
+```bash
+pip install chp-core
+chp hooks install                        # hooks Claude Code
+chp hooks install --all-harnesses        # ...or Claude Code + Codex + Gemini CLI
+```
+
+Use your agent normally, then look at what it did:
+
+```bash
+chp session list
+chp session tree <session_id>
+```
+
+Every tool call is a typed evidence event, hash-chained and stored locally in `~/.chp/evidence.sqlite`. A denial is a first-class event with a reason code — not a swallowed exception — and the chain is tamper-evident, so someone who did not run the agent can still tell whether the record is intact.
+
+Prefer to drive the protocol directly? `chp serve-demo` starts a governed host and prints a copy-pasteable first invocation.
+
+**Full guide:** [`docs/quickstart.md`](docs/quickstart.md) · **why it exists:** [`docs/why-chp.md`](docs/why-chp.md) · **docs site:** [docs.capabilityhostprotocol.com](https://docs.capabilityhostprotocol.com)
+
+## What you get back
+
+Replay is by correlation ID, and the record answers more than "what happened" — from [`examples/agent-operations-demo/`](examples/agent-operations-demo/):
+
+```json
+[
+  {"sequence": 1,  "event_type": "execution_started",   "capability_id": "trace_execution", "outcome": null},
+  {"sequence": 3,  "event_type": "execution_completed", "capability_id": "trace_execution", "outcome": "success"},
+  {"sequence": 7,  "event_type": "execution_started",   "capability_id": "tool.add",        "outcome": null},
+  {"sequence": 12, "event_type": "execution_started",   "capability_id": "tool.multiply",   "outcome": null},
+  {"sequence": 13, "event_type": "execution_completed", "capability_id": "tool.multiply",   "outcome": "success"}
+]
+```
+
+You can also ask what a policy *would* have done to a run that already happened:
+
+```json
+{
+  "invariant": {"id": "deny_multiply_tool", "kind": "capability_id_matches"},
+  "would_have_denied": true,
+  "violating_events": [{"capability_id": "tool.multiply", "event_type": "execution_started"}]
+}
+```
+
+## Why a protocol, not a library
+
 CHP is not another agent framework, tool protocol, or workflow engine. It is the **governed evidence plane** at the capability boundary: what ran *and* what governed it (policy, risk tier, safety checks, human approval, autonomy budgets, denial) emit onto one signed, correlated record. Observability tools split execution across separate, optional, unsigned signals and carry no governance; CHP unifies both and proves them.
+
+**Status:** CHP is a pre-1.0 **release candidate (v0.9.2)** — a frozen, additive wire surface backed by two independent implementations (Python + TypeScript) that pass conformance. `chp-core` ships on PyPI.
 
 ## What CHP Defines
 
@@ -20,61 +77,18 @@ CHP is not another agent framework, tool protocol, or workflow engine. It is the
 - Replay by correlation ID
 - Minimal conformance requirements
 
-## Quickstart
-
-Install the Python reference host from this checkout:
+## Install
 
 ```bash
-python -m pip install -e packages/python
+pip install chp-core                 # zero runtime dependencies
+pip install 'chp-core[schema]'       # enforce declared input_schema
+pip install 'chp-core[signing]'      # ed25519 — signed hosts, bundles, mandates
+npm install @capabilityhostprotocol/sdk   # TypeScript client + verifier (alpha)
 ```
 
-Run the agent/tool observability demo:
+`chp host verify` smoke-tests the install in under a second and reports whether input-schema validation is enforced.
 
-```bash
-python examples/agent-operations-demo/demo.py
-```
-
-Run a served capability host endpoint demo:
-
-```bash
-chp demo endpoint
-```
-
-Run conformance:
-
-```bash
-python conformance/runner.py
-```
-
-Record development work as CHP evidence:
-
-```bash
-chp work run \
-  --intent "Verify CHP tests." \
-  --correlation-id chp-dev-001 \
-  --test-run unit \
-  -- python -m unittest discover -s packages/python/tests
-chp work summary chp-dev-001
-```
-
-Validate the served-host demo as evidence:
-
-```bash
-chp work validate-demo endpoint --correlation-id chp-demo-validation
-chp work replay chp-demo-validation
-```
-
-Check v0.1 protocol alignment:
-
-```bash
-chp work check-alignment --correlation-id chp-alignment
-```
-
-Check launch messaging:
-
-```bash
-chp work check-messaging --correlation-id chp-messaging
-```
+From this checkout: `python -m pip install -e packages/python`.
 
 ## Minimal Capability
 
@@ -99,7 +113,11 @@ result = host.invoke(
     correlation_id="demo-correlation",
 )
 
-events = host.replay("demo-correlation")
+print(result.outcome)       # "success"
+print(result.data)          # {"sum": 5}
+
+for event in host.replay("demo-correlation"):
+    print(event.event_type)  # execution_started, execution_completed
 ```
 
 The host emits `execution_started` and `execution_completed` evidence for the invocation. If execution fails, it emits `execution_failed`. If the host denies invocation, it emits `execution_denied`.
@@ -117,25 +135,23 @@ The host emits `execution_started` and `execution_completed` evidence for the in
 - `examples/codex-self-observation-demo/`: Codex dogfooding demo
 - `examples/mcp-bridge-demo/`: experimental MCP-style bridge prototype
 - `conformance/`: conformance runner
+- `docs/quickstart.md`: install, first run, serving, mesh
+- `docs/why-chp.md`: the problem and the thesis
+- `docs/adapter-authoring.md`: writing your own capability adapter
+- `docs/production-runbook.md`: operations, backup/restore, key compromise
 - `docs/comparisons/chp-vs-mcp.md`: precise MCP comparison
 - `docs/comparisons/chp-and-opentelemetry.md`: OpenTelemetry alignment note
 - `docs/comparisons/landscape.md`: adjacent framework comparison
-- `docs/design/codex-self-observation.md`: Codex dogfooding pattern
-- `docs/design/public-v0.1-internal-legacy-boundary.md`: public/internal boundary
-- `docs/design/evidence-integrity-v0.2.md`: future evidence integrity proposal
 - `docs/security/threat-model-v0.1.md`: v0.1 threat model
-- `docs/release-checklist-v0.1.md`: release-readiness checklist
-- `docs/packaging-v0.1.md`: packaging and versioning plan
 
 ## Production Posture
 
 The reference implementation is hardened for production operation: WAL
 multi-writer safety with hot backup (`chp store backup --verify`), SIGTERM
 drain (in-flight work completes before exit), a fail-loud auth flag
-(`CHP_HOST_REQUIRE_AUTH=1`), non-root container images with health checks,
-scheduled retention, and operator metrics (store size, witness-loop
-liveness, revocation counts, internal errors). Operations, backup/restore,
-rolling upgrades, and the key-compromise runbook:
+(`CHP_HOST_REQUIRE_AUTH=1`), scheduled retention, and operator metrics (store
+size, witness-loop liveness, revocation counts, internal errors). Operations,
+backup/restore, rolling upgrades, and the key-compromise runbook:
 [docs/production-runbook.md](docs/production-runbook.md). Vulnerability
 reporting: [SECURITY.md](SECURITY.md).
 
@@ -143,9 +159,15 @@ reporting: [SECURITY.md](SECURITY.md).
 
 MCP exposes tools and context to AI applications. CHP governs and evidences execution of capabilities.
 
-They fit together. MCP can be a source of capability invocation, and CHP can add correlation, replay, evidence, denial semantics, and future governance at the execution boundary.
+They fit together. MCP can be a source of capability invocation, and CHP adds correlation, replay, evidence, denial semantics, and governance at the execution boundary.
 
 Read more: `docs/comparisons/chp-vs-mcp.md`.
+
+## Contributing
+
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. One thing to know before you open a pull request: **this repository is a generated mirror** of a private development repository. CI rejects pull requests that touch `packages/`, `docs/`, `spec/`, `schemas/`, or `examples/` from a branch that is not `sync/*`, so a code PR against those paths will fail by construction no matter how good it is.
+
+That is not a brush-off — it is the publishing model, and we would rather say so up front than let you find out from a red check. Issues, spec proposals, comparisons, and discussion are the highest-bandwidth way in today; open an issue and we will route the change through the internal flow with attribution.
 
 ## Open Source Boundary
 

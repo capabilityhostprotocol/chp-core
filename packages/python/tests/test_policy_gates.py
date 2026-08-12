@@ -188,3 +188,31 @@ def test_load_policy_fails_closed_on_malformed_file(tmp_path) -> None:
     bad.write_text("{ this is not valid json")
     with pytest.raises(PolicyError):
         load_policy(str(bad))
+
+
+# ---------------------------------------------------------------------------
+# wildcard block patterns (cross-harness standards)
+# ---------------------------------------------------------------------------
+
+def test_wildcard_pattern_matches_any_capability() -> None:
+    # A "*" rule fires regardless of which harness derived the capability id, so one standard
+    # ("no --no-verify") governs Claude Code, Codex, and Gemini shell commands alike.
+    policy = PolicyConfig(block_patterns=[
+        BlockPattern("*", "command", r"--no-verify", "never --no-verify", decision="deny")])
+    for cap in ("claude_code.bash", "codex.tool.bash", "gemini.run_shell_command"):
+        result = evaluate_policy(cap, {"command": "git commit --no-verify -m x"}, policy)
+        assert result.should_block, cap
+        assert result.reason == "never --no-verify"
+
+
+def test_wildcard_pattern_still_respects_field_value() -> None:
+    policy = PolicyConfig(block_patterns=[
+        BlockPattern("*", "command", r"rm -rf /", "destructive", decision="deny")])
+    assert not evaluate_policy("codex.tool.bash", {"command": "ls -la"}, policy).should_block
+
+
+def test_nonwildcard_pattern_ignores_other_capability() -> None:
+    # Regression: a capability-scoped pattern must NOT match a different capability.
+    policy = PolicyConfig(block_patterns=[
+        BlockPattern("claude_code.bash", "command", r"danger", "x", decision="deny")])
+    assert not evaluate_policy("gemini.run_shell_command", {"command": "danger"}, policy).should_block

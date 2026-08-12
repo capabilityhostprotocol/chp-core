@@ -797,6 +797,8 @@ class MLXAdapter(BaseAdapter):
         emits=_EMITS,
         input_schema={
             "type": "object",
+            "x-chp-representation": "hf_dir",      # transmutation-planner: consumes the base model
+            "x-chp-requires": ["lora_adapter"],    # ...with a LoRA adapter to fuse in
             "properties": {
                 "model": {"type": "string", "description": "Base model the LoRA was trained on (defaults to MLX_MODEL)."},
                 "adapter_path": {"type": "string", "description": "LoRA adapter dir produced by mlx.finetune."},
@@ -808,6 +810,13 @@ class MLXAdapter(BaseAdapter):
             },
             "required": ["adapter_path", "save_path"],
             "additionalProperties": False,
+        },
+        # transmutation-planner edge: hf_dir (+lora_adapter) -> safetensors. (export_gguf also
+        # writes GGUF, but a single output_schema declares one representation; the GGUF variant
+        # routes through huggingface.quantize_to_gguf.)
+        output_schema={
+            "type": "object", "x-chp-representation": "safetensors",
+            "x-chp-loss": 0.02, "x-chp-cost-s": 60.0,
         },
     )
     async def fuse(self, ctx: Any, payload: dict) -> dict:

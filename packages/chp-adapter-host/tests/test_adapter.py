@@ -226,3 +226,40 @@ def test_inference_capacity_fit_uses_free_memory_now():
     node = {"gpu_memory_gb": 20.0, "free_gb": 3.0}
     f = _estimate_fit(node, {"params_b": 7, "quant": "q4", "context_tokens": 8192})
     assert f["fits_cold"] is True and f["fits_now"] is False
+
+
+def test_invoke_federates_to_remote_host(monkeypatch):
+    """host.invoke maps its payload → RemoteCapabilityHost.ainvoke and surfaces the remote result plus
+    provenance (the remote host's OWN invocation_id + key), rather than hand-rolling the transport."""
+    import chp_core.http as http_mod
+
+    class _FakeResult:
+        outcome = "success"
+        data = {"message": {"content": "OK"}}
+        error = None
+        invocation_id = "inv_remote_123"
+
+    class _FakeRemote:
+        def __init__(self, base_url, timeout=None, api_key=None):
+            self.base_url, self.timeout, self.api_key = base_url, timeout, api_key
+
+        async def ainvoke(self, capability_id, payload=None, *, version=None):
+            assert capability_id == "chp.adapters.local_llm.chat"
+            assert payload == {"model": "m"}
+            assert self.base_url == "http://node:8802" and self.api_key == "tok"
+            return _FakeResult()
+
+        def identity(self):
+            return {"key_id": "abc123"}
+
+    monkeypatch.setattr(http_mod, "RemoteCapabilityHost", _FakeRemote)
+    result = _host().invoke(
+        "chp.adapters.host.invoke",
+        {"base_url": "http://node:8802", "capability_id": "chp.adapters.local_llm.chat",
+         "payload": {"model": "m"}, "api_key": "tok"},
+    )
+    assert result.outcome == "success"
+    assert result.data["outcome"] == "success"
+    assert result.data["invocation_id"] == "inv_remote_123"
+    assert result.data["remote_host_key_id"] == "abc123"
+    assert result.data["data"]["message"]["content"] == "OK"

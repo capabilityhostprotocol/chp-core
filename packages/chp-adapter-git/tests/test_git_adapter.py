@@ -1001,3 +1001,63 @@ class TestBundle:
                                     {"repo_path": str(tmp_path),
                                      "dest_path": str(tmp_path / "x.bundle")})
         assert result.outcome != "success"
+
+
+# ---------------------------------------------------------------------------
+# ensure_git_installed — auto-install git if the node lacks it
+# ---------------------------------------------------------------------------
+
+import chp_adapter_git.adapter as _gitmod  # noqa: E402
+from chp_adapter_git.adapter import ensure_git_installed  # noqa: E402
+
+
+def _reset_git_ensured() -> None:
+    _gitmod._git_ensured = False
+
+
+def test_ensure_git_present_is_noop(monkeypatch):
+    _reset_git_ensured()
+    monkeypatch.setattr(_gitmod.shutil, "which", lambda x: "/usr/bin/git" if x == "git" else None)
+    calls = []
+    monkeypatch.setattr(_gitmod.subprocess, "run", lambda *a, **k: calls.append(a))
+    ensure_git_installed()
+    assert calls == []  # git present → nothing installed
+
+
+def test_ensure_git_installs_via_apt_with_sudo_when_missing(monkeypatch):
+    _reset_git_ensured()
+    state = {"git": None}
+
+    def which(x):
+        if x == "git":
+            return state["git"]
+        if x in ("apt-get", "sudo"):
+            return f"/usr/bin/{x}"
+        return None
+
+    monkeypatch.setattr(_gitmod.shutil, "which", which)
+    monkeypatch.setattr(_gitmod.os, "geteuid", lambda: 1000, raising=False)  # non-root
+    ran = []
+
+    def fake_run(cmd, **k):
+        ran.append(cmd)
+        if "install" in cmd:          # apt-get install -y git succeeds
+            state["git"] = "/usr/bin/git"
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(_gitmod.subprocess, "run", fake_run)
+    ensure_git_installed()
+    assert state["git"]                                   # git got installed
+    assert any("apt-get" in c for c in ran)
+    assert any(c[:2] == ["sudo", "-n"] for c in ran)     # used sudo as non-root
+
+
+def test_ensure_git_missing_no_sudo_raises(monkeypatch):
+    _reset_git_ensured()
+    monkeypatch.setattr(_gitmod.shutil, "which", lambda x: None)   # no git, no sudo, no manager
+    monkeypatch.setattr(_gitmod.os, "geteuid", lambda: 1000, raising=False)
+    with pytest.raises(RuntimeError, match="no root and no sudo"):
+        ensure_git_installed()

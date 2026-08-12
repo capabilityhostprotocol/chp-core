@@ -87,31 +87,39 @@ By adopting CHP, your project's operations become:
 ### Step 1 — Install (30 seconds)
 
 ```bash
-npm install @auxo/capability-serve
+npm install @capabilityhostprotocol/host
 ```
 
-No native dependencies. No Zenoh required for development.
+No native dependencies. No Zenoh required for development. (The host package pulls
+`@capabilityhostprotocol/sdk`, the pure client + verifier, which you can also install
+on its own if you only need to *call* and *verify* rather than serve.)
+
+Both TypeScript packages are published as **alpha** and version independently of
+`chp-core`; pin an exact version.
 
 ### Step 2 — Define Your First Capability (5 minutes)
 
 Create `src/chp/capabilities.ts`:
 
 ```typescript
-import { defineCapability } from '@auxo/capability-serve';
+import { LocalCapabilityHost } from '@capabilityhostprotocol/host';
+import type { Ctx, JsonValue } from '@capabilityhostprotocol/host';
+
+export const host = new LocalCapabilityHost('myproject');
 
 // Wrap any existing function as a governed capability
-export const myCapability = defineCapability(
+host.register(
   {
-    name: 'myproject.operation.name',    // dot-separated namespace
+    id: 'myproject.operation.name',      // dot-separated namespace
     version: '1.0.0',
     description: 'What this operation does',
-    risk_class: 'low',                   // low | medium | high | critical
+    risk: 'low',                         // low | medium | high | critical
   },
-  async (_ctx, payload: { input: string }) => {
-    // Your existing logic here
-    const result = await yourExistingFunction(payload.input);
+  async (_ctx: Ctx, payload: JsonValue) => {
+    const { input } = payload as { input: string };
+    const result = await yourExistingFunction(input);
     return { success: true, data: result };
-  }
+  },
 );
 ```
 
@@ -120,11 +128,11 @@ export const myCapability = defineCapability(
 Create `src/chp/serve.ts`:
 
 ```typescript
-import { serve } from '@auxo/capability-serve';
-import './capabilities.js';  // registers capabilities on import
+import { createHostServer } from '@capabilityhostprotocol/host';
+import { host } from './capabilities.js';  // registers capabilities on import
 
-await serve({ hostId: 'myproject', allowMock: true });
-console.log('CHP host running');
+createHostServer(host).listen(8765);
+console.log('CHP host running on http://127.0.0.1:8765');
 ```
 
 ### Step 4 — Graduate to Governance (when ready)
@@ -132,77 +140,102 @@ console.log('CHP host running');
 Add entitlements and enforcement:
 
 ```typescript
-defineCapability({
-  name: 'myproject.admin.reset',
-  version: '1.0.0',
-  risk_class: 'high',
-  require_entitlement: true,          // checks ctx.subject entitlements
-  enforcement_mode: 'enforce',         // enforce | audit | disabled
-  minimum_tier: 'S2',                 // minimum assurance tier
-  evidence_types: ['execution_started', 'execution_completed'],
-}, async (ctx, payload) => {
-  // ctx.subject.subject_id identifies the caller
-  // ctx.subject.entitlements is checked automatically
-  return { success: true, data: { reset: true } };
-});
+host.register(
+  {
+    id: 'myproject.admin.reset',
+    version: '1.0.0',
+    risk: 'high',
+    description: 'Reset the thing.',
+    autonomy: { tier: 'approval_required' },   // a human decides before it runs
+    invariants: [
+      {
+        id: 'requires_reason',
+        kind: 'required_payload_fields',
+        enforcement: 'host',
+        parameters: { fields: ['reason'] },
+        failure_behavior: 'deny',
+      },
+    ],
+  },
+  async (ctx, _payload) => {
+    // ctx.subject identifies the caller
+    return { success: true, data: { reset: true } };
+  },
+);
+```
+
+Construct the host with a policy to cap what it will run at all:
+
+```typescript
+const host = new LocalCapabilityHost('myproject', { policy: { max_risk_tier: 'medium' } });
 ```
 
 ### Step 5 — Join the Mesh (when ready)
 
-Remove `allowMock` to connect to the Zenoh mesh:
-
-```bash
-npm install @eclipse-zenoh/zenoh-ts  # add Zenoh client
-```
-
-```typescript
-await serve({ hostId: 'myproject' });
-// Auto-discovers Zenoh at ws://127.0.0.1:10000
-// Other CHP hosts can now discover and invoke your capabilities
-```
+The HTTP binding above is the conformance surface. To reach a host over the Zenoh
+mesh instead, register it with a gateway (`chp-host mesh add`) — see
+[`docs/agentic-mesh.md`](agentic-mesh.md) and [`docs/transports/`](transports/).
 
 ### Type-Only Usage
 
-If you only need CHP types (no capabilities, no serve):
+If you only need CHP types (no host, no server):
+
+```bash
+npm install @capabilityhostprotocol/types
+```
 
 ```typescript
 import type {
-  Evidence,
-  RiskClass,
-  CapabilityDeclaration,
-  AssuranceTier,
-} from '@auxo/capability-host-framework/types';
+  CapabilityDescriptor,
+  InvocationEnvelope,
+  InvocationResult,
+  EvidenceEvent,
+} from '@capabilityhostprotocol/types';
 ```
 
 ### Testing
 
-```typescript
-import { MockZenohSession } from '@auxo/capability-host-framework/testing';
+`buildFixtureHost()` returns the conformance fixture profile — eight capabilities
+covering success, failure, denial, approval, budget, and safety outcomes — so you can
+test against a real governed host with no infrastructure:
 
-// Use in tests — no Zenoh infrastructure needed
-// Set CHP_MOCK=1 env var for CI pipelines
+```typescript
+import { buildFixtureHost } from '@capabilityhostprotocol/host';
+
+const host = buildFixtureHost();
 ```
 
 ---
 
 ## Path B: Python
 
-### Option B1 — Via auxo-agents SDK (if your project uses auxo-agents)
+### Option B1 — Via chp-core (recommended)
+
+```bash
+pip install chp-core
+```
 
 ```python
-from auxo_agents.chp.capability import capability, RiskClass
-from auxo_agents.chp.context import GovernedContext
-from auxo_agents.chp.evidence import EvidenceEmitter
+from chp_core import LocalCapabilityHost, capability
+
+host = LocalCapabilityHost("myproject")
 
 @capability(
-    name="myproject.operation.name",
+    id="myproject.operation.name",
     version="1.0.0",
-    risk_class=RiskClass.LOW,
+    description="What this operation does",
+    risk="low",                       # low | medium | high | critical
 )
-async def my_operation(ctx: GovernedContext, payload: dict) -> dict:
+async def my_operation(ctx, payload: dict) -> dict:
     result = await your_existing_function(payload["input"])
+    ctx.emit("operation_observed", {"input": payload["input"]})
     return {"success": True, "data": result}
+
+host.register(my_operation)
 ```
+
+Serve it over the HTTP binding with `chp serve-http --module your_app:create_host`.
+See [`docs/quickstart.md`](quickstart.md) for the full path.
 
 ### Option B2 — Direct Zenoh (no TypeScript dependency)
 

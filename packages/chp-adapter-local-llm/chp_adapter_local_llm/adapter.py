@@ -26,8 +26,11 @@ _EMITS = [
     "llm_error",
 ]
 
-_DEFAULT_OLLAMA_URL = "http://localhost:11434"
-_DEFAULT_LLAMA_CPP_URL = "http://localhost:8080"
+# 127.0.0.1 (IPv4), not "localhost": ollama/llama.cpp bind IPv4 by default, but "localhost" can
+# resolve to IPv6 ::1 on some hosts — the probe then misses the running server and (with
+# auto_start_ollama) spins up a SECOND empty ollama → "model not found" despite models present.
+_DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+_DEFAULT_LLAMA_CPP_URL = "http://127.0.0.1:8080"
 _DEFAULT_MODEL = "llama3.2"
 
 

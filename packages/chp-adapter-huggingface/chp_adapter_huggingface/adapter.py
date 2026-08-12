@@ -165,6 +165,7 @@ class HuggingFaceAdapter(BaseAdapter):
         emits=_EMITS,
         input_schema={
             "type": "object",
+            "x-chp-representation": "hub_repo",  # transmutation-planner: consumes a Hub repo id
             "properties": {
                 "repo_id": {"type": "string", "description": "Hub repo ID, e.g. 'bert-base-uncased'"},
                 "repo_type": {"type": "string", "enum": ["model", "dataset", "space"], "default": "model"},
@@ -177,6 +178,9 @@ class HuggingFaceAdapter(BaseAdapter):
             },
             "required": ["repo_id"],
             "additionalProperties": False,
+        },
+        output_schema={  # transmutation-planner edge: hub_repo -> hf_dir
+            "type": "object", "x-chp-representation": "hf_dir", "x-chp-cost-s": 120.0,
         },
     )
     async def pull(self, ctx: Any, payload: dict) -> dict:
@@ -1208,6 +1212,8 @@ class HuggingFaceAdapter(BaseAdapter):
         emits=_EMITS,
         input_schema={
             "type": "object",
+            "x-chp-representation": "lora_adapter",  # transmutation-planner: consumes a LoRA adapter
+            "x-chp-requires": ["hf_dir"],            # ...with the base model available
             "properties": {
                 "base_model": {"type": "string", "description": "Base model the LoRA was trained on."},
                 "adapter_path": {"type": "string", "description": "LoRA adapter — local dir (from a fine-tune) or a hub repo id."},
@@ -1215,6 +1221,10 @@ class HuggingFaceAdapter(BaseAdapter):
             },
             "required": ["base_model", "adapter_path", "output_dir"],
             "additionalProperties": False,
+        },
+        output_schema={  # transmutation-planner edge: lora_adapter (+hf_dir) -> hf_dir
+            "type": "object", "x-chp-representation": "hf_dir",
+            "x-chp-loss": 0.02, "x-chp-cost-s": 90.0,
         },
     )
     async def merge_adapter(self, ctx: Any, payload: dict) -> dict:
@@ -1442,6 +1452,7 @@ class HuggingFaceAdapter(BaseAdapter):
         emits=_EMITS,
         input_schema={
             "type": "object",
+            "x-chp-representation": "hf_dir",  # transmutation-planner: consumes a local HF model dir
             "properties": {
                 "model_path": {"type": "string", "description": "Local HuggingFace model directory (output of pull capability)"},
                 "output_path": {"type": "string", "description": "Destination .gguf file path"},
@@ -1451,6 +1462,10 @@ class HuggingFaceAdapter(BaseAdapter):
             },
             "required": ["model_path", "output_path"],
             "additionalProperties": False,
+        },
+        output_schema={  # transmutation-planner edge: hf_dir -> gguf
+            "type": "object", "x-chp-representation": "gguf",
+            "x-chp-loss": 0.15, "x-chp-cost-s": 180.0,
         },
     )
     async def quantize_to_gguf(self, ctx: Any, payload: dict) -> dict:
@@ -1592,6 +1607,7 @@ class HuggingFaceAdapter(BaseAdapter):
         emits=_EMITS,
         input_schema={
             "type": "object",
+            "x-chp-representation": "audio",  # transmutation-planner: consumes an audio file
             "properties": {
                 "audio_path": {"type": "string", "description": "Local path to the audio file"},
                 "model": {"type": "string", "default": "openai/whisper-base", "description": "ASR model id"},
@@ -1600,6 +1616,10 @@ class HuggingFaceAdapter(BaseAdapter):
             },
             "required": ["audio_path"],
             "additionalProperties": False,
+        },
+        output_schema={  # transmutation-planner edge: audio -> text
+            "type": "object", "x-chp-representation": "text",
+            "x-chp-loss": 0.1, "x-chp-cost-s": 30.0,
         },
     )
     async def transcribe_audio(self, ctx: Any, payload: dict) -> dict:
@@ -1647,6 +1667,7 @@ class HuggingFaceAdapter(BaseAdapter):
         emits=_EMITS,
         input_schema={
             "type": "object",
+            "x-chp-representation": "image",  # transmutation-planner: consumes an image
             "properties": {
                 "image_path": {"type": "string", "description": "Local path to the image file"},
                 "model": {"type": "string", "default": "google/vit-base-patch16-224", "description": "Image-classification model id"},
@@ -1655,6 +1676,10 @@ class HuggingFaceAdapter(BaseAdapter):
             },
             "required": ["image_path"],
             "additionalProperties": False,
+        },
+        output_schema={  # transmutation-planner edge: image -> text (labels)
+            "type": "object", "x-chp-representation": "text",
+            "x-chp-loss": 0.3, "x-chp-cost-s": 10.0,
         },
     )
     async def classify_image(self, ctx: Any, payload: dict) -> dict:
@@ -1701,6 +1726,7 @@ class HuggingFaceAdapter(BaseAdapter):
         emits=_EMITS,
         input_schema={
             "type": "object",
+            "x-chp-representation": "text",  # transmutation-planner: consumes a text prompt
             "properties": {
                 "prompt": {"type": "string", "minLength": 1, "description": "Text prompt for image generation"},
                 "output_path": {"type": "string", "description": "Local path to save the generated image (e.g. /tmp/out.png)"},
@@ -1712,6 +1738,10 @@ class HuggingFaceAdapter(BaseAdapter):
             },
             "required": ["prompt", "output_path"],
             "additionalProperties": False,
+        },
+        output_schema={  # transmutation-planner edge: text -> image
+            "type": "object", "x-chp-representation": "image",
+            "x-chp-loss": 0.2, "x-chp-cost-s": 20.0,
         },
     )
     async def generate_image(self, ctx: Any, payload: dict) -> dict:

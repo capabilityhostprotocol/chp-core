@@ -173,6 +173,81 @@ def test_process_pre_tool_emits_success_outcome_when_passed(tmp_path) -> None:
     assert events[0]["outcome"] == "success"
 
 
+# ---------------------------------------------------------------------------
+# hardening: quote-masked precision + fail-closed absolute floor
+# ---------------------------------------------------------------------------
+
+def test_unquoted_pattern_ignores_flag_mentioned_in_quotes() -> None:
+    from chp_core.policy import BlockPattern, PolicyConfig, evaluate_policy
+    verify_flag = "--no-" + "verify"
+    policy = PolicyConfig(block_patterns=[
+        BlockPattern("*", "command", verify_flag, "no bypass", decision="deny", unquoted=True)])
+    # mentioned inside a commit message → NOT the real flag → allowed
+    assert not evaluate_policy("claude_code.bash",
+                               {"command": f'git commit -m "note about {verify_flag} here"'},
+                               policy).should_block
+    # the actual flag → blocked
+    assert evaluate_policy("claude_code.bash",
+                           {"command": f"git commit {verify_flag} -m x"}, policy).should_block
+
+
+def test_absolute_floor_blocks_even_without_policy(tmp_path) -> None:
+    # No policy file at all → the floor still refuses the catastrophic command (fail-closed).
+    store_path = str(tmp_path / "f.sqlite")
+    r = process_pre_tool_use(_make_payload(command="rm -rf /"), store_path, policy=None)
+    assert r.should_block and r.matched_rule == "absolute_floor"
+
+
+def test_absolute_floor_ignores_quoted_mention(tmp_path) -> None:
+    store_path = str(tmp_path / "f.sqlite")
+    r = process_pre_tool_use(
+        _make_payload(command='git commit -m "docs: mention rm -rf / here"'),
+        store_path, policy=None)
+    assert not r.should_block
+
+
+# ---------------------------------------------------------------------------
+# selftest + multi-harness installer (fleet-provisionable governance)
+# ---------------------------------------------------------------------------
+
+def test_selftest_passes_with_default_policy(tmp_path) -> None:
+    import argparse
+    import json as _json
+    from chp_core.cli._hooks import _default_policy, cmd_hook_selftest
+    pf = tmp_path / "policy.json"
+    pf.write_text(_json.dumps(_default_policy()))
+    assert cmd_hook_selftest(argparse.Namespace(policy=str(pf))) == 0
+
+
+def test_selftest_catches_regressed_policy(tmp_path) -> None:
+    # A policy that forgot `unquoted` wrongly blocks a quoted MENTION — selftest must fail loudly.
+    import argparse
+    import json as _json
+    from chp_core.cli._hooks import cmd_hook_selftest
+    verify_flag = "--no-" + "verify"
+    bad = {"version": "x", "block_patterns": [
+        {"capability_id": "*", "field": "command", "pattern": verify_flag, "reason": "x", "decision": "deny"}]}
+    pf = tmp_path / "bad.json"
+    pf.write_text(_json.dumps(bad))
+    assert cmd_hook_selftest(argparse.Namespace(policy=str(pf))) == 1
+
+
+def test_installer_multi_harness_idempotent(tmp_path, monkeypatch) -> None:
+    import json as _json
+    from chp_core.cli._hooks import _install_codex_hooks, _install_gemini_hooks, _write_default_policy
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for _ in range(2):  # idempotent
+        _install_gemini_hooks("/x/store.sqlite", "chp")
+        _install_codex_hooks("/x/store.sqlite", "chp")
+        _write_default_policy()
+    g = _json.loads((tmp_path / ".gemini" / "settings.json").read_text())
+    cmds = [h["command"] for e in g["hooks"]["PreToolUse"] for h in e["hooks"]]
+    assert sum("gemini-pre-tool" in c for c in cmds) == 1
+    ctext = (tmp_path / ".codex" / "config.toml").read_text()
+    assert ctext.count("codex-pre-tool") == 1
+    assert ctext.count("hooks = true") == 1
+
+
 def test_process_pre_tool_emits_denied_outcome_when_blocked(tmp_path) -> None:
     store_path = str(tmp_path / "test.sqlite")
     policy = PolicyConfig(block_capability_ids=["claude_code.bash"], block_patterns=[])

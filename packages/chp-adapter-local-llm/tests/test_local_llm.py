@@ -258,3 +258,13 @@ def test_http_error_surfaces_backend_body():
     with pytest.raises(RuntimeError) as ei:
         asyncio.run(be.chat("m", [{"role": "user", "content": "hi"}], tools=[{"bad": 1}]))
     assert "400" in str(ei.value) and "invalid tool schema" in str(ei.value)
+
+
+def test_default_urls_are_ipv4_not_localhost(monkeypatch):
+    # Regression for rad:6de5c0f — "localhost" can resolve to IPv6 ::1 and miss the IPv4-bound
+    # ollama/llama.cpp, spawning a second empty ollama. Defaults must be 127.0.0.1.
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("LLAMA_CPP_BASE_URL", raising=False)
+    cfg = LocalLLMConfig()
+    assert cfg.resolved_ollama_url() == "http://127.0.0.1:11434"
+    assert cfg.resolved_llama_cpp_url() == "http://127.0.0.1:8080"

@@ -24,22 +24,48 @@ API keys and auth tokens are NEVER emitted.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from chp_core import BaseAdapter, capability
 
+
+async def _default_ts_runner(command: str, args: list[str], timeout: float) -> tuple[int, str, str]:
+    """Run ``<command> <args>`` (the tailscale CLI) as a subprocess with a hard timeout."""
+    proc = await asyncio.create_subprocess_exec(
+        command, *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise TimeoutError(f"tailscale {args[0] if args else ''!r} exceeded {timeout}s") from None
+    rc = proc.returncode if proc.returncode is not None else -1
+    return rc, out.decode(errors="replace"), err.decode(errors="replace")
+
 _EMITS = [
     "tailscale_devices_listed",
     "tailscale_chp_hosts_resolved",
     "tailscale_mesh_verified",
+    "tailscale_served",
+    "tailscale_funneled",
+    "tailscale_serve_status",
     "tailscale_error",
 ]
 
 _TS_API_BASE = "https://api.tailscale.com/api/v2"
 _HTTP_CAP = "chp.adapters.http.request"
+
+# Match the tailnet HTTPS URL tailscale prints on serve/funnel (e.g.
+# https://host.tailXXXX.ts.net/).
+_TS_URL_RE = re.compile(r"https://[a-z0-9._-]+\.ts\.net/?\S*", re.IGNORECASE)
 
 # Default CHP port when no tag-based override matches.
 _DEFAULT_CHP_PORT = 8803
@@ -63,12 +89,16 @@ class TailscaleConfig:
 
     api_key: str = ""
     tailnet: str = ""
+    tailscale_bin: str = "tailscale"  # CLI path for serve/funnel (local tailscaled control)
     default_chp_port: int = _DEFAULT_CHP_PORT
     port_by_tag: dict[str, int] = field(default_factory=lambda: {
         "tag:chp-nas": 8802,
         "tag:chp-raspi": 8801,
     })
     chp_host_tag: str = "tag:chp-host"
+    # Injectable async runner (args, timeout) -> (returncode, stdout, stderr) for serve/funnel;
+    # defaults to running the tailscale CLI via subprocess. A fake here isolates tests.
+    cli_runner: Any = None
 
     def resolved_api_key(self) -> str:
         return self.api_key or os.environ.get("TAILSCALE_API_KEY", "")
@@ -98,6 +128,15 @@ class TailscaleAdapter(BaseAdapter):
 
     def __init__(self, config: TailscaleConfig | None = None) -> None:
         self._config = config or TailscaleConfig()
+        if self._config.cli_runner is not None:
+            self._run = self._config.cli_runner
+        else:
+            bin_path = self._config.tailscale_bin
+
+            async def _run(args: list[str], timeout: float) -> tuple[int, str, str]:
+                return await _default_ts_runner(bin_path, args, timeout)
+
+            self._run = _run
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -411,3 +450,196 @@ class TailscaleAdapter(BaseAdapter):
             "results": results,
             "total_ms": total_ms,
         }
+
+    # ------------------------------------------------------------------
+    # Local tailscaled control (serve / funnel) — runs the tailscale CLI on
+    # THIS node via governed process.run. Unlike the API-based caps above,
+    # these change how the node exposes local ports, so they carry real risk.
+    # ------------------------------------------------------------------
+
+    async def _run_ts_cli(self, ctx: Any, args: list[str], timeout: float = 30.0) -> dict:
+        """Run the local `tailscale` CLI directly via subprocess (like the container/git
+        adapters). NOT through chp.adapters.process.run: that cap is approval-gated, and an
+        in-process adapter→adapter ainvoke to a gated cap is denied — which broke serve/funnel
+        ('process adapter unavailable'). The cap itself is governed at its own (high-risk)
+        boundary; the CLI exec is a local subprocess. A ``cli_runner`` may be injected for tests."""
+        returncode, stdout, stderr = await self._run(args, timeout)
+        return {"exit_code": returncode, "stdout": stdout, "stderr": stderr}
+
+    @staticmethod
+    def _serve_args(verb: str, port: int, background: bool, off: bool,
+                    funnel_port: int | None = None) -> list[str]:
+        # A node exposes multiple services by using distinct public HTTPS ports (443/8443/10000).
+        # Without funnel_port: keep the simple single-service form (`tailscale <verb> <port>`, 443
+        # root) for back-compat. With it: the explicit `--https=<funnel_port> <target>` form, so
+        # e.g. the gateway can live on 8443 while another app keeps 443.
+        if funnel_port is not None:
+            if off:
+                return [verb, f"--https={funnel_port}", "off"]
+            return [verb] + (["--bg"] if background else []) + \
+                [f"--https={funnel_port}", f"http://127.0.0.1:{port}"]
+        if off:
+            return [verb, str(port), "off"]
+        return [verb] + (["--bg"] if background else []) + [str(port)]
+
+    # ------------------------------------------------------------------
+    # tailscale.serve  — tailnet-private HTTPS
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.tailscale.serve",
+        version="1.0.0",
+        description=(
+            "Expose a local TCP port as HTTPS on the tailnet (private to your Tailscale "
+            "network) via `tailscale serve`. Returns the tailnet HTTPS URL. Set off=true "
+            "to stop serving the port. Runs the local tailscale CLI through process.run."
+        ),
+        category="networking",
+        provider="tailscale",
+        risk="medium",
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "port": {
+                    "type": "integer", "minimum": 1, "maximum": 65535,
+                    "description": "Local TCP port to proxy (e.g. the CHP gateway port).",
+                },
+                "background": {
+                    "type": "boolean", "default": True,
+                    "description": "Run with --bg so serving persists after the call.",
+                },
+                "off": {
+                    "type": "boolean", "default": False,
+                    "description": "Disable serving for this port instead of enabling it.",
+                },
+                "funnel_port": {
+                    "type": "integer", "enum": [443, 8443, 10000],
+                    "description": "Public HTTPS port to expose on (443/8443/10000). Omit for the "
+                                   "default single-service form; set distinct ports to host several "
+                                   "services on one node.",
+                },
+            },
+            "required": ["port"],
+            "additionalProperties": False,
+        },
+    )
+    async def serve(self, ctx: Any, payload: dict) -> dict:
+        port = int(payload["port"])
+        background = bool(payload.get("background", True))
+        off = bool(payload.get("off", False))
+        funnel_port = payload.get("funnel_port")
+        args = self._serve_args("serve", port, background, off, funnel_port)
+        try:
+            res = await self._run_ts_cli(ctx, args)
+        except Exception as exc:
+            ctx.emit("tailscale_error", {"op": "serve", "error": str(exc)[:500]}, redacted=False)
+            raise
+        combined = f"{res['stdout']}\n{res['stderr']}".strip()
+        m = _TS_URL_RE.search(combined)   # tailscale prints the full URL incl :funnel_port
+        url = m.group(0) if m else None
+        ok = res["exit_code"] == 0
+        ctx.emit("tailscale_served", {"port": port, "off": off, "ok": ok, "url": url}, redacted=False)
+        return {
+            "ok": ok, "port": port, "off": off, "scope": "tailnet",
+            "url": url, "exit_code": res["exit_code"], "output": combined,
+        }
+
+    # ------------------------------------------------------------------
+    # tailscale.funnel  — PUBLIC internet HTTPS
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.tailscale.funnel",
+        version="1.0.0",
+        description=(
+            "Expose a local TCP port to the PUBLIC internet as HTTPS via Tailscale Funnel "
+            "(`tailscale funnel`). The returned URL is reachable from anywhere on the "
+            "internet — the underlying service MUST enforce its own authentication. Set "
+            "off=true to withdraw the public exposure. Runs the local tailscale CLI "
+            "through process.run."
+        ),
+        category="networking",
+        provider="tailscale",
+        risk="high",
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "port": {
+                    "type": "integer", "minimum": 1, "maximum": 65535,
+                    "description": "Local TCP port to expose publicly.",
+                },
+                "background": {
+                    "type": "boolean", "default": True,
+                    "description": "Run with --bg so the funnel persists after the call.",
+                },
+                "off": {
+                    "type": "boolean", "default": False,
+                    "description": "Withdraw the public funnel for this port.",
+                },
+                "funnel_port": {
+                    "type": "integer", "enum": [443, 8443, 10000],
+                    "description": "Public HTTPS port to funnel on (443/8443/10000). Omit for the "
+                                   "default single-service form; set distinct ports to funnel "
+                                   "several services from one node (e.g. gateway on 8443, app on 443).",
+                },
+            },
+            "required": ["port"],
+            "additionalProperties": False,
+        },
+    )
+    async def funnel(self, ctx: Any, payload: dict) -> dict:
+        port = int(payload["port"])
+        background = bool(payload.get("background", True))
+        off = bool(payload.get("off", False))
+        funnel_port = payload.get("funnel_port")
+        args = self._serve_args("funnel", port, background, off, funnel_port)
+        try:
+            res = await self._run_ts_cli(ctx, args)
+        except Exception as exc:
+            ctx.emit("tailscale_error", {"op": "funnel", "error": str(exc)[:500]}, redacted=False)
+            raise
+        combined = f"{res['stdout']}\n{res['stderr']}".strip()
+        m = _TS_URL_RE.search(combined)   # tailscale prints the full URL incl :funnel_port
+        public_url = m.group(0) if m else None
+        ok = res["exit_code"] == 0
+        ctx.emit("tailscale_funneled", {
+            "port": port, "off": off, "ok": ok, "public_url": public_url,
+        }, redacted=False)
+        return {
+            "ok": ok, "port": port, "off": off,
+            "public": (not off) and ok,
+            "public_url": public_url,
+            "exit_code": res["exit_code"], "output": combined,
+            "warning": None if off else "This port is now reachable from the public internet; ensure the service enforces its own auth.",
+        }
+
+    # ------------------------------------------------------------------
+    # tailscale.funnel_status — current serve/funnel configuration
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.tailscale.funnel_status",
+        version="1.0.0",
+        description=(
+            "Report the node's current `tailscale serve` / funnel configuration — which "
+            "local ports are exposed on the tailnet or publicly, and their URLs."
+        ),
+        category="networking",
+        provider="tailscale",
+        risk="low",
+        emits=_EMITS,
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    )
+    async def funnel_status(self, ctx: Any, payload: dict) -> dict:
+        try:
+            res = await self._run_ts_cli(ctx, ["serve", "status"])
+        except Exception as exc:
+            ctx.emit("tailscale_error", {"op": "funnel_status", "error": str(exc)[:500]}, redacted=False)
+            raise
+        combined = f"{res['stdout']}\n{res['stderr']}".strip()
+        urls = sorted(set(_TS_URL_RE.findall(combined)))
+        ok = res["exit_code"] == 0
+        ctx.emit("tailscale_serve_status", {"ok": ok, "url_count": len(urls)}, redacted=False)
+        return {"ok": ok, "urls": urls, "exit_code": res["exit_code"], "output": combined}

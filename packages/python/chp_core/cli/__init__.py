@@ -53,11 +53,14 @@ from ._hooks import (
     _settings_path,
     _uninstall_hooks,
     cmd_hook_codex_post_tool,
+    cmd_hook_codex_pre_tool,
     cmd_hook_codex_stop,
     cmd_hook_gemini_post_tool,
+    cmd_hook_gemini_pre_tool,
     cmd_hook_gemini_stop,
     cmd_hook_post_tool,
     cmd_hook_pre_tool,
+    cmd_hook_selftest,
     cmd_hook_stop,
     cmd_hooks_install,
     cmd_hooks_status,
@@ -139,12 +142,20 @@ __all__ = ["main", "build_parser"]
 
 
 _START_HERE = """\
-start here:
-  chp serve-demo                                      # 1. a governed demo host on :8765
+start here — govern the agent you already use (no application code):
+  chp hooks install                                   # 1. hook Claude Code
+                                                      #    (--all-harnesses: + Codex + Gemini)
+  chp session list                                    # 2. ...use your agent, then list sessions
+  chp session tree <session_id>                       # 3. every tool call it made, replayable
+
+or drive the protocol directly:
+  chp serve-demo                                      # a governed demo host on :8765
   chp invoke demo.echo --payload '{"text":"hello"}' \\
-      --correlation-id first-run                      # 2. first governed invocation
-  chp replay first-run                                # 3. its evidence chain
-  chp keygen                                          # 4. sign evidence (the `signed` tier)
+      --correlation-id first-run                      # a first governed invocation
+  chp replay first-run                                # its evidence chain
+  chp keygen                                          # sign evidence (the `signed` tier)
+
+docs: https://docs.capabilityhostprotocol.com
 """
 
 
@@ -204,7 +215,14 @@ def build_parser() -> argparse.ArgumentParser:
     replay.set_defaults(func=cmd_replay)
 
     demo = subcommands.add_parser("demo", help="Run a local demo.")
-    demo_subcommands = demo.add_subparsers(dest="demo_command", required=True)
+    # Bare `chp demo` lists the demos instead of erroring with a bare usage line —
+    # it sits on the public first-run path, where a dead end costs an adopter.
+    def _demo_help(_args: argparse.Namespace) -> int:
+        demo.print_help()
+        return 0
+
+    demo.set_defaults(func=_demo_help)
+    demo_subcommands = demo.add_subparsers(dest="demo_command")
     endpoint = demo_subcommands.add_parser("endpoint", help="Run the endpoint demo.")
     endpoint.set_defaults(func=cmd_demo_endpoint)
 
@@ -426,9 +444,19 @@ def build_parser() -> argparse.ArgumentParser:
     post_tool_p.add_argument("--store", default=None, help="Evidence store path.")
     post_tool_p.set_defaults(func=cmd_hook_post_tool)
 
+    selftest_p = hook_sub.add_parser("selftest",
+                                     help="Assert the gate blocks known-bad and passes known-good commands.")
+    selftest_p.add_argument("--policy", default=None, help="Policy file path (default: auto-locate).")
+    selftest_p.set_defaults(func=cmd_hook_selftest)
+
     stop_p = hook_sub.add_parser("stop", help="Process a Stop hook event.")
     stop_p.add_argument("--store", default=None, help="Evidence store path.")
     stop_p.set_defaults(func=cmd_hook_stop)
+
+    codex_pre_p = hook_sub.add_parser("codex-pre-tool", help="Process an OpenAI Codex CLI PreToolUse event.")
+    codex_pre_p.add_argument("--store", default=None, help="Evidence store path.")
+    codex_pre_p.add_argument("--policy", default=None, help="Policy file path (default: auto-locate).")
+    codex_pre_p.set_defaults(func=cmd_hook_codex_pre_tool)
 
     codex_post_p = hook_sub.add_parser("codex-post-tool", help="Process an OpenAI Codex CLI PostToolUse event.")
     codex_post_p.add_argument("--store", default=None)
@@ -437,6 +465,11 @@ def build_parser() -> argparse.ArgumentParser:
     codex_stop_p = hook_sub.add_parser("codex-stop", help="Process an OpenAI Codex CLI Stop event.")
     codex_stop_p.add_argument("--store", default=None)
     codex_stop_p.set_defaults(func=cmd_hook_codex_stop)
+
+    gemini_pre_p = hook_sub.add_parser("gemini-pre-tool", help="Process a Gemini CLI PreToolUse event.")
+    gemini_pre_p.add_argument("--store", default=None, help="Evidence store path.")
+    gemini_pre_p.add_argument("--policy", default=None, help="Policy file path (default: auto-locate).")
+    gemini_pre_p.set_defaults(func=cmd_hook_gemini_pre_tool)
 
     gemini_post_p = hook_sub.add_parser("gemini-post-tool", help="Process a Gemini CLI PostToolUse event.")
     gemini_post_p.add_argument("--store", default=None)
@@ -461,6 +494,11 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="Also write a .git/hooks/pre-commit that runs chp work vc precommit.")
     hooks_install_p.add_argument("--with-prepush", dest="with_prepush", action="store_true",
                                  help="Also write a .git/hooks/pre-push that enforces the RC-before-production-tag rule.")
+    hooks_install_p.add_argument("--all-harnesses", dest="all_harnesses", action="store_true",
+                                 help="Provision the governed pre-tool gate across Claude Code, Codex, "
+                                      "and Gemini + write the default policy (one shared evidence store).")
+    hooks_install_p.add_argument("--store", default=None,
+                                 help="Shared evidence store for hook denials (default: ~/.chp/hook-evidence.sqlite).")
     hooks_install_p.set_defaults(func=cmd_hooks_install)
 
     hooks_uninstall_p = hooks_sub.add_parser("uninstall", help="Remove CHP hooks from Claude Code settings.")

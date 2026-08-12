@@ -16,6 +16,38 @@ from typing import Any, Awaitable, Callable
 MAX_REPLAY_LIMIT = 10_000
 
 
+def jsonschema_module() -> Any | None:
+    """The optional ``jsonschema`` module, or None when it is not installed.
+
+    chp-core is dependency-free by design, so input-schema validation is only
+    *enforced* when the `schema` extra supplied the validator:
+    ``pip install 'chp-core[schema]'``. Two traps this exists to close:
+
+    1. Import inside the same ``try`` as the validate call, with an
+       ``except jsonschema.ValidationError`` clause, leaves the name unbound on
+       an ImportError — evaluating the except clause then raises
+       UnboundLocalError, which masks the real error and 500s every
+       schema-bearing invocation on a default install.
+    2. Falling back to "skip validation" silently turns a trust-boundary check
+       off. Callers must announce the degradation instead — see
+       ``LocalCapabilityHost.register`` and ``chp host verify``.
+    """
+    global _JSONSCHEMA
+    if _JSONSCHEMA is _UNSET:
+        try:
+            import jsonschema
+        except ImportError:
+            _JSONSCHEMA = None
+        else:
+            _JSONSCHEMA = jsonschema
+    return _JSONSCHEMA
+
+
+_UNSET = object()
+_JSONSCHEMA: Any = _UNSET
+_SCHEMA_WARNED = False
+
+
 def chunk_seq_digest(deltas: list) -> str:
     """`chp-chunk-seq-v1` (spec §13.1): SHA-256 over the ordered stream chunk
     deltas, each canonicalized with chp-stable-v1 and newline-terminated — the
@@ -305,6 +337,18 @@ class LocalCapabilityHost:
             raise ValueError("capability descriptor id is required")
         if not descriptor.version:
             raise ValueError("capability descriptor version is required")
+        if descriptor.input_schema and jsonschema_module() is None:
+            # A declared input schema that is never enforced is a governance hole, not a
+            # convenience — say so once per process rather than degrading in silence.
+            global _SCHEMA_WARNED
+            if not _SCHEMA_WARNED:
+                _SCHEMA_WARNED = True
+                warnings.warn(
+                    "jsonschema is not installed — declared input_schema will NOT be enforced "
+                    "on this host. Install it to close the gap: pip install 'chp-core[schema]'",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         with self._registry_lock:
             if descriptor.capability_uri in self._capabilities:
                 warnings.warn(
@@ -820,15 +864,8 @@ class LocalCapabilityHost:
             return envelope, None, self._deny(envelope, autonomy_denial)
 
         if descriptor.input_schema:
-            # Import OUTSIDE the validate try: with `import jsonschema` inside a try whose
-            # `except jsonschema.ValidationError` references it, an import failure leaves the name
-            # unbound and evaluating the except clause raises UnboundLocalError (masking the real
-            # error, propagating past the catch-all, and crashing every schema-bearing invocation).
-            # Bind it (or None) first, then validate only when available.
-            try:
-                import jsonschema
-            except ImportError:
-                jsonschema = None
+            # Bind the module (or None) BEFORE the validate try — see jsonschema_module().
+            jsonschema = jsonschema_module()
             if jsonschema is not None:
                 try:
                     jsonschema.validate(envelope.payload, descriptor.input_schema)
