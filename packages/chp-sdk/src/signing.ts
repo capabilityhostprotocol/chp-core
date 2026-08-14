@@ -7,7 +7,7 @@
  * host-identity attestation.
  */
 
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, type KeyObject } from 'node:crypto';
+import { sha256hex, sha256hexBytes, edSign, edPublicFromSeed, randomBytes } from './crypto.js';
 import { canon, canonFor, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, rootHash, type EvidenceEvent } from './hash.js';
 import { CHP_STORE_HEAD_V1, storeHeadRoot } from './merkle.js';
@@ -15,54 +15,37 @@ import { CHP_STORE_HEAD_V1, storeHeadRoot } from './merkle.js';
 export const CANONICALIZATION = 'chp-stable-v1';
 export const SIGNATURE_ALGORITHM = 'ed25519';
 
-// DER wrappers for raw 32-byte ed25519 keys.
-const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex'); // + 32-byte public key
-const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex'); // + 32-byte seed
-
 export interface HostKey {
   keyId: string;
   publicKeyB64: string;
-  privateKey?: KeyObject; // absent → verify-only
+  privateKey?: Buffer; // raw 32-byte ed25519 seed; absent → verify-only
 }
-
-const sha256 = (b: Buffer): Buffer => createHash('sha256').update(b).digest();
 
 /** key_id = first 16 hex chars of SHA-256(raw public key). */
 export function keyIdFor(rawPublicKey: Buffer): string {
-  return sha256(rawPublicKey).toString('hex').slice(0, 16);
+  return sha256hexBytes(rawPublicKey).slice(0, 16);
 }
 
-export function publicKeyFromB64(b64: string): KeyObject {
-  const raw = Buffer.from(b64, 'base64');
-  return createPublicKey({ key: Buffer.concat([SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
-}
-
-function privateKeyFromSeed(seed: Buffer): KeyObject {
-  return createPrivateKey({ key: Buffer.concat([PKCS8_PREFIX, seed]), format: 'der', type: 'pkcs8' });
-}
-
-/** Last 32 bytes of a public key's SPKI DER export = the raw ed25519 public key. */
-function rawPublicOf(pub: KeyObject): Buffer {
-  const der = pub.export({ format: 'der', type: 'spki' }) as Buffer;
-  return der.subarray(-32);
+/** The raw 32-byte ed25519 public key (base64-decoded). */
+export function publicKeyFromB64(b64: string): Buffer {
+  return Buffer.from(b64, 'base64');
 }
 
 /** Deterministic keypair from a 32-byte seed (used for test vectors). */
 export function keypairFromSeed(seed: Buffer): HostKey {
-  const priv = privateKeyFromSeed(seed);
-  const rawPub = rawPublicOf(createPublicKey(priv));
-  return { keyId: keyIdFor(rawPub), publicKeyB64: rawPub.toString('base64'), privateKey: priv };
+  const rawPub = Buffer.from(edPublicFromSeed(seed));
+  return { keyId: keyIdFor(rawPub), publicKeyB64: rawPub.toString('base64'), privateKey: seed };
 }
 
 /** Fresh random keypair. */
 export function generateKeypair(): HostKey {
-  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const rawPub = rawPublicOf(publicKey);
-  return { keyId: keyIdFor(rawPub), publicKeyB64: rawPub.toString('base64'), privateKey };
+  const seed = Buffer.from(randomBytes(32));
+  const rawPub = Buffer.from(edPublicFromSeed(seed));
+  return { keyId: keyIdFor(rawPub), publicKeyB64: rawPub.toString('base64'), privateKey: seed };
 }
 
-function signCanon(priv: KeyObject, obj: JsonValue): string {
-  return edSign(null, Buffer.from(canon(obj), 'utf8'), priv).toString('base64');
+function signCanon(priv: Buffer, obj: JsonValue): string {
+  return Buffer.from(edSign(Buffer.from(canon(obj), 'utf8'), priv)).toString('base64');
 }
 
 const HEADER_FIELDS = ['host_id', 'protocol_version', 'created_at', 'canonicalization', 'root_hash'] as const;
@@ -196,7 +179,7 @@ export function signBundle(
   signed.signature = {
     algorithm: SIGNATURE_ALGORITHM,
     key_id: key.keyId,
-    signature: edSign(null, Buffer.from(headerCanon(bundleHeader(signed)), 'utf8'), key.privateKey).toString('base64'),
+    signature: Buffer.from(edSign(Buffer.from(headerCanon(bundleHeader(signed)), 'utf8'), key.privateKey)).toString('base64'),
   };
   return signed;
 }
@@ -224,9 +207,9 @@ export function withholdPayloads(
 
 /** SHA256 over member root_hashes joined by "\n" — the task's fingerprint. */
 export function computeTaskRootHash(bundles: Record<string, JsonValue>[]): string {
-  const h = createHash('sha256');
-  for (const b of bundles) h.update(String(b.root_hash ?? '') + '\n');
-  return h.digest('hex');
+  let s = '';
+  for (const b of bundles) s += String(b.root_hash ?? '') + '\n';
+  return sha256hex(s);
 }
 
 const memberKey = (b: Record<string, JsonValue>): [string, string] =>
@@ -370,7 +353,7 @@ export function buildSubMandate(
   const principalId = String(parent.delegate_id ?? '');
   const child: Record<string, JsonValue> = {
     kind: 'mandate',
-    mandate_id: opts.mandateId ?? `mnd_${randomBytes(16).toString('hex')}`,
+    mandate_id: opts.mandateId ?? `mnd_${Buffer.from(randomBytes(16)).toString('hex')}`,
     delegate_id: opts.delegateId,
     scope: [...opts.scope].sort(),
     valid_from: opts.validFrom,
@@ -428,7 +411,7 @@ export function buildMandate(
   if (!key.privateKey) throw new Error('principal key has no private component; cannot sign');
   const mandate: Record<string, JsonValue> = {
     kind: 'mandate',
-    mandate_id: opts.mandateId ?? `mnd_${randomBytes(16).toString('hex')}`,
+    mandate_id: opts.mandateId ?? `mnd_${Buffer.from(randomBytes(16)).toString('hex')}`,
     delegate_id: opts.delegateId,
     scope: [...opts.scope].sort(),
     valid_from: opts.validFrom,
@@ -602,9 +585,9 @@ export function computeStoreHead(
  * terminated `\n` — byte-compatible with Python `compute_revocation_head`.
  * The empty set has a well-defined digest. */
 export function computeRevocationHead(ids: string[]): string {
-  const h = createHash('sha256');
-  for (const line of [...ids].sort()) h.update(`${line}\n`);
-  return h.digest('hex');
+  let s = '';
+  for (const line of [...ids].sort()) s += `${line}\n`;
+  return sha256hex(s);
 }
 
 const CHAIN_WITNESS_HEADER_FIELDS = [

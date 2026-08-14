@@ -1,7 +1,7 @@
 {
   "name": "@capabilityhostprotocol/sdk",
   "version": "0.1.0-alpha.44",
-  "description": "Pure TypeScript client + verifier for the Capability Host Protocol (CHP) — canonicalization, signing, and the HTTP-binding client.",
+  "description": "Pure TypeScript client + verifier for the Capability Host Protocol (CHP) \u2014 canonicalization, signing, and the HTTP-binding client.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -21,7 +21,8 @@
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "npm run build"
   },
   "keywords": [
     "chp",
@@ -46,5 +47,9 @@
     "typescript": "^5.9.3",
     "vitest": "^2.1.9",
     "@types/node": "^22.0.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.3.0",
+    "@noble/curves": "^2.3.0"
   }
 }

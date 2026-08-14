@@ -3,7 +3,7 @@
  * The stable-field set and ordering match the Python reference exactly.
  */
 
-import { createHash } from 'node:crypto';
+import { sha256hex } from './crypto.js';
 import { canon, type JsonValue } from './canon.js';
 
 export interface EvidenceEvent {
@@ -26,8 +26,6 @@ export interface EvidenceEvent {
 /** Per-event content-hash scheme names (spec/chp-v0.2.md §2/§14). */
 export const EVENT_HASH_V2 = 'chp-event-hash-v2';
 
-const sha256hex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
-
 /** chp-event-hash-v2 payload commitment = sha256(chp-stable-v1(payload)). Empty payload = {}. */
 export function payloadCommitment(payload: JsonValue | undefined): string {
   return sha256hex(canon(payload ?? {}));
@@ -37,9 +35,9 @@ export function payloadCommitment(payload: JsonValue | undefined): string {
  * each canonicalized with chp-stable-v1 and newline-terminated (the §12
  * store-head line scheme) — byte-exact across implementations. */
 export function chunkSeqDigest(deltas: JsonValue[]): string {
-  const h = createHash('sha256');
-  for (const d of deltas) h.update(canon(d) + '\n');
-  return h.digest('hex');
+  let s = '';
+  for (const d of deltas) s += canon(d) + '\n';
+  return sha256hex(s);
 }
 
 /** SHA-256 over the canonical stable fields of an event (+ prev_hash). Under
@@ -68,9 +66,7 @@ export function contentHash(ev: EvidenceEvent, prevHash: string | null): string 
 
 /** Root hash = SHA-256 over each event's content_hash, each followed by "\n". */
 export function rootHash(events: EvidenceEvent[]): string {
-  const h = createHash('sha256');
-  for (const ev of events) {
-    h.update((ev.content_hash ?? '') + '\n');
-  }
-  return h.digest('hex');
+  let s = '';
+  for (const ev of events) s += (ev.content_hash ?? '') + '\n';
+  return sha256hex(s);
 }

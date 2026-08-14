@@ -9,14 +9,14 @@
  *                  || string hash_alg || string H(message)
  */
 
-import { createHash, verify as edVerify, createPublicKey } from 'node:crypto';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
+import { edVerify } from './crypto.js';
 
 export const SSHSIG_MAGIC = Buffer.from('SSHSIG');
 export const DID_ANCHOR_NAMESPACE = 'chp-host-anchor';
 export const STORE_HEAD_ANCHOR_NAMESPACE = 'chp-store-head-anchor'; // §12 External anchoring (0013)
 const ED25519_MULTICODEC = Buffer.from([0xed, 0x01]);
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 function b58decode(s: string): Buffer {
   let n = 0n;
@@ -124,7 +124,7 @@ export function verifySshsig(
   if (parsed.namespace !== (opts.namespace ?? DID_ANCHOR_NAMESPACE)) return false;
   if (opts.expectedRawPubkey && !parsed.rawPubkey.equals(opts.expectedRawPubkey)) return false;
   if (parsed.hashAlg !== 'sha512' && parsed.hashAlg !== 'sha256') return false;
-  const digest = createHash(parsed.hashAlg).update(message).digest();
+  const digest = Buffer.from(parsed.hashAlg === 'sha512' ? sha512(message) : sha256(message));
   const payload = Buffer.concat([
     SSHSIG_MAGIC,
     wireString(Buffer.from(parsed.namespace)),
@@ -132,10 +132,5 @@ export function verifySshsig(
     wireString(Buffer.from(parsed.hashAlg)),
     wireString(digest),
   ]);
-  const pub = createPublicKey({
-    key: Buffer.concat([SPKI_PREFIX, parsed.rawPubkey]),
-    format: 'der',
-    type: 'spki',
-  });
-  return edVerify(null, payload, pub, parsed.rawSig);
+  return edVerify(payload, parsed.rawPubkey, parsed.rawSig);
 }

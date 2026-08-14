@@ -10,22 +10,19 @@
  * DER-wrapped exactly as ed25519 keys are in signing.ts (OID 1.3.101.110).
  */
 
-import {
-  createPublicKey, createPrivateKey, diffieHellman, hkdfSync, randomBytes,
-  createCipheriv, createDecipheriv, generateKeyPairSync, type KeyObject,
-} from 'node:crypto';
+// Runtime-neutral: X25519 (RFC 7748) + HKDF-SHA256 (RFC 5869) + ChaCha20-Poly1305 (RFC 8439), all via
+// @noble. Raw keys throughout — no DER wrapping. Byte-compatible with the previous node:crypto path
+// (all three are standardized); sealing.test.ts gates it.
+import { x25519 } from '@noble/curves/ed25519.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { randomBytes } from './crypto.js';
 import { canon, type JsonValue } from './canon.js';
 
 export const SEALED_SCHEME = 'chp-sealed-v1';
 export const SEALED_SCHEME_V2 = 'chp-sealed-v2';  // multi-recipient (proposal 0030)
 const HKDF_INFO = Buffer.from('chp-sealed-v1', 'utf8');
-const X_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex'); // + 32-byte X25519 public
-const X_PKCS8_PREFIX = Buffer.from('302e020100300506032b656e04220420', 'hex'); // + 32-byte X25519 private
-
-const x25519PublicFromRaw = (raw: Buffer): KeyObject =>
-  createPublicKey({ key: Buffer.concat([X_SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
-const x25519PrivateFromRaw = (raw: Buffer): KeyObject =>
-  createPrivateKey({ key: Buffer.concat([X_PKCS8_PREFIX, raw]), format: 'der', type: 'pkcs8' });
 
 function canonBytes(payload: JsonValue): Buffer {
   // chp-stable-v1 for hashing = JSON.stringify with sorted keys — identical to the
@@ -33,8 +30,8 @@ function canonBytes(payload: JsonValue): Buffer {
   return Buffer.from(canon(payload ?? {}), 'utf8');
 }
 
-function deriveKey(shared: Buffer): Buffer {
-  return Buffer.from(hkdfSync('sha256', shared, Buffer.alloc(0), HKDF_INFO, 32));
+function deriveKey(shared: Uint8Array): Buffer {
+  return Buffer.from(hkdf(sha256, shared, new Uint8Array(0), HKDF_INFO, 32));
 }
 
 export interface SealedEnvelope { scheme: string; epk: string; nonce: string; ct: string; }
@@ -43,45 +40,37 @@ export interface SealedEnvelopeV2 { scheme: string; nonce: string; ct: string; r
 
 /** Generate an X25519 keypair; returns raw 32-byte private + base64 public. */
 export function generateEncKeypair(): { privateRaw: Buffer; publicB64: string } {
-  const { publicKey, privateKey } = generateKeyPairSync('x25519');
-  const pubDer = publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
-  const privDer = privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer;
-  return { privateRaw: privDer.subarray(privDer.length - 32), publicB64: pubDer.subarray(pubDer.length - 32).toString('base64') };
+  const priv = Buffer.from(randomBytes(32));
+  const pub = Buffer.from(x25519.getPublicKey(priv));
+  return { privateRaw: priv, publicB64: pub.toString('base64') };
 }
 
 function sealBytes(recipientPubB64: string, plaintext: Buffer): SealedEnvelope {
-  const recipient = x25519PublicFromRaw(Buffer.from(recipientPubB64, 'base64'));
-  const eskRaw = generateEncKeypair();
-  const esk = x25519PrivateFromRaw(eskRaw.privateRaw);
-  const key = deriveKey(diffieHellman({ privateKey: esk, publicKey: recipient }));
-  const nonce = randomBytes(12);
-  const cipher = createCipheriv('chacha20-poly1305', key, nonce, { authTagLength: 16 });
-  const enc = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const ct = Buffer.concat([enc, cipher.getAuthTag()]); // Python appends the tag to ct
+  const recipient = Buffer.from(recipientPubB64, 'base64');
+  const esk = generateEncKeypair();
+  const key = deriveKey(x25519.getSharedSecret(esk.privateRaw, recipient));
+  const nonce = Buffer.from(randomBytes(12));
+  // noble AEAD returns ciphertext‖tag (matches the Python "tag appended to ct" convention).
+  const ct = Buffer.from(chacha20poly1305(key, nonce).encrypt(plaintext));
   return {
-    scheme: SEALED_SCHEME, epk: eskRaw.publicB64,
+    scheme: SEALED_SCHEME, epk: esk.publicB64,
     nonce: nonce.toString('base64'), ct: ct.toString('base64'),
   };
 }
 
-/** ChaCha20-Poly1305 decrypt with a raw symmetric key (Python appends the tag to ct). */
+/** ChaCha20-Poly1305 decrypt with a raw symmetric key (ct‖tag; throws on auth failure). */
 function chachaDecrypt(key: Buffer, nonceB64: string, ctB64: string): Buffer {
-  const ctFull = Buffer.from(ctB64, 'base64');
-  const tag = ctFull.subarray(ctFull.length - 16);
-  const enc = ctFull.subarray(0, ctFull.length - 16);
-  const decipher = createDecipheriv('chacha20-poly1305', key, Buffer.from(nonceB64, 'base64'), { authTagLength: 16 });
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(enc), decipher.final()]);
+  return Buffer.from(
+    chacha20poly1305(key, Buffer.from(nonceB64, 'base64')).decrypt(Buffer.from(ctB64, 'base64')),
+  );
 }
 
 /** Seal to N recipients → chp-sealed-v2 envelope encryption (proposal 0030): one
  * content key encrypts the payload once, wrapped per recipient via a v1 seal. */
 function sealBytesMulti(recipientPubB64s: string[], plaintext: Buffer): SealedEnvelopeV2 {
-  const cek = randomBytes(32);
-  const nonce = randomBytes(12);
-  const cipher = createCipheriv('chacha20-poly1305', cek, nonce, { authTagLength: 16 });
-  const enc = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const ct = Buffer.concat([enc, cipher.getAuthTag()]);
+  const cek = Buffer.from(randomBytes(32));
+  const nonce = Buffer.from(randomBytes(12));
+  const ct = Buffer.from(chacha20poly1305(cek, nonce).encrypt(plaintext));
   const recipients = recipientPubB64s.map((pub) => {
     const w = sealBytes(pub, cek);
     return { epk: w.epk, nonce: w.nonce, wrapped_key: w.ct };
@@ -92,9 +81,7 @@ function sealBytesMulti(recipientPubB64s: string[], plaintext: Buffer): SealedEn
 function unsealBytes(env: SealedEnvelope | SealedEnvelopeV2, encPrivateRaw: Buffer): Buffer {
   if (env.scheme === SEALED_SCHEME) {
     const e = env as SealedEnvelope;
-    const priv = x25519PrivateFromRaw(encPrivateRaw);
-    const epk = x25519PublicFromRaw(Buffer.from(e.epk, 'base64'));
-    const key = deriveKey(diffieHellman({ privateKey: priv, publicKey: epk }));
+    const key = deriveKey(x25519.getSharedSecret(encPrivateRaw, Buffer.from(e.epk, 'base64')));
     return chachaDecrypt(key, e.nonce, e.ct);
   }
   if (env.scheme === SEALED_SCHEME_V2) {
