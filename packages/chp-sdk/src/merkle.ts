@@ -5,15 +5,15 @@
  * `< n`. Byte-for-byte identical to Python `chp_core.merkle`.
  */
 
-import { createHash } from 'node:crypto';
+import { sha256, sha256hexBytes } from './crypto.js';
 
 export const CHP_STORE_HEAD_V1 = 'chp-store-head-v1';
 export const CHP_STORE_HEAD_V2 = 'chp-store-head-v2';
 
 const _leafHash = (data: Buffer): Buffer =>
-  createHash('sha256').update(Buffer.concat([Buffer.from([0]), data])).digest();
+  Buffer.from(sha256(Buffer.concat([Buffer.from([0]), data])));
 const _nodeHash = (l: Buffer, r: Buffer): Buffer =>
-  createHash('sha256').update(Buffer.concat([Buffer.from([1]), l, r])).digest();
+  Buffer.from(sha256(Buffer.concat([Buffer.from([1]), l, r])));
 
 function _split(n: number): number {
   let k = 1;
@@ -23,7 +23,7 @@ function _split(n: number): number {
 
 export function merkleRoot(leaves: Buffer[]): Buffer {
   const n = leaves.length;
-  if (n === 0) return createHash('sha256').update(Buffer.alloc(0)).digest();
+  if (n === 0) return Buffer.from(sha256(Buffer.alloc(0)));
   if (n === 1) return _leafHash(leaves[0]);
   const k = _split(n);
   return _nodeHash(merkleRoot(leaves.slice(0, k)), merkleRoot(leaves.slice(k)));
@@ -122,9 +122,8 @@ export function storeHeadLeaf(correlationId: string, headHash: string | null): B
 export function storeHeadRoot(scheme: string, leaves: Leaves): string {
   const ordered = Object.keys(leaves).sort();
   if (scheme === CHP_STORE_HEAD_V1) {
-    const h = createHash('sha256');
-    for (const cid of ordered) h.update(storeHeadLeaf(cid, leaves[cid]));
-    return h.digest('hex');
+    const parts = ordered.map((cid) => storeHeadLeaf(cid, leaves[cid]));
+    return sha256hexBytes(Buffer.concat(parts));
   }
   if (scheme === CHP_STORE_HEAD_V2) {
     return merkleRoot(ordered.map((cid) => storeHeadLeaf(cid, leaves[cid]))).toString('hex');

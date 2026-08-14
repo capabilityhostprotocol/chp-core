@@ -4,7 +4,8 @@
  * returns HTTP 200 with the verdict in the body; only transport failures throw.
  */
 
-import { randomUUID } from 'node:crypto';
+// Web Crypto randomUUID — present on globalThis in Node 19+ and every browser (no node:crypto).
+const randomUUID = (): string => globalThis.crypto.randomUUID();
 import type { JsonValue } from './canon.js';
 import { SUPPORTED_VERSIONS, negotiateVersion } from './version.js';
 

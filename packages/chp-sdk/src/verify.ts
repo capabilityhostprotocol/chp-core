@@ -5,7 +5,7 @@
  * spec/test-vectors/verify.mjs.
  */
 
-import { verify as edVerify, createHash, createPublicKey } from 'node:crypto';
+import { edVerify, sha256hex, ecdsaP256VerifyPem } from './crypto.js';
 import { canon, canonFor, canonJcs, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
@@ -86,7 +86,7 @@ export const verifyStoreHeadAnchor = failClosedStoreHeadAnchor(verifyStoreHeadAn
 export const verifyTaskBundle = failClosedTaskBundle(verifyTaskBundleImpl);
 
 function verifyCanon(pubB64: string, obj: JsonValue, sigB64: string): boolean {
-  return edVerify(null, Buffer.from(canon(obj), 'utf8'), publicKeyFromB64(pubB64), Buffer.from(sigB64, 'base64'));
+  return edVerify(Buffer.from(canon(obj), 'utf8'), publicKeyFromB64(pubB64), Buffer.from(sigB64, 'base64'));
 }
 
 /** Offline-verify a store-head-anchor of `anchor.type === "rekor"` against a Rekor
@@ -112,13 +112,10 @@ function verifyRekorAnchorImpl(
 
   const setMsg = canonJcs({ body: a.entry_body, integratedTime: a.integrated_time,
                             logID: a.log_id, logIndex: a.log_index });
-  try {
-    const logPub = createPublicKey(logPublicKeyPem);
-    checks.set = edVerify('sha256', Buffer.from(setMsg, 'utf8'), logPub, Buffer.from(String(a.set ?? ''), 'base64'));
-  } catch { checks.set = false; }
+  checks.set = ecdsaP256VerifyPem(logPublicKeyPem, Buffer.from(setMsg, 'utf8'), Buffer.from(String(a.set ?? ''), 'base64'));
 
   try {
-    const envHash = createHash('sha256').update(canonJcs(a.dsse_envelope as JsonValue), 'utf8').digest('hex');
+    const envHash = sha256hex(canonJcs(a.dsse_envelope as JsonValue));
     const body = JSON.parse(entryBody.toString('utf8'));
     checks.entry_binds_dsse = body?.spec?.content?.hash?.value === envHash;
   } catch { checks.entry_binds_dsse = false; }
@@ -193,7 +190,6 @@ function verifyBundleImpl(
     try {
       const headerCanon = canonFor(bundle.canonicalization as string | null | undefined);
       checks.signature = edVerify(
-        null,
         Buffer.from(headerCanon(bundleHeader(bundle)), 'utf8'),
         publicKeyFromB64(pub),
         Buffer.from(sig.signature, 'base64'),

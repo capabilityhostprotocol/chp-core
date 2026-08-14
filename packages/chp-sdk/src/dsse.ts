@@ -7,7 +7,7 @@
  * `json.dumps(sort_keys=True)`), so the PAE — and the signature — match.
  */
 
-import { sign as edSign, verify as edVerify } from 'node:crypto';
+import { edSign, edVerify } from './crypto.js';
 import { canon, type JsonValue } from './canon.js';
 import { publicKeyFromB64, type HostKey } from './signing.js';
 import { verifyBundle } from './verify.js';
@@ -53,7 +53,7 @@ export interface DsseEnvelope {
 export function dsseSign(statement: Record<string, JsonValue>, key: HostKey): DsseEnvelope {
   if (!key.privateKey) throw new Error('host key has no private component; cannot sign a DSSE envelope');
   const body = Buffer.from(canon(statement as JsonValue), 'utf8');
-  const sig = edSign(null, pae(Buffer.from(IN_TOTO_PAYLOAD_TYPE, 'utf8'), body), key.privateKey);
+  const sig = Buffer.from(edSign(pae(Buffer.from(IN_TOTO_PAYLOAD_TYPE, 'utf8'), body), key.privateKey));
   return {
     payload: body.toString('base64'),
     payloadType: IN_TOTO_PAYLOAD_TYPE,
@@ -79,7 +79,7 @@ export function verifyDsse(envelope: DsseEnvelope, publicKeyB64: string): boolea
     const body = Buffer.from(envelope.payload, 'base64');
     const p = pae(Buffer.from(String(envelope.payloadType), 'utf8'), body);
     const pub = publicKeyFromB64(publicKeyB64);
-    return (envelope.signatures ?? []).some((s) => edVerify(null, p, pub, Buffer.from(s.sig ?? '', 'base64')));
+    return (envelope.signatures ?? []).some((s) => edVerify(p, pub, Buffer.from(s.sig ?? '', 'base64')));
   } catch {
     return false;
   }
