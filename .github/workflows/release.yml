@@ -16,6 +16,15 @@ name: Release
 #   https://pypi.org/manage/project/<package-name>/settings/publishing/
 #   Repository: capabilityhostprotocol/chp-core  |  Workflow: release.yml  |  Env: release
 
+# Two ways in:
+#   • Tag push (v0.2.3) — the full governed release: RC guard → publish
+#     chp-core + chp-host to PyPI + ts-types to npm → GitHub release.
+#     Adapters are SKIPPED here for now (no trusted publishers yet — they 403).
+#   • Manual (workflow_dispatch) — publish a chosen SUBSET to PyPI without a tag.
+#     Set `packages` to a space-separated list of: chp-core chp-host ts-types
+#     adapters   (or `all`). The RC guard and GitHub-release step do not apply
+#     to manual runs; each package publishes at whatever version its manifest
+#     declares.
 on:
   push:
     tags:
@@ -23,12 +32,19 @@ on:
       - '!v*.*.*-rc.*'  # RC tags → staging.yml only
     branches-ignore:
       - '**'  # tags only — branch pushes do not trigger release
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Packages to publish (space-separated: chp-core chp-host ts-types adapters — or "all")'
+        default: 'chp-core chp-host'
+        type: string
 
 jobs:
   # ── Guard: a matching RC tag must exist in the repo ──────────────────────
   verify-staged:
     name: Verify RC was staged
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'  # manual runs have no tag/RC to verify
     steps:
       - name: Check out repository (full history for tags)
         uses: actions/checkout@v4
@@ -56,6 +72,14 @@ jobs:
     name: Publish Python package
     runs-on: ubuntu-latest
     needs: [verify-staged]
+    # Runs on every tag push; on manual runs only when chp-core is selected.
+    # always() so a skipped RC guard (manual path) doesn't skip this job.
+    if: >-
+      ${{ always() && needs.verify-staged.result != 'failure' && (
+        github.event_name == 'push' ||
+        inputs.packages == 'all' ||
+        contains(format(' {0} ', inputs.packages), ' chp-core ')
+      ) }}
     environment: release
     permissions:
       id-token: write  # required for PyPI trusted publishing (OIDC)
@@ -94,6 +118,12 @@ jobs:
     name: Publish chp-host
     runs-on: ubuntu-latest
     needs: [verify-staged]
+    if: >-
+      ${{ always() && needs.verify-staged.result != 'failure' && (
+        github.event_name == 'push' ||
+        inputs.packages == 'all' ||
+        contains(format(' {0} ', inputs.packages), ' chp-host ')
+      ) }}
     environment: release
     permissions:
       id-token: write
@@ -129,6 +159,14 @@ jobs:
     name: Publish ${{ matrix.adapter }}
     runs-on: ubuntu-latest
     needs: [verify-staged, publish-python]
+    # Skipped on tag pushes for now (adapters lack trusted publishers → 403).
+    # Publish them explicitly via a manual run with `adapters` (or `all`).
+    if: >-
+      ${{ always() && needs.verify-staged.result != 'failure'
+          && needs.publish-python.result != 'failure' && (
+        inputs.packages == 'all' ||
+        contains(format(' {0} ', inputs.packages), ' adapters ')
+      ) }}
     environment: release
     permissions:
       id-token: write
@@ -206,6 +244,12 @@ jobs:
     name: Publish TypeScript types
     runs-on: ubuntu-latest
     needs: [verify-staged]
+    if: >-
+      ${{ always() && needs.verify-staged.result != 'failure' && (
+        github.event_name == 'push' ||
+        inputs.packages == 'all' ||
+        contains(format(' {0} ', inputs.packages), ' ts-types ')
+      ) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -242,7 +286,7 @@ jobs:
   # serves and names every package that did not ship. It does not gate create-release
   # — the release record still stands — it just makes the gap impossible to miss.
   verify-published:
-    name: Verify PyPI has the tagged version
+    name: Verify PyPI has each targeted package
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }}
     needs: [publish-python, publish-host, publish-adapters]
@@ -250,38 +294,55 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Compare every package manifest against the PyPI simple index
+      - name: Compare every targeted package manifest against the PyPI simple index
+        env:
+          EVENT: ${{ github.event_name }}
+          PACKAGES: ${{ inputs.packages }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "Expecting $VERSION on PyPI for every published package."
+          # Verify only what THIS run intended to publish, so a deliberate subset
+          # (or a tag push that skips adapters) does not report red. Each package
+          # is checked against the version its own manifest declares.
+          want_core=false; want_host=false; want_adapters=false
+          if [ "$EVENT" = "push" ]; then
+            want_core=true; want_host=true            # adapters skipped on tag push
+          else
+            case " $PACKAGES " in *" all "*) want_core=true; want_host=true; want_adapters=true ;; esac
+            case " $PACKAGES " in *" chp-core "*) want_core=true ;; esac
+            case " $PACKAGES " in *" chp-host "*) want_host=true ;; esac
+            case " $PACKAGES " in *" adapters "*) want_adapters=true ;; esac
+          fi
+
+          targets=""
+          $want_core     && targets="$targets packages/python/pyproject.toml"
+          $want_host     && targets="$targets packages/chp-host/pyproject.toml"
+          $want_adapters && targets="$targets packages/chp-adapter-*/pyproject.toml"
+          echo "Verifying:$targets"
           echo ""
+
           behind=""
-          # Derived from the tree, not a hardcoded list — a new adapter cannot be
-          # silently omitted from this check the way it can from the matrix.
-          for pyproject in packages/python/pyproject.toml \
-                           packages/chp-host/pyproject.toml \
-                           packages/chp-adapter-*/pyproject.toml; do
+          for pyproject in $targets; do
             [ -f "$pyproject" ] || continue
             name=$(sed -n 's/^name = "\(.*\)"/\1/p' "$pyproject" | head -1)
-            [ -n "$name" ] || continue
+            want=$(sed -n 's/^version = "\(.*\)"/\1/p' "$pyproject" | head -1)
+            [ -n "$name" ] && [ -n "$want" ] || continue
             # Normalise to the simple-index form (PEP 503).
             slug=$(echo "$name" | tr '[:upper:]_.' '[:lower:]--')
             html=$(curl -sf --max-time 20 "https://pypi.org/simple/${slug}/" || echo "")
             if [ -z "$html" ]; then
               echo "  ?  $name — no PyPI project (never published)"
               behind="$behind $name(absent)"
-            elif echo "$html" | grep -qF "${VERSION}"; then
-              echo "  ok $name $VERSION"
+            elif echo "$html" | grep -qF "${want}"; then
+              echo "  ok $name $want"
             else
               latest=$(echo "$html" | grep -oE '\-[0-9]+\.[0-9]+\.[0-9]+' | tr -d '-' | sort -V | tail -1)
-              echo "  ✗  $name — PyPI serves ${latest:-unknown}, expected $VERSION"
+              echo "  ✗  $name — PyPI serves ${latest:-unknown}, expected $want"
               behind="$behind $name"
             fi
           done
           echo ""
           if [ -n "$behind" ]; then
             {
-              echo "## Packages that did NOT publish at $VERSION"
+              echo "## Packages that did NOT publish at their manifest version"
               echo ""
               for p in $behind; do echo "- \`$p\`"; done
               echo ""
@@ -294,10 +355,10 @@ jobs:
               echo "    Workflow:   release.yml"
               echo "    Environment: release"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "FAILED: the following did not reach PyPI at $VERSION:$behind"
+            echo "FAILED: the following did not reach PyPI at their manifest version:$behind"
             exit 1
           fi
-          echo "All packages present on PyPI at $VERSION." >> "$GITHUB_STEP_SUMMARY"
+          echo "All targeted packages present on PyPI at their manifest version." >> "$GITHUB_STEP_SUMMARY"
 
   # ── Create GitHub Release ─────────────────────────────────────────────────
   create-release:
@@ -305,8 +366,8 @@ jobs:
     runs-on: ubuntu-latest
     # The release is the canonical artifact record — it must exist even when
     # some publish legs fail (their artifacts still attach; PyPI can catch up
-    # on a rerun). Only a cancelled run skips it.
-    if: ${{ !cancelled() }}
+    # on a rerun). Only a cancelled run — or a tag-less manual run — skips it.
+    if: ${{ !cancelled() && github.event_name == 'push' }}
     needs: [publish-python, publish-npm, publish-host, publish-adapters]
     permissions:
       contents: write
