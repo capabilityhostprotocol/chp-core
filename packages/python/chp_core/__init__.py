@@ -79,9 +79,12 @@ from .state_machine import (
     register_state_machine_capability,
 )
 from .agent_interface import (
-    capability_to_anthropic_tool,
-    capability_to_openai_tool,
+    capabilities_to_component_list,
     capabilities_to_tool_list,
+    capability_to_anthropic_tool,
+    capability_to_component,
+    capability_to_openai_tool,
+    is_render_capability,
 )
 from .safety import RuleBasedSafetyEvaluator, register_safety_capability
 from .compliance import SQLiteComplianceManager, register_compliance_capability
@@ -335,6 +338,9 @@ __all__ = [
     "capability_to_anthropic_tool",
     "capability_to_openai_tool",
     "capabilities_to_tool_list",
+    "capability_to_component",
+    "capabilities_to_component_list",
+    "is_render_capability",
     "wrap_tool_call",
     "RuleBasedSafetyEvaluator",
     "register_safety_capability",

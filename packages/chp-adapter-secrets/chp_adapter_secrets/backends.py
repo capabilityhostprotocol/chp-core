@@ -214,7 +214,17 @@ class KeychainBackend:
         self._index = Path(index_path or Path.home() / ".chp" / "keychain-index.json")
 
     def _security(self, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
-        return subprocess.run(["security", *args], capture_output=True, text=True, input=stdin)
+        # timeout is the load-bearing guard: a locked keychain (or a stray interactive prompt) would
+        # otherwise block this subprocess forever. Fail fast with a clear error instead of hanging.
+        try:
+            return subprocess.run(
+                ["security", *args], capture_output=True, text=True, input=stdin, timeout=15
+            )
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(
+                args=list(args), returncode=1, stdout="",
+                stderr="security timed out (keychain locked or awaiting interactive unlock)",
+            )
 
     def _load_index(self) -> list[str]:
         if self._index.exists():
@@ -236,13 +246,13 @@ class KeychainBackend:
         return value if value else None
 
     def set(self, key: str, value: str) -> None:
-        # -U: update if the item already exists (macOS 10.9+). Pass the secret
-        # via stdin (security prompts twice) rather than as a `-w <value>` argv,
-        # which would expose it in `ps`/`/proc/<pid>/cmdline` to any local user.
-        r = self._security(
-            "add-generic-password", "-U", "-a", key, "-s", self._SERVICE, "-w",
-            stdin=f"{value}\n{value}\n",
-        )
+        # -U: update in place if the item exists (macOS 10.9+). Pass the value NON-interactively on the
+        # argv (`-w <value>`). The prior approach (`-w` with no value + the secret on stdin) relied on
+        # `security` reading the passphrase from /dev/tty via readpassphrase() — NOT stdin — so it blocks
+        # forever headless (launchd/MCP have no controlling tty). Trade-off: the value is momentarily
+        # visible in `ps` on this host; acceptable on a single-user machine, where the interactive path
+        # simply does not work. (Hardening follow-up: a helper tool that writes via the Keychain API.)
+        r = self._security("add-generic-password", "-U", "-a", key, "-s", self._SERVICE, "-w", value)
         if r.returncode != 0:
             raise RuntimeError(f"Keychain set failed for {key!r}: {r.stderr.strip()}")
         keys = self._load_index()
