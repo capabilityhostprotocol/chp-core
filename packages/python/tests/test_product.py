@@ -204,6 +204,43 @@ def test_surface_pins_a_content_addressed_component(descriptors):
     assert bare.digest() != SurfaceBinding("audit", "a.two", "a.two.viewer", "read_only", component=comp).digest()
 
 
+def test_product_ui_schema_rides_in_the_lock_and_validates_route_bindings():
+    from chp_core.product import ProductUISchema, Route, RouteBinding
+    spec = ProductSpecification(
+        "product:t", "0.1.0",
+        [Requirement("a.two", ">=2.0 <3")],
+        ui=ProductUISchema(archetype="data-driven", routes=[
+            Route(id="pipeline", path="/pipeline", component="chp.crm.DealBoard",
+                  bindings=[RouteBinding(card="board", capability="a.two", extract="deals")])]))
+    lock = resolve(spec, [_desc("a.two", "2.0.0")])
+    ui = lock.to_dict()["ui"]
+    assert ui["archetype"] == "data-driven"
+    assert ui["routes"][0]["bindings"][0] == {"card": "board", "capability": "a.two", "extract": "deals"}
+    # the ui rides in the digest — changing a route binding changes the lock
+    spec2 = ProductSpecification("product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")])
+    assert resolve(spec2, [_desc("a.two", "2.0.0")]).digest != lock.digest
+
+
+def test_route_binding_must_reference_a_bound_capability():
+    from chp_core.product import ProductUISchema, Route, RouteBinding
+    spec = ProductSpecification(
+        "product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")],
+        ui=ProductUISchema(routes=[Route(id="r", bindings=[
+            RouteBinding(card="c", capability="a.NOT_BOUND")])]))
+    with pytest.raises(ResolutionError) as exc:
+        resolve(spec, [_desc("a.two", "2.0.0")])
+    assert "route_unknown_capability:a.NOT_BOUND" in str(exc.value)
+
+
+def test_unknown_archetype_rejected():
+    from chp_core.product import ProductUISchema
+    spec = ProductSpecification("product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")],
+                                ui=ProductUISchema(archetype="nonsense"))
+    with pytest.raises(ResolutionError) as exc:
+        resolve(spec, [_desc("a.two", "2.0.0")])
+    assert "unknown_archetype:nonsense" in str(exc.value)
+
+
 def _render_cap(cid: str, ver: str, content_hash: str | None = None) -> CapabilityDescriptor:
     meta = {"content_hash": content_hash} if content_hash else {}
     return CapabilityDescriptor(id=cid, version=ver, description="ui", category="component",
