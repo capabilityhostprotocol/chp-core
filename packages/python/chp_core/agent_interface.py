@@ -104,9 +104,18 @@ def capability_to_component(descriptor: CapabilityDescriptor) -> dict:
         "events": list(descriptor.emits),
         "componentDependencies": descriptor.depends_on or [],
     }
-    content_hash = descriptor.metadata.get("content_hash") if descriptor.metadata else None
+    meta = descriptor.metadata or {}
+    content_hash = meta.get("content_hash")
     if content_hash:
         manifest["contentHash"] = content_hash
+    # Atomic-design taxonomy (harvested from chp-runtime): a render-capability's compositional layer
+    # (atom/molecule/organism) + its dialect (the chp.* namespace it draws from), when declared.
+    if meta.get("layer"):
+        manifest["layer"] = meta["layer"]
+    if meta.get("dialect"):
+        manifest["dialect"] = meta["dialect"]
+    if meta.get("binds_to"):
+        manifest["bindsTo"] = meta["binds_to"]
     return manifest
 
 
