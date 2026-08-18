@@ -112,6 +112,16 @@ def test_capability_to_component_shape():
     assert "execution_completed" in comp["events"]
 
 
+def test_component_surfaces_atomic_design_taxonomy():
+    comp = capability_to_component(_desc(
+        id="chp.widgets.DealBoard", category="component",
+        metadata={"content_hash": "sha256:x", "layer": "organism",
+                  "dialect": "chp.widgets", "binds_to": "crm.deal.list"}))
+    assert comp["layer"] == "organism"
+    assert comp["dialect"] == "chp.widgets"
+    assert comp["bindsTo"] == "crm.deal.list"
+
+
 def test_one_capability_set_projects_to_tool_AND_component():
     # The unification: the SAME descriptor set → an agent tool-set (compute) + a
     # component-set (render), each consumer taking only what it renders.

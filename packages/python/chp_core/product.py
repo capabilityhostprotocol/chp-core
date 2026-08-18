@@ -30,6 +30,7 @@ from .types import CapabilityDescriptor
 
 __all__ = [
     "Requirement", "ProductSpecification", "Binding", "ProductLock", "SurfaceBinding", "ComponentRef",
+    "Route", "RouteBinding", "ProductUISchema", "ARCHETYPES",
     "AUTHORITY_CLASSES", "ASSURANCE_TIERS", "PROJECTION_MODES", "CONFORMANCE_CHECKS", "ConformanceResult",
     "ResolutionError", "resolve", "sign_lock", "verify_lock", "check_conformance", "product_digest",
 ]
@@ -156,10 +157,88 @@ class SurfaceBinding:
         return out
 
 
+# UI archetype — a page/product behavioral template a runtime expands into routes/surfaces (harvested
+# from chp-runtime). data-driven binds live capability data; static has none; dashboard/admin/showcase
+# are scaffolding shapes. Open string; these are the built-ins.
+ARCHETYPES = ("data-driven", "static", "dashboard", "admin", "showcase")
+
+
+@dataclass(frozen=True)
+class RouteBinding:
+    """Bind a card/widget in a route to the capability that supplies its data (chp-runtime's
+    ProductUIRouteBinding). The data-binding primitive: a self-binding component fetches ``capability``
+    and renders ``extract`` from its result."""
+
+    card: str
+    capability: str
+    params: dict | None = None
+    extract: str | None = None
+
+    def to_dict(self) -> dict:
+        out: dict[str, object] = {"card": self.card, "capability": self.capability}
+        if self.params is not None:
+            out["params"] = self.params
+        if self.extract is not None:
+            out["extract"] = self.extract
+        return out
+
+
+@dataclass(frozen=True)
+class Route:
+    """A route within a product's UI — mounts a built-in ``view`` or a federated ``component``
+    (render-capability id), with capability ``bindings`` for its cards."""
+
+    id: str
+    path: str | None = None
+    label: str | None = None
+    icon: str | None = None
+    view: str | None = None
+    component: str | None = None
+    bindings: list[RouteBinding] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        out: dict[str, object] = {"id": self.id}
+        for k in ("path", "label", "icon", "view", "component"):
+            v = getattr(self, k)
+            if v is not None:
+                out[k] = v
+        if self.bindings:
+            out["bindings"] = [b.to_dict() for b in self.bindings]
+        return out
+
+
+@dataclass(frozen=True)
+class ProductUISchema:
+    """A product's declarative UI (chp-runtime's ProductUISchema, decoupled): an archetype + routes.
+    ``auth``/``tenancy`` are *declarative requirements* — an injected provider enforces them; no auth
+    vendor is named here. Carried in the Lock so a Python- or TS-produced Lock drives the same console."""
+
+    archetype: str | None = None
+    routes: list[Route] = field(default_factory=list)
+    auth: dict | None = None            # {"required": bool}
+    tenancy: dict | None = None         # {"requireOrg": bool, "rolesAllowed": [...]}
+
+    def to_dict(self) -> dict:
+        out: dict[str, object] = {}
+        if self.archetype is not None:
+            out["archetype"] = self.archetype
+        if self.routes:
+            out["routes"] = [r.to_dict() for r in self.routes]
+        if self.auth is not None:
+            out["auth"] = self.auth
+        if self.tenancy is not None:
+            out["tenancy"] = self.tenancy
+        return out
+
+    def bound_capabilities(self) -> list[str]:
+        """Every capability the UI's route bindings reference — checked against the Lock in resolve()."""
+        return [b.capability for r in self.routes for b in r.bindings]
+
+
 @dataclass
 class ProductSpecification:
     """The declared identity of a product: capability requirements + the authority
-    (entitlement) bindings + consumer surfaces. Provider-independent — names no versions/providers."""
+    (entitlement) bindings + consumer surfaces + an optional declarative UI. Provider-independent."""
 
     id: str
     version: str
@@ -168,6 +247,7 @@ class ProductSpecification:
     surfaces: list[SurfaceBinding] = field(default_factory=list)  # UI / agent / API projections
     assurance: str = "S1"                                        # minimum assurance tier (S1/S2/S3)
     projection: str = "passthrough"                              # how capability results combine
+    ui: ProductUISchema | None = None                            # declarative product UI (routes/archetype)
 
     def semantic_digest(self, bound_capabilities: list[str]) -> str:
         return product_digest({"id": self.id, "version": self.version,
@@ -211,6 +291,7 @@ class ProductLock:
     assurance: str = "S1"
     projection: str = "passthrough"
     is_cross_host: bool = False          # any binding resolved to a remote (mesh) capability
+    ui: ProductUISchema | None = None    # declarative product UI carried in the Lock (routes/archetype)
     resolver_policy: dict = field(default_factory=lambda: dict(_DEFAULT_POLICY))
     digest: str = ""
     signature: dict | None = None
@@ -229,6 +310,7 @@ class ProductLock:
             "assurance": self.assurance,
             "projection": self.projection,
             "isCrossHost": self.is_cross_host,
+            "ui": self.ui.to_dict() if self.ui else None,
         }
 
     def compute_digest(self) -> str:
@@ -343,6 +425,16 @@ def resolve(spec: ProductSpecification, descriptors: list[CapabilityDescriptor],
     if not spec.projection:
         issues.append("empty_projection")
 
+    # UI route bindings — same authority-conservation law one level up: a route card may only bind a
+    # BOUND capability (the archetype/console can't surface data the product didn't compose), and the
+    # archetype (if named) must be a known template.
+    if spec.ui is not None:
+        if spec.ui.archetype is not None and spec.ui.archetype not in ARCHETYPES:
+            issues.append(f"unknown_archetype:{spec.ui.archetype}")
+        for cap in spec.ui.bound_capabilities():
+            if cap not in chosen:
+                issues.append(f"route_unknown_capability:{cap}")
+
     if issues:
         raise ResolutionError(issues)
 
@@ -354,6 +446,7 @@ def resolve(spec: ProductSpecification, descriptors: list[CapabilityDescriptor],
         bindings=bindings, entitlements=dict(spec.entitlements),
         surfaces=surfaces, assurance=spec.assurance, projection=spec.projection,
         is_cross_host=any(loc == "remote" for loc in localities.values()),
+        ui=spec.ui,
         resolver_policy=dict(policy or _DEFAULT_POLICY),
     )
     lock.digest = lock.compute_digest()
