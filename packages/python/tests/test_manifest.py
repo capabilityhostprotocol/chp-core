@@ -21,7 +21,7 @@ BASE = {
                   "surface": "crm.board", "authority": "read_only"}],
     "assurance": "S2", "projection": "passthrough",
     "ui": {"archetype": "data-driven", "routes": [
-        {"id": "pipeline", "path": "/pipeline", "component": "chp.crm.DealBoard",
+        {"id": "pipeline", "path": "/pipeline", "component": "chp.widgets.Board",
          "bindings": [{"card": "board", "capability": "crm.deal.list", "extract": "deals"}]}]},
 }
 

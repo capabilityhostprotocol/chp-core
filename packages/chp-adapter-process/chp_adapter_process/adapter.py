@@ -14,6 +14,7 @@ One capability: ``run``
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time as _time
 from dataclasses import dataclass, field
@@ -194,10 +195,8 @@ class ProcessAdapter(BaseAdapter):
                 exit_code = proc.returncode if proc.returncode is not None else -1
             except asyncio.TimeoutError:
                 timed_out = True
-                try:
+                with contextlib.suppress(ProcessLookupError):   # already exited — nothing to kill
                     proc.kill()
-                except ProcessLookupError:
-                    pass
                 await proc.communicate()
                 exit_code = -1
 
