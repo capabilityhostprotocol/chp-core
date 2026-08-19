@@ -66,6 +66,7 @@ from ._hooks import (
     cmd_hooks_status,
     cmd_hooks_uninstall,
 )
+from ._app import register as _register_app
 from ._registry import (
     cmd_registry_add,
     cmd_registry_assess_maturity,
@@ -185,6 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
+    _register_app(subcommands)
 
     host = subcommands.add_parser("host", help="Inspect a served host or verify local host health.")
     host.add_argument("--url", default="http://127.0.0.1:8765")

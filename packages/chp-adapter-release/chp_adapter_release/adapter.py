@@ -18,6 +18,7 @@ Five capabilities:
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
 import os
@@ -484,12 +485,10 @@ class ReleaseAdapter(BaseAdapter):
         name = version = "unknown"
         pkg_json_path = pkg_path / "package.json"
         if pkg_json_path.exists():
-            try:
+            with contextlib.suppress(json.JSONDecodeError):   # keep the "unknown" defaults on bad JSON
                 data = json.loads(pkg_json_path.read_text())
                 name = data.get("name", "unknown")
                 version = data.get("version", "unknown")
-            except json.JSONDecodeError:
-                pass
 
         ctx.emit("release_request", {
             "operation": "publish_npm",

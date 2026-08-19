@@ -208,11 +208,12 @@ def test_product_ui_schema_rides_in_the_lock_and_validates_route_bindings():
     from chp_core.product import ProductUISchema, Route, RouteBinding
     spec = ProductSpecification(
         "product:t", "0.1.0",
-        [Requirement("a.two", ">=2.0 <3")],
+        [Requirement("a.two", ">=2.0 <3"), Requirement("chp.crm.DealBoard", ">=1.0")],
         ui=ProductUISchema(archetype="data-driven", routes=[
             Route(id="pipeline", path="/pipeline", component="chp.crm.DealBoard",
                   bindings=[RouteBinding(card="board", capability="a.two", extract="deals")])]))
-    lock = resolve(spec, [_desc("a.two", "2.0.0")])
+    # a route's federated component must be a BOUND render-capability (route.component is now validated)
+    lock = resolve(spec, [_desc("a.two", "2.0.0"), _render_desc("chp.crm.DealBoard")])
     ui = lock.to_dict()["ui"]
     assert ui["archetype"] == "data-driven"
     assert ui["routes"][0]["bindings"][0] == {"card": "board", "capability": "a.two", "extract": "deals"}
@@ -239,6 +240,34 @@ def test_unknown_archetype_rejected():
     with pytest.raises(ResolutionError) as exc:
         resolve(spec, [_desc("a.two", "2.0.0")])
     assert "unknown_archetype:nonsense" in str(exc.value)
+
+
+def test_routes_and_regions_accept_builtin_chp_ui_components():
+    # Composable apps: a route OR a composite-page region may mount a built-in @chp/ui component directly —
+    # no product render-capability required (built-ins are the always-available floor). Only DATA bindings
+    # must resolve to bound capabilities.
+    from chp_core.product import ProductUISchema, Region, Route, RouteBinding
+    spec = ProductSpecification(
+        "product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")],
+        ui=ProductUISchema(routes=[
+            Route(id="table", path="/", component="chp.widgets.DataTable",
+                  bindings=[RouteBinding(card="items", capability="a.two", extract="rows")]),
+            Route(id="page", path="/p", layout="grid", regions=[
+                Region(id="stats", component="chp.molecules.StatCard",
+                       bindings=[RouteBinding(card="stats", capability="a.two")])])]))
+    assert resolve(spec, [_desc("a.two", "2.0.0")]).digest     # no render-caps registered; built-ins are fine
+
+
+def test_route_component_is_validated_and_rejects_unknown_component():
+    # The gap is closed: a route.component that is neither a bound render-cap nor a built-in dialect fails.
+    from chp_core.product import ProductUISchema, Route, RouteBinding
+    spec = ProductSpecification(
+        "product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")],
+        ui=ProductUISchema(routes=[Route(id="r", path="/", component="acme.Widget",
+            bindings=[RouteBinding(card="c", capability="a.two")])]))
+    with pytest.raises(ResolutionError) as exc:
+        resolve(spec, [_desc("a.two", "2.0.0")])
+    assert "route_unknown_component:r:acme.Widget" in str(exc.value)
 
 
 def _render_desc(cid: str, ver: str = "1.0.0") -> CapabilityDescriptor:
