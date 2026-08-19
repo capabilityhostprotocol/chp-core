@@ -13,6 +13,7 @@ an uncatalogued built-in) is skipped, not failed.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .product import ProductSpecification
@@ -103,3 +104,150 @@ def lint_report(issues: list[BindingIssue]) -> str:
     if not issues:
         return "✓ bindings OK"
     return "\n".join(f"  ✗ [{i.location}] {i.component}: {i.detail}" for i in issues)
+
+
+@dataclass(frozen=True)
+class CoverageReport:
+    """UI coverage of a product's capabilities. ``silent`` = capabilities referenced by no route/region."""
+    total: int
+    surfaced: int
+    silent: list
+
+    @property
+    def score(self) -> float:
+        return self.surfaced / self.total if self.total else 1.0
+
+
+def check_coverage(spec: ProductSpecification, capabilities) -> CoverageReport:
+    """Report which of ``capabilities`` (the product's capability ids — from the Lock bindings or a host
+    descriptor) are SURFACED in the UI (bound to a route/region card, or mounted as a component) vs SILENT
+    (referenced nowhere). The authoring-intelligence counterpart to the binding linter — mirrors
+    chp-runtime's vocabulary / silent-capability analysis: 'which verbs have no UI?'"""
+    referenced: set = set()
+    if spec.ui is not None:
+        referenced |= set(spec.ui.bound_capabilities())
+        for r in spec.ui.routes:
+            if r.component:
+                referenced.add(r.component)
+            for reg in r.regions:
+                if reg.component:
+                    referenced.add(reg.component)
+    caps = set(capabilities)
+    surfaced = caps & referenced
+    return CoverageReport(total=len(caps), surfaced=len(surfaced), silent=sorted(caps - referenced))
+
+
+def coverage_report(report: CoverageReport) -> str:
+    """Human-readable coverage — the score, then the silent capabilities."""
+    head = (f"UI coverage: {report.surfaced}/{report.total} capabilities surfaced "
+            f"({round(report.score * 100)}%)")
+    if not report.silent:
+        return head + " — ✓ all surfaced"
+    body = "\n".join(f"    · {c}" for c in report.silent)
+    return f"{head}\n  silent (no UI):\n{body}"
+
+
+# ── authoring inversion: draft a manifest by matching capabilities to components ──────────────────
+_LIST_KEYS = ("records", "items", "results", "rows", "data", "hosts", "invocations", "mappings", "events")
+_NAME_HINT_ARRAY = ("list", "query", "search", "timeline", "activity", "audit", "stats", "report",
+                    "topology", "inventory", "dashboard", "funnel", "aggregate")
+# cap-id keyword → preferred component (used when component-name affinity doesn't fire)
+_HINT_COMPONENT = (
+    ("invocation", "chp.widgets.Timeline"), ("activity", "chp.widgets.Timeline"),
+    ("audit", "chp.widgets.Timeline"), ("timeline", "chp.widgets.Timeline"), ("event", "chp.widgets.Timeline"),
+    ("stat", "chp.widgets.StatGrid"), ("report", "chp.widgets.StatGrid"),
+    ("metric", "chp.widgets.StatGrid"), ("token", "chp.widgets.StatGrid"),
+    ("topology", "chp.widgets.MeshTopology"), ("host", "chp.widgets.MeshTopology"), ("mesh", "chp.widgets.MeshTopology"),
+    ("decision", "chp.widgets.GovernanceSurface"), ("governance", "chp.widgets.GovernanceSurface"),
+    ("list", "chp.widgets.DataTable"), ("record", "chp.widgets.DataTable"),
+    ("query", "chp.widgets.DataTable"), ("search", "chp.widgets.DataTable"),
+)
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """A drafted binding — the built-in component a capability maps to (``component=''`` if unmatched)."""
+    capability: str
+    component: str
+    card: str
+    extract: str | None
+    reason: str
+
+
+def _get(d, key):
+    return d.get(key) if isinstance(d, dict) else getattr(d, key, None)
+
+
+def _array_extract(output_schema) -> str | None:
+    """If the cap output is an array — top-level, or under a common list key — return the extract path
+    ('' = top-level, or the key). None if not array-shaped."""
+    if not isinstance(output_schema, dict):
+        return None
+    if output_schema.get("type") == "array":
+        return ""
+    props = output_schema.get("properties") or {}
+    for k in _LIST_KEYS:
+        v = props.get(k)
+        if isinstance(v, dict) and v.get("type") == "array":
+            return k
+    return None
+
+
+def _pick_component(cap_id: str, candidates: list) -> tuple:
+    """Prefer name affinity (a component name-word appears in the cap id); else a semantic keyword hint
+    (audit→Timeline, stats→StatGrid, …) if that component is a candidate; else the first candidate."""
+    low = cap_id.lower()
+    for comp_id, c in candidates:                       # 1. name affinity
+        for word in re.findall(r"[A-Z][a-z]+", comp_id.split(".")[-1]):
+            if word.lower() in low:
+                return comp_id, c
+    by_id = {cid: c for cid, c in candidates}
+    for hint, comp_id in _HINT_COMPONENT:               # 2. semantic keyword hint
+        if hint in low and comp_id in by_id:
+            return comp_id, by_id[comp_id]
+    return candidates[0]                                # 3. fallback
+
+
+def suggest_bindings(descriptors, contracts: dict) -> list:
+    """Draft, for each DATA capability, the built-in component that best fits its shape: match a cap whose
+    output is array-shaped (via ``output_schema``, top-level or under a list key) — or, absent a schema, whose
+    id carries a list-ish hint — to a component of that kind, with a name-affinity tie-break. Render-caps
+    (category=component) are skipped; unmatched caps get ``component=''``. The inversion of the linter."""
+    by_kind: dict = {}
+    for cid, c in contracts.items():
+        by_kind.setdefault(c.get("kind", "object"), []).append((cid, c))
+    out: list = []
+    for d in descriptors:
+        if _get(d, "category") == "component":
+            continue
+        cap_id = _get(d, "id")
+        if not cap_id:
+            continue
+        ext = _array_extract(_get(d, "output_schema"))
+        kind = "array" if ext is not None else ("array" if any(h in cap_id for h in _NAME_HINT_ARRAY) else None)
+        candidates = by_kind.get(kind or "array", [])
+        if not candidates:
+            out.append(Suggestion(cap_id, "", "", None, f"no component for kind={kind or '?'}"))
+            continue
+        comp_id, comp = _pick_component(cap_id, candidates)
+        out.append(Suggestion(cap_id, comp_id, comp["data_prop"], ext or None,
+                              "shape" if ext is not None else "name-hint"))
+    return out
+
+
+def suggest_manifest(product_id: str, descriptors, contracts: dict) -> dict:
+    """Draft a Materialized Product manifest from a host's capabilities — one route per matched capability.
+    A starting point to refine (then ``chp app check`` it), not a finished app."""
+    routes: list = []
+    for i, s in enumerate(suggest_bindings(descriptors, contracts)):
+        if not s.component:
+            continue
+        binding = {"card": s.card, "capability": s.capability}
+        if s.extract:
+            binding["extract"] = s.extract
+        slug = s.capability.rsplit(".", 1)[-1]
+        routes.append({"id": slug, "path": "/" if i == 0 else f"/{slug}",
+                       "label": slug.replace("_", " ").title(), "component": s.component,
+                       "bindings": [binding]})
+    return {"id": product_id, "version": "0.1.0", "entitlements": {}, "assurance": "S1",
+            "projection": "merge", "ui": {"archetype": "data-driven", "routes": routes}}
