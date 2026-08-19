@@ -65,3 +65,44 @@ def test_shape_kind_clean_when_array_matches_at_extract_path():
                         bindings=[RouteBinding(card="items", capability="a.list", extract="records"),
                                   RouteBinding(card="columns", capability="a.list")])])
     assert not any(i.kind == "shape_kind" for i in check_bindings(spec, _CONTRACTS, [desc]))
+
+
+def test_coverage_reports_silent_capabilities():
+    from chp_core.app_lint import check_coverage
+    spec = _spec([Route(id="a", component="chp.widgets.StatGrid",
+                        bindings=[RouteBinding(card="stats", capability="cap.surfaced")])])
+    rep = check_coverage(spec, ["cap.surfaced", "cap.silent1", "cap.silent2"])
+    assert rep.total == 3 and rep.surfaced == 1
+    assert rep.silent == ["cap.silent1", "cap.silent2"]
+    assert round(rep.score, 2) == 0.33
+
+
+def test_coverage_all_surfaced():
+    from chp_core.app_lint import check_coverage
+    spec = _spec([Route(id="a", component="chp.widgets.StatGrid",
+                        bindings=[RouteBinding(card="stats", capability="c1")])])
+    rep = check_coverage(spec, ["c1"])
+    assert rep.silent == [] and rep.score == 1.0
+
+
+def test_suggest_matches_by_shape_and_affinity():
+    from chp_core.app_lint import suggest_bindings
+    descs = [
+        {"id": "a.list", "output_schema": {"type": "object", "properties": {"records": {"type": "array"}}}},
+        {"id": "host.topology", "output_schema": {"type": "object", "properties": {"hosts": {"type": "array"}}}},
+        {"id": "crm.Board", "category": "component"},
+    ]
+    s = {x.capability: x for x in suggest_bindings(descs, _CONTRACTS)}
+    assert "crm.Board" not in s                                        # render-cap skipped
+    assert s["a.list"].extract == "records"                            # array under 'records' → matched
+    assert s["host.topology"].component == "chp.widgets.MeshTopology"  # affinity: 'topology' in the cap id
+    assert s["host.topology"].card == "hosts" and s["host.topology"].extract == "hosts"
+
+
+def test_suggest_manifest_is_wellformed():
+    from chp_core.app_lint import suggest_manifest
+    descs = [{"id": "host.topology",
+              "output_schema": {"type": "object", "properties": {"hosts": {"type": "array"}}}}]
+    r = suggest_manifest("product:x", descs, _CONTRACTS)["ui"]["routes"][0]
+    assert r["component"] == "chp.widgets.MeshTopology"
+    assert r["bindings"][0] == {"card": "hosts", "capability": "host.topology", "extract": "hosts"}

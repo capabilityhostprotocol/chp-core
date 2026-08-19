@@ -12,7 +12,14 @@ import argparse
 import json
 from pathlib import Path
 
-from ..app_lint import check_bindings, lint_report
+from ..app_lint import (
+    check_bindings,
+    check_coverage,
+    coverage_report,
+    lint_report,
+    suggest_bindings,
+    suggest_manifest,
+)
 from ..manifest import parse_manifest
 
 
@@ -33,6 +40,112 @@ def cmd_app_check(args: argparse.Namespace) -> int:
     print(f"{spec.id}:")
     print(lint_report(issues))
     return 1 if issues else 0
+
+
+def cmd_app_coverage(args: argparse.Namespace) -> int:
+    spec = parse_manifest(_load_manifest(args.manifest))
+    if args.caps:
+        caps = json.loads(Path(args.caps).read_text())
+    else:
+        caps = [req.capability for req in spec.requires]
+    if not caps:
+        print("no capabilities to score — the manifest declares no `requires` (auto-derived at "
+              "materialize). Pass --caps <ids.json> (e.g. the ids from a materialized host descriptor).")
+        return 0
+    print(f"{spec.id}:")
+    print(coverage_report(check_coverage(spec, caps)))
+    return 0
+
+
+def cmd_app_components(args: argparse.Namespace) -> int:
+    contracts = _load_contracts(args.contracts)
+    if not contracts:
+        print("no --contracts catalog given (pass @chp/ui component-contracts.json).")
+        return 0
+    print(f"{len(contracts)} bindable components:")
+    for cid, c in sorted(contracts.items()):
+        needs = f" + static {c['also_needs']}" if c.get("also_needs") else ""
+        print(f"  {cid:38} card '{c['data_prop']}' ({c.get('kind', '?')}){needs}")
+    return 0
+
+
+def cmd_app_suggest(args: argparse.Namespace) -> int:
+    descriptors = json.loads(Path(args.descriptors).read_text())
+    contracts = _load_contracts(args.contracts)
+    manifest = suggest_manifest(args.product_id, descriptors, contracts)
+    text = json.dumps(manifest, indent=2)
+    if args.out:
+        Path(args.out).write_text(text + "\n")
+        print(f"wrote {args.out} — {len(manifest['ui']['routes'])} routes drafted; refine, then `chp app check`")
+    else:
+        print(text)
+    unmatched = [s.capability for s in suggest_bindings(descriptors, contracts) if not s.component]
+    if unmatched:
+        print(f"\n# {len(unmatched)} unmatched (no fitting component): "
+              + ", ".join(unmatched[:8]) + (" …" if len(unmatched) > 8 else ""))
+    return 0
+
+
+def _manifest_schema(contracts: dict) -> dict:
+    """A JSON Schema for the Materialized Product manifest, with enums pulled live from chp_core and the
+    component ids surfaced as examples from the contract catalog (editor autocomplete)."""
+    from ..product import ARCHETYPES, ASSURANCE_TIERS, AUTHORITY_CLASSES
+
+    component: dict = {"type": "string",
+                       "description": "A render component — a built-in @chp/ui component or product render-cap."}
+    if contracts:
+        component["examples"] = sorted(contracts)
+    binding = {"type": "object", "required": ["card", "capability"], "additionalProperties": False,
+               "properties": {
+                   "card": {"type": "string", "description": "The component prop this data fills."},
+                   "capability": {"type": "string", "description": "The data capability to invoke."},
+                   "params": {"type": "object"},
+                   "extract": {"type": "string", "description": "Dot-path plucked from the result."}}}
+    region = {"type": "object", "required": ["id"], "additionalProperties": False,
+              "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "component": component,
+                             "span": {"type": "integer", "minimum": 1, "maximum": 12},
+                             "bindings": {"type": "array", "items": binding}}}
+    route = {"type": "object", "required": ["id"], "additionalProperties": False,
+             "properties": {"id": {"type": "string"}, "path": {"type": "string"}, "label": {"type": "string"},
+                            "icon": {"type": "string"}, "view": {"type": "string"}, "component": component,
+                            "layout": {"enum": ["stack", "grid", "flex"]},
+                            "bindings": {"type": "array", "items": binding},
+                            "regions": {"type": "array", "items": region}}}
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CHP Materialized Product manifest",
+        "type": "object", "required": ["id", "version"], "additionalProperties": False,
+        "properties": {
+            "id": {"type": "string", "pattern": "^product:"},
+            "version": {"type": "string"},
+            "requires": {"type": "array", "items": {"type": "object", "required": ["capability"],
+                         "properties": {"capability": {"type": "string"}, "range": {"type": "string"}}}},
+            "entitlements": {"type": "object", "additionalProperties": {"type": "string"}},
+            "assurance": {"enum": sorted(ASSURANCE_TIERS)},
+            "projection": {"type": "string"},
+            "surfaces": {"type": "array", "items": {"type": "object",
+                         "required": ["slot", "capability", "authority"],
+                         "properties": {"slot": {"type": "string"}, "capability": {"type": "string"},
+                                        "surface": {"type": "string"},
+                                        "authority": {"enum": sorted(AUTHORITY_CLASSES)},
+                                        "component_capability": {"type": "string"}}}},
+            "ui": {"type": "object", "additionalProperties": False, "properties": {
+                "archetype": {"enum": sorted(ARCHETYPES)},
+                "routes": {"type": "array", "items": route},
+                "auth": {"type": "object"}, "tenancy": {"type": "object"}}},
+        },
+    }
+
+
+def cmd_app_schema(args: argparse.Namespace) -> int:
+    schema = _manifest_schema(_load_contracts(args.contracts))
+    text = json.dumps(schema, indent=2)
+    if args.out:
+        Path(args.out).write_text(text + "\n")
+        print(f"wrote {args.out}  — reference it from your manifests for editor validation + autocomplete")
+    else:
+        print(text)
+    return 0
 
 
 def _scaffold_view(component: str, source_cap: str, data_prop: str, kind: str | None,
@@ -100,6 +213,30 @@ def register(subcommands) -> None:
     check.add_argument("manifest", help="Path to the product manifest (JSON).")
     check.add_argument("--contracts", default=None, help="Path to component-contracts.json (from @chp/ui).")
     check.set_defaults(func=cmd_app_check)
+
+    cov = app_sub.add_parser("coverage", help="UI coverage — which capabilities are surfaced vs SILENT.")
+    cov.add_argument("manifest", help="Path to the product manifest (JSON).")
+    cov.add_argument("--caps", default=None,
+                     help="JSON list of the product's capability ids (else the manifest's `requires`).")
+    cov.set_defaults(func=cmd_app_coverage)
+
+    comp = app_sub.add_parser("components", help="Discovery — list bindable components + the prop each expects.")
+    comp.add_argument("--contracts", default=None, help="Path to component-contracts.json (from @chp/ui).")
+    comp.set_defaults(func=cmd_app_components)
+
+    schema = app_sub.add_parser("schema", help="Generate the manifest JSON Schema (editor validation + autocomplete).")
+    schema.add_argument("--contracts", default=None,
+                        help="component-contracts.json — surfaces component ids as autocomplete examples.")
+    schema.add_argument("--out", default=None, help="Write the schema to this file (else print to stdout).")
+    schema.set_defaults(func=cmd_app_schema)
+
+    sg = app_sub.add_parser("suggest", help="Draft a manifest by matching a host's capabilities to components.")
+    sg.add_argument("--descriptors", required=True,
+                    help="JSON list of host capability descriptors ({id, category?, output_schema?}).")
+    sg.add_argument("--contracts", default=None, help="component-contracts.json (from @chp/ui).")
+    sg.add_argument("--product-id", default="product:suggested")
+    sg.add_argument("--out", default=None, help="Write the drafted manifest here (else print to stdout).")
+    sg.set_defaults(func=cmd_app_suggest)
 
     sv = app_sub.add_parser("scaffold-view",
                             help="Generate a view-cap stub bridging a source capability to a component.")
