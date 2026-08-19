@@ -23,12 +23,21 @@ on:
       - '!v*.*.*-rc.*'  # RC tags → staging.yml only
     branches-ignore:
       - '**'  # tags only — branch pushes do not trigger release
+  # Manual selective publish (no tag): publish a chosen SUBSET to PyPI/npm. Adapters are
+  # SKIPPED on tag pushes (no trusted publishers → 403); publish them explicitly here.
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Packages to publish (space-separated: chp-core chp-host ts-types adapters — or "all")'
+        default: 'chp-core chp-host'
+        type: string
 
 jobs:
   # ── Guard: a matching RC tag must exist in the repo ──────────────────────
   verify-staged:
     name: Verify RC was staged
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'  # manual runs have no tag/RC to verify
     steps:
       - name: Check out repository (full history for tags)
         uses: actions/checkout@v4
@@ -56,6 +65,14 @@ jobs:
     name: Publish Python package
     runs-on: ubuntu-latest
     needs: [verify-staged]
+    # Every tag push; on a manual run only when chp-core is selected. always() so a
+    # skipped RC guard (manual path) doesn't cascade-skip this job.
+    if: >-
+      ${{ always() && needs.verify-staged.result != 'failure' && (
+        github.event_name == 'push' ||
+        inputs.packages == 'all' ||
+        contains(format(' {0} ', inputs.packages), ' chp-core ')
+      ) }}
     environment: release
     permissions:
       id-token: write  # required for PyPI trusted publishing (OIDC)
@@ -94,6 +111,12 @@ jobs:
     name: Publish chp-host
     runs-on: ubuntu-latest
     needs: [verify-staged]
+    if: >-
+      ${{ always() && needs.verify-staged.result != 'failure' && (
+        github.event_name == 'push' ||
+        inputs.packages == 'all' ||
+        contains(format(' {0} ', inputs.packages), ' chp-host ')
+      ) }}
     environment: release
     permissions:
       id-token: write
@@ -129,6 +152,14 @@ jobs:
     name: Publish ${{ matrix.adapter }}
     runs-on: ubuntu-latest
     needs: [verify-staged, publish-python]
+    # SKIPPED on tag pushes — adapters version independently and most lack trusted
+    # publishers (→ 403). Publish explicitly via a manual run with `adapters` (or `all`).
+    if: >-
+      ${{ always() && needs.verify-staged.result != 'failure'
+          && needs.publish-python.result != 'failure' && (
+        inputs.packages == 'all' ||
+        contains(format(' {0} ', inputs.packages), ' adapters ')
+      ) }}
     environment: release
     permissions:
       id-token: write
@@ -206,6 +237,12 @@ jobs:
     name: Publish TypeScript types
     runs-on: ubuntu-latest
     needs: [verify-staged]
+    if: >-
+      ${{ always() && needs.verify-staged.result != 'failure' && (
+        github.event_name == 'push' ||
+        inputs.packages == 'all' ||
+        contains(format(' {0} ', inputs.packages), ' ts-types ')
+      ) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -243,7 +280,8 @@ jobs:
   verify-published:
     name: Verify protocol train on PyPI
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() }}
+    # Tag releases only — a manual subset publish relies on each publish step's own success.
+    if: ${{ !cancelled() && github.event_name == 'push' }}
     needs: [publish-python, publish-host]
     steps:
       - name: Check out repository
@@ -295,10 +333,10 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    # The release is the canonical artifact record — it must exist even when
-    # some publish legs fail (their artifacts still attach; PyPI can catch up
-    # on a rerun). Only a cancelled run skips it.
-    if: ${{ !cancelled() }}
+    # The release is the canonical artifact record — it must exist even when some publish
+    # legs are skipped (adapters on a tag push) or fail (artifacts still attach; PyPI can
+    # catch up on a rerun). Only a cancelled or tag-less manual run skips it.
+    if: ${{ !cancelled() && github.event_name == 'push' }}
     needs: [publish-python, publish-npm, publish-host, publish-adapters]
     permissions:
       contents: write
