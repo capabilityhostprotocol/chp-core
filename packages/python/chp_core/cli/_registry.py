@@ -41,7 +41,7 @@ def cmd_registry_remove(args: argparse.Namespace) -> int:
 
 def cmd_registry_assess_maturity(args: argparse.Namespace) -> int:
     from ..store import SQLiteEvidenceStore
-    from ..registry import load_registry, add_entry, RegistryEntry, default_registry_path
+    from ..registry import load_registry, add_entry, RegistryEntry
     from ..certification import assess_maturity
 
     # Resolve store path (same logic as session commands)

@@ -277,7 +277,7 @@ def cmd_session_retrieval_report(args: argparse.Namespace) -> int:
     ]
     # latencies are string-encoded in hashed evidence (chp-stable-v1 §2 forbids
     # floats); coerce back to float for the (non-hashed) report aggregate.
-    avg_latency = round(sum(float(x) for x in latencies) / len(latencies), 2) if latencies else None
+    avg_latency = round(sum(float(x) for x in latencies if x is not None) / len(latencies), 2) if latencies else None
 
     print_json({
         "session_id": args.session_id,
@@ -313,7 +313,7 @@ def cmd_session_ingestion_report(args: argparse.Namespace) -> int:
     ]
     # latencies are string-encoded in hashed evidence (chp-stable-v1 §2 forbids
     # floats); coerce back to float for the (non-hashed) report aggregate.
-    avg_latency = round(sum(float(x) for x in latencies) / len(latencies), 2) if latencies else None
+    avg_latency = round(sum(float(x) for x in latencies if x is not None) / len(latencies), 2) if latencies else None
 
     print_json({
         "session_id": args.session_id,
@@ -353,7 +353,7 @@ def cmd_session_transformation_report(args: argparse.Namespace) -> int:
     ]
     # latencies are string-encoded in hashed evidence (chp-stable-v1 §2 forbids
     # floats); coerce back to float for the (non-hashed) report aggregate.
-    avg_latency = round(sum(float(x) for x in latencies) / len(latencies), 2) if latencies else None
+    avg_latency = round(sum(float(x) for x in latencies if x is not None) / len(latencies), 2) if latencies else None
 
     print_json({
         "session_id": args.session_id,
@@ -389,7 +389,7 @@ def cmd_session_workflow_report(args: argparse.Namespace) -> int:
     ]
     # latencies are string-encoded in hashed evidence (chp-stable-v1 §2 forbids
     # floats); coerce back to float for the (non-hashed) report aggregate.
-    avg_latency = round(sum(float(x) for x in latencies) / len(latencies), 2) if latencies else None
+    avg_latency = round(sum(float(x) for x in latencies if x is not None) / len(latencies), 2) if latencies else None
 
     print_json({
         "session_id": args.session_id,
@@ -459,7 +459,7 @@ def cmd_session_graph_report(args: argparse.Namespace) -> int:
     ]
     # latencies are string-encoded in hashed evidence (chp-stable-v1 §2 forbids
     # floats); coerce back to float for the (non-hashed) report aggregate.
-    avg_latency = round(sum(float(x) for x in latencies) / len(latencies), 2) if latencies else None
+    avg_latency = round(sum(float(x) for x in latencies if x is not None) / len(latencies), 2) if latencies else None
 
     print_json({
         "session_id": args.session_id,

@@ -19,7 +19,6 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
-from .host import LocalCapabilityHost
 from .metrics import aggregate_session_metrics, aggregate_token_metrics, format_prometheus, format_token_prometheus
 from .types import (
     CorrelationContext,
@@ -638,7 +637,8 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                 self._write_error(HTTPStatus.NOT_FOUND, "not_found", "no evidence store")
                 return
             from urllib.parse import parse_qs
-            scheme = (parse_qs(urlparse(self.path).query).get("scheme") or [None])[0]
+            _schemes = parse_qs(urlparse(self.path).query).get("scheme")
+            scheme = _schemes[0] if _schemes else None
             head = store.get_store_head(scheme=scheme)
             from . import revocations as _revocations
             from .types import utc_now
@@ -819,8 +819,12 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             self._write_error(HTTPStatus.BAD_REQUEST, "invalid_witness",
                               sv.reason or "witness statement failed verification")
             return
+        raw_seq = body.get("sequence")
+        if raw_seq is None:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_witness", "bad sequence")
+            return
         try:
-            sequence = int(body.get("sequence"))
+            sequence = int(raw_seq)
         except (TypeError, ValueError):
             self._write_error(HTTPStatus.BAD_REQUEST, "invalid_witness", "bad sequence")
             return
@@ -875,8 +879,12 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             self._write_error(HTTPStatus.BAD_REQUEST, "invalid_anchor",
                               av.reason or "anchor failed verification")
             return
+        raw_seq = body.get("sequence")
+        if raw_seq is None:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_anchor", "bad sequence")
+            return
         try:
-            sequence = int(body.get("sequence"))
+            sequence = int(raw_seq)
         except (TypeError, ValueError):
             self._write_error(HTTPStatus.BAD_REQUEST, "invalid_anchor", "bad sequence")
             return

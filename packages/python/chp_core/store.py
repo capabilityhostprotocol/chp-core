@@ -28,7 +28,7 @@ class ChainVerificationResult:
 EVENT_HASH_V2 = "chp-event-hash-v2"
 
 
-def _payload_commitment(payload: JSON) -> str:
+def _payload_commitment(payload: JSON | None) -> str:
     """`sha256(chp-stable-v1(payload))` — the commitment a chp-event-hash-v2
     event binds in place of the inline payload (chp-v0.2.md §14). The empty
     payload commits as the explicit object ``{}`` (pins the cross-impl

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-core"
-version = "0.53.0"
+version = "0.54.0"
 description = "Capability Host Protocol — local execution evidence for agents, tools, and systems"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -72,9 +72,19 @@ exclude_lines = [
 [tool.hatch.build.targets.wheel]
 packages = ["chp_core"]
 
-# Apache-2.0 §4(a): every recipient of a distribution must get a copy of the
-# License. The wheel shipped only a `License: Apache-2.0` metadata field and no
-# text, so an installed copy carried no licence at all. The canonical file lives at
-# the repo root (and is what the sync manifest publishes), so include it from there
-# rather than maintaining a second copy that can drift.
-[tool.hatch.build.targets.wheel.force-include]
+# Apache-2.0 §4(a) attribution: LICENSE + NOTICE ship in the wheel via `license-files`
+# (PEP 639) → `.dist-info/licenses/`. No force-include needed.
+
+[tool.ruff]
+target-version = "py310"
+# Keep ruff's default rule set (E4/E7/E9 + F). host.py imports deliberately land after a
+# module-level helper to break a circular import (.store imports from .host), so E402 there
+# is intentional, not a mistake.
+
+[tool.ruff.lint.per-file-ignores]
+"chp_core/host.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+files = ["chp_core"]

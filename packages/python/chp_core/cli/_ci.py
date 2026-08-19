@@ -15,7 +15,6 @@ _VALID_RISK_TIERS = {"low", "medium", "high", "critical"}
 
 def cmd_policy_lint(args: argparse.Namespace) -> int:
     """Validate a CHP policy JSON file."""
-    from ..policy import load_policy as _load_raw
 
     path = getattr(args, "policy_file", None)
 

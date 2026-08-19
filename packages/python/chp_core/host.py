@@ -108,8 +108,6 @@ from .redaction import redact_payload
 from .types import (
     Actor,
     AssuranceMetadata,
-    AutonomyProfile,
-    AUTONOMY_EVIDENCE_TYPES,
     CapabilityDescriptor,
     CORE_EVIDENCE_TYPES,
     ConversationEvent,
@@ -1260,7 +1258,7 @@ class LocalCapabilityHost:
             return None
 
     def _validate_output(
-        self, descriptor: CapabilityDescriptor, data: JSON, envelope: InvocationEnvelope,
+        self, descriptor: CapabilityDescriptor, data: JSON | None, envelope: InvocationEnvelope,
     ) -> tuple[DenialReason | None, JSON]:
         """Validate a handler result against ``descriptor.output_schema`` (proposal 0029).
 
