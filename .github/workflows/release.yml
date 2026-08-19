@@ -232,72 +232,64 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  # ── Verify what ACTUALLY reached PyPI ─────────────────────────────────────
-  # The publish legs above are deliberately fail-soft (continue-on-error) because
-  # adapters without a trusted publisher 403 by design. The cost is that a leg which
-  # uploaded NOTHING is indistinguishable from one that worked: v0.50.0 reported the
-  # whole matrix green while PyPI still served 0.28.0 for filesystem/http/git/mcp.
-  #
-  # So: soft on the publish, LOUD on the report. This job asks PyPI what it actually
-  # serves and names every package that did not ship. It does not gate create-release
-  # — the release record still stands — it just makes the gap impossible to miss.
+  # ── Verify the protocol train reached PyPI ────────────────────────────────
+  # HARD gate: the protocol-train Python packages (chp-core, chp-host) MUST be on
+  # PyPI at the tagged version. Capability adapters (chp-adapter-*) version
+  # INDEPENDENTLY and publish on their own cadence (see the versioning model —
+  # release-preflight.sh step 4 in chp-dev), so they are NOT expected at the core
+  # version; they get an ADVISORY report at THEIR OWN version that never gates the
+  # release. This ends the chronic false-fail where 30+ independently-versioned
+  # adapters read as "behind" the core tag.
   verify-published:
-    name: Verify PyPI has the tagged version
+    name: Verify protocol train on PyPI
     runs-on: ubuntu-latest
     if: ${{ !cancelled() }}
-    needs: [publish-python, publish-host, publish-adapters]
+    needs: [publish-python, publish-host]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Compare every package manifest against the PyPI simple index
+      - name: Protocol train must be on PyPI at the tagged version (retry for propagation)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          echo "Expecting $VERSION on PyPI for every published package."
-          echo ""
-          behind=""
-          # Derived from the tree, not a hardcoded list — a new adapter cannot be
-          # silently omitted from this check the way it can from the matrix.
-          for pyproject in packages/python/pyproject.toml \
-                           packages/chp-host/pyproject.toml \
-                           packages/chp-adapter-*/pyproject.toml; do
+          echo "Expecting the protocol train on PyPI at $VERSION."
+          missing=""
+          for pyproject in packages/python/pyproject.toml packages/chp-host/pyproject.toml; do
             [ -f "$pyproject" ] || continue
             name=$(sed -n 's/^name = "\(.*\)"/\1/p' "$pyproject" | head -1)
             [ -n "$name" ] || continue
-            # Normalise to the simple-index form (PEP 503).
             slug=$(echo "$name" | tr '[:upper:]_.' '[:lower:]--')
-            html=$(curl -sf --max-time 20 "https://pypi.org/simple/${slug}/" || echo "")
-            if [ -z "$html" ]; then
-              echo "  ?  $name — no PyPI project (never published)"
-              behind="$behind $name(absent)"
-            elif echo "$html" | grep -qF "${VERSION}"; then
-              echo "  ok $name $VERSION"
-            else
-              latest=$(echo "$html" | grep -oE '\-[0-9]+\.[0-9]+\.[0-9]+' | tr -d '-' | sort -V | tail -1)
-              echo "  ✗  $name — PyPI serves ${latest:-unknown}, expected $VERSION"
-              behind="$behind $name"
-            fi
+            # The version-specific release URL is authoritative. The simple index and
+            # the JSON "latest" field lag minutes behind a fresh upload — do NOT trust
+            # them for a just-published version. Poll with backoff.
+            ok=""
+            for attempt in $(seq 1 10); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "https://pypi.org/pypi/${slug}/${VERSION}/json" || echo 000)
+              if [ "$code" = "200" ]; then ok=1; echo "  ok  $name $VERSION"; break; fi
+              echo "  ..  $name $VERSION not on PyPI yet (HTTP $code) — retry $attempt/10"; sleep 30
+            done
+            [ -n "$ok" ] || missing="$missing $name"
           done
-          echo ""
-          if [ -n "$behind" ]; then
-            {
-              echo "## Packages that did NOT publish at $VERSION"
-              echo ""
-              for p in $behind; do echo "- \`$p\`"; done
-              echo ""
-              echo "These legs reported success because the PyPI publish step is"
-              echo "\`continue-on-error: true\` — a 403 from a missing trusted publisher is"
-              echo "swallowed. Register each at:"
-              echo ""
-              echo "    https://pypi.org/manage/project/<name>/settings/publishing/"
-              echo "    Repository: capabilityhostprotocol/chp-core"
-              echo "    Workflow:   release.yml"
-              echo "    Environment: release"
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "FAILED: the following did not reach PyPI at $VERSION:$behind"
+          if [ -n "$missing" ]; then
+            echo "FAILED: protocol train missing on PyPI at $VERSION:$missing" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          echo "All packages present on PyPI at $VERSION." >> "$GITHUB_STEP_SUMMARY"
+          echo "Protocol train present on PyPI at $VERSION." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Advisory — capability-adapter versions on PyPI (never gates)
+        if: ${{ always() }}
+        run: |
+          echo "### Capability adapters — independent versions, advisory only" >> "$GITHUB_STEP_SUMMARY"
+          for pyproject in packages/chp-adapter-*/pyproject.toml; do
+            [ -f "$pyproject" ] || continue
+            name=$(sed -n 's/^name = "\(.*\)"/\1/p' "$pyproject" | head -1)
+            ver=$(sed -n 's/^version = "\(.*\)"/\1/p' "$pyproject" | head -1)
+            [ -n "$name" ] || continue
+            slug=$(echo "$name" | tr '[:upper:]_.' '[:lower:]--')
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://pypi.org/pypi/${slug}/${ver}/json" || echo 000)
+            if [ "$code" = "200" ]; then echo "- \`$name\` $ver — on PyPI" >> "$GITHUB_STEP_SUMMARY";
+            else echo "- \`$name\` $ver — not on PyPI (private/independent; expected unless a public adapter release)" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
 
   # ── Create GitHub Release ─────────────────────────────────────────────────
   create-release:
