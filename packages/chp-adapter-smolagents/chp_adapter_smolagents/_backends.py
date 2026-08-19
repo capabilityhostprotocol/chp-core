@@ -118,7 +118,8 @@ def build_model(model_type: str, model_id: str, api_base: str, api_key: str) -> 
     raise ValueError(f"Unknown model_type: {model_type!r}. Use 'openai_server', 'mlx', or 'transformers'.")
 
 
-def make_chp_model(model_id: str, invoke: Callable[[dict], dict]) -> Any:
+def make_chp_model(model_id: str, invoke: Callable[[dict], dict], *,
+                   temperature: float | None = None) -> Any:
     """A smolagents Model whose completions are served by a CHP capability (e.g.
     ``chp.adapters.local_llm.chat``) invoked through the host router, instead of a raw
     OpenAI ``/v1`` endpoint. Every model call is then governed + evidenced, and can target
@@ -167,6 +168,8 @@ def make_chp_model(model_id: str, invoke: Callable[[dict], dict]) -> Any:
             payload: dict[str, Any] = {"model": self.model_id, "messages": messages}
             if ck.get("tools"):
                 payload["tools"] = ck["tools"]
+            if temperature is not None:   # deterministic agentic completions (tool-calling/reasoning)
+                payload["temperature"] = temperature
             res = invoke(payload) or {}
             msg = res.get("message", {}) or {}
             raw_calls = msg.get("tool_calls") or res.get("tool_calls") or []
@@ -195,11 +198,12 @@ def make_chp_model(model_id: str, invoke: Callable[[dict], dict]) -> Any:
 
 def build_agent(model: Any, tools: list[Any], agent_type: str = "code", max_steps: int = 6,
                 *, name: str | None = None, description: str | None = None,
-                managed_agents: list[Any] | None = None) -> Any:
+                managed_agents: list[Any] | None = None, planning_interval: int | None = None) -> Any:
     """Construct a smolagents agent. agent_type selects the action channel: 'code' → CodeAgent
     (writes Python over the tools), 'tool' → ToolCallingAgent (JSON tool_calls, reliable with small
     models). name/description make it delegatable as a managed sub-agent; managed_agents are the
-    specialist sub-agents this (manager) agent may delegate to."""
+    specialist sub-agents this (manager) agent may delegate to; planning_interval makes it re-plan
+    every N steps (steadier multi-step orchestration)."""
     kwargs: dict[str, Any] = {"tools": tools, "model": model, "max_steps": max_steps}
     if name:
         kwargs["name"] = name
@@ -207,6 +211,8 @@ def build_agent(model: Any, tools: list[Any], agent_type: str = "code", max_step
         kwargs["description"] = description
     if managed_agents:
         kwargs["managed_agents"] = managed_agents
+    if planning_interval:
+        kwargs["planning_interval"] = planning_interval
     if agent_type == "tool":
         from smolagents import ToolCallingAgent
         return ToolCallingAgent(**kwargs)
@@ -215,9 +221,11 @@ def build_agent(model: Any, tools: list[Any], agent_type: str = "code", max_step
 
 
 def run_agent(model: Any, tools: list[Any], task: str, max_steps: int,
-              agent_type: str = "code", managed_agents: list[Any] | None = None) -> dict:
+              agent_type: str = "code", managed_agents: list[Any] | None = None,
+              planning_interval: int | None = None) -> dict:
     """Build the (manager) agent and run the task; returns answer + step count."""
-    agent = build_agent(model, tools, agent_type, max_steps, managed_agents=managed_agents)
+    agent = build_agent(model, tools, agent_type, max_steps, managed_agents=managed_agents,
+                        planning_interval=planning_interval)
     answer = agent.run(task)
 
     steps = 0
