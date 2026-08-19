@@ -214,6 +214,8 @@ class ConformanceAdapter(BaseAdapter):
         results = []
         for src_file, adapter_id in src_to_prefix.items():
             violations = check_source_file(src_file)
+            if adapter_id == _HTTP_TRANSPORT_ADAPTER:   # the sanctioned transport may import an HTTP client
+                violations = [v for v in violations if v.rule != "raw_http"]
             conformance_score = score(violations)
             results.append({
                 "adapter_id": adapter_id,

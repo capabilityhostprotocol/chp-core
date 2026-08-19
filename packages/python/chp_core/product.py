@@ -392,6 +392,27 @@ def _derive_component_ref(s: SurfaceBinding, chosen: dict[str, CapabilityDescrip
     return replace(s, component=ref)
 
 
+# Built-in @chp/ui render dialects — the always-available component floor (BASE_CATALOG). A route or region
+# may mount one of these directly; it need not be a product-composed render-capability. Data bindings still
+# must resolve to BOUND capabilities — authority conservation is on the DATA (the binding), not the widget.
+_BUILTIN_RENDER_DIALECTS = frozenset({
+    "chp.widgets", "chp.ui", "chp.molecules", "chp.surfaces", "chp.ai",
+    "chp.governed", "chp.shell", "chp.workflow", "chp.explainability",
+})
+
+
+def _component_issue(component: str, chosen: dict[str, CapabilityDescriptor], where: str,
+                     ident: str) -> str | None:
+    """Validate a route/region ``component``: valid iff a BOUND render-capability (a product-composed
+    component) OR a built-in @chp/ui component (a known render dialect). Returns an issue string, or None."""
+    d = chosen.get(component)
+    if d is not None:
+        return None if is_render_capability(d) else f"{where}_component_not_renderable:{ident}:{component}"
+    if ".".join(component.split(".")[:2]) in _BUILTIN_RENDER_DIALECTS:
+        return None
+    return f"{where}_unknown_component:{ident}:{component}"
+
+
 def resolve(spec: ProductSpecification, descriptors: list[CapabilityDescriptor],
             *, remote_descriptors: list[CapabilityDescriptor] | None = None,
             policy: dict | None = None) -> ProductLock:
@@ -472,16 +493,18 @@ def resolve(spec: ProductSpecification, descriptors: list[CapabilityDescriptor],
             for b in r.bindings:
                 if b.capability not in chosen:
                     issues.append(f"route_unknown_capability:{b.capability}")
+            if r.component is not None:                      # routes were never validated before (a gap):
+                issue = _component_issue(r.component, chosen, "route", r.id)
+                if issue:
+                    issues.append(issue)
             for reg in r.regions:
                 for b in reg.bindings:
                     if b.capability not in chosen:
                         issues.append(f"region_unknown_capability:{reg.id}:{b.capability}")
-                if reg.component is not None:
-                    comp = chosen.get(reg.component)
-                    if comp is None:
-                        issues.append(f"region_unknown_component:{reg.id}:{reg.component}")
-                    elif not is_render_capability(comp):
-                        issues.append(f"region_component_not_renderable:{reg.id}:{reg.component}")
+                if reg.component is not None:                # now also accepts built-in @chp/ui components,
+                    issue = _component_issue(reg.component, chosen, "region", reg.id)  # not only bound caps
+                    if issue:
+                        issues.append(issue)
 
     if issues:
         raise ResolutionError(issues)
