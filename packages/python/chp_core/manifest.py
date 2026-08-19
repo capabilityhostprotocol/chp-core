@@ -15,6 +15,7 @@ from __future__ import annotations
 from .product import (
     ProductSpecification,
     ProductUISchema,
+    Region,
     Requirement,
     Route,
     RouteBinding,
@@ -25,16 +26,23 @@ from .product import (
 __all__ = ["parse_manifest", "merge_manifests", "manifest_hash"]
 
 
+def _binding(b: dict) -> RouteBinding:
+    return RouteBinding(card=b["card"], capability=b["capability"],
+                        params=b.get("params"), extract=b.get("extract"))
+
+
 def _parse_ui(ui: dict) -> ProductUISchema:
     routes = [
         Route(
             id=r["id"], path=r.get("path"), label=r.get("label"), icon=r.get("icon"),
             view=r.get("view"), component=r.get("component"),
-            bindings=[
-                RouteBinding(card=b["card"], capability=b["capability"],
-                             params=b.get("params"), extract=b.get("extract"))
-                for b in r.get("bindings", [])
+            bindings=[_binding(b) for b in r.get("bindings", [])],
+            regions=[
+                Region(id=reg["id"], label=reg.get("label"), component=reg.get("component"),
+                       bindings=[_binding(b) for b in reg.get("bindings", [])], span=reg.get("span"))
+                for reg in r.get("regions", [])
             ],
+            layout=r.get("layout"),
         )
         for r in ui.get("routes", [])
     ]

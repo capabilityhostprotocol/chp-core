@@ -241,6 +241,80 @@ def test_unknown_archetype_rejected():
     assert "unknown_archetype:nonsense" in str(exc.value)
 
 
+def _render_desc(cid: str, ver: str = "1.0.0") -> CapabilityDescriptor:
+    return CapabilityDescriptor(id=cid, version=ver, description="render",
+                                category="component", input_schema={"type": "object"})
+
+
+def test_region_slots_ride_in_the_lock_and_conserve_authority():
+    # A composite page = a route with named regions, each a self-binding render-capability.
+    from chp_core.product import ProductUISchema, Region, Route, RouteBinding
+    spec = ProductSpecification(
+        "product:t", "0.1.0",
+        [Requirement("a.two", ">=2.0 <3"), Requirement("chp.crm.Timeline", ">=1.0")],
+        ui=ProductUISchema(routes=[Route(
+            id="record", path="/record", layout="grid", regions=[
+                Region(id="timeline", component="chp.crm.Timeline", span=2,
+                       bindings=[RouteBinding(card="items", capability="a.two", extract="deals")])])]))
+    lock = resolve(spec, [_desc("a.two", "2.0.0"), _render_desc("chp.crm.Timeline")])
+    route = lock.to_dict()["ui"]["routes"][0]
+    assert route["layout"] == "grid"
+    reg = route["regions"][0]
+    assert reg["id"] == "timeline" and reg["component"] == "chp.crm.Timeline" and reg["span"] == 2
+    assert reg["bindings"][0] == {"card": "items", "capability": "a.two", "extract": "deals"}
+    # regions ride in the signed digest — dropping them changes the lock
+    spec2 = ProductSpecification("product:t", "0.1.0",
+                                 [Requirement("a.two", ">=2.0 <3"), Requirement("chp.crm.Timeline", ">=1.0")])
+    assert resolve(spec2, [_desc("a.two", "2.0.0"), _render_desc("chp.crm.Timeline")]).digest != lock.digest
+
+
+def test_region_binding_must_reference_a_bound_capability():
+    from chp_core.product import ProductUISchema, Region, Route, RouteBinding
+    spec = ProductSpecification(
+        "product:t", "0.1.0",
+        [Requirement("a.two", ">=2.0 <3"), Requirement("chp.crm.Timeline", ">=1.0")],
+        ui=ProductUISchema(routes=[Route(id="rec", regions=[
+            Region(id="t", component="chp.crm.Timeline",
+                   bindings=[RouteBinding(card="c", capability="a.NOT_BOUND")])])]))
+    with pytest.raises(ResolutionError) as exc:
+        resolve(spec, [_desc("a.two", "2.0.0"), _render_desc("chp.crm.Timeline")])
+    assert "region_unknown_capability:t:a.NOT_BOUND" in str(exc.value)
+
+
+def test_region_component_must_be_a_bound_renderable_capability():
+    from chp_core.product import ProductUISchema, Region, Route
+    # (a) component not bound at all
+    spec = ProductSpecification(
+        "product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")],
+        ui=ProductUISchema(routes=[Route(id="rec", regions=[Region(id="t", component="chp.crm.NOPE")])]))
+    with pytest.raises(ResolutionError) as exc:
+        resolve(spec, [_desc("a.two", "2.0.0")])
+    assert "region_unknown_component:t:chp.crm.NOPE" in str(exc.value)
+    # (b) component bound but NOT a render-capability (a compute cap can't be a region's component)
+    spec2 = ProductSpecification(
+        "product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")],
+        ui=ProductUISchema(routes=[Route(id="rec", regions=[Region(id="t", component="a.two")])]))
+    with pytest.raises(ResolutionError) as exc2:
+        resolve(spec2, [_desc("a.two", "2.0.0")])
+    assert "region_component_not_renderable:t:a.two" in str(exc2.value)
+
+
+def test_region_slots_manifest_roundtrip():
+    from chp_core.manifest import parse_manifest
+    m = {"id": "product:t", "version": "0.1.0",
+         "requires": [{"capability": "a.two", "range": ">=2.0 <3"},
+                      {"capability": "chp.crm.Timeline", "range": ">=1.0"}],
+         "ui": {"routes": [{"id": "record", "layout": "stack", "regions": [
+             {"id": "timeline", "component": "chp.crm.Timeline", "span": 2,
+              "bindings": [{"card": "items", "capability": "a.two", "extract": "deals"}]}]}]}}
+    spec = parse_manifest(m)
+    r = spec.ui.routes[0]
+    assert r.layout == "stack" and r.regions[0].id == "timeline" and r.regions[0].span == 2
+    assert r.regions[0].bindings[0].capability == "a.two"
+    lock = resolve(spec, [_desc("a.two", "2.0.0"), _render_desc("chp.crm.Timeline")])
+    assert lock.to_dict()["ui"]["routes"][0]["regions"][0]["component"] == "chp.crm.Timeline"
+
+
 def _render_cap(cid: str, ver: str, content_hash: str | None = None) -> CapabilityDescriptor:
     meta = {"content_hash": content_hash} if content_hash else {}
     return CapabilityDescriptor(id=cid, version=ver, description="ui", category="component",

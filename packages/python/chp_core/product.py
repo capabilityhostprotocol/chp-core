@@ -184,9 +184,36 @@ class RouteBinding:
 
 
 @dataclass(frozen=True)
+class Region:
+    """A named region of a composite page: mounts one render-capability (``component``) that
+    self-binds its own data (``bindings``), laid out with its siblings by the route's ``layout``.
+    The page-level peer of a card's binding — a whole page becomes a layout of self-binding regions
+    (data), not a hand-coded organism. ``span`` = grid column span (grid layout only)."""
+
+    id: str
+    label: str | None = None
+    component: str | None = None
+    bindings: list[RouteBinding] = field(default_factory=list)
+    span: int | None = None
+
+    def to_dict(self) -> dict:
+        out: dict[str, object] = {"id": self.id}
+        for k in ("label", "component"):
+            v = getattr(self, k)
+            if v is not None:
+                out[k] = v
+        if self.bindings:
+            out["bindings"] = [b.to_dict() for b in self.bindings]
+        if self.span is not None:
+            out["span"] = self.span
+        return out
+
+
+@dataclass(frozen=True)
 class Route:
-    """A route within a product's UI — mounts a built-in ``view`` or a federated ``component``
-    (render-capability id), with capability ``bindings`` for its cards."""
+    """A route within a product's UI — mounts a built-in ``view``, a federated ``component``
+    (render-capability id) with card ``bindings``, OR a composite page of ``regions`` (each a
+    self-binding render-capability) arranged by ``layout`` (``stack``|``grid``|``flex``)."""
 
     id: str
     path: str | None = None
@@ -195,6 +222,8 @@ class Route:
     view: str | None = None
     component: str | None = None
     bindings: list[RouteBinding] = field(default_factory=list)
+    regions: list[Region] = field(default_factory=list)
+    layout: str | None = None
 
     def to_dict(self) -> dict:
         out: dict[str, object] = {"id": self.id}
@@ -204,6 +233,10 @@ class Route:
                 out[k] = v
         if self.bindings:
             out["bindings"] = [b.to_dict() for b in self.bindings]
+        if self.regions:
+            out["regions"] = [r.to_dict() for r in self.regions]
+        if self.layout is not None:
+            out["layout"] = self.layout
         return out
 
 
@@ -231,8 +264,11 @@ class ProductUISchema:
         return out
 
     def bound_capabilities(self) -> list[str]:
-        """Every capability the UI's route bindings reference — checked against the Lock in resolve()."""
-        return [b.capability for r in self.routes for b in r.bindings]
+        """Every capability the UI's route AND region bindings reference — checked against the Lock in
+        resolve() (authority conservation: the UI can't surface data the product didn't compose)."""
+        caps = [b.capability for r in self.routes for b in r.bindings]
+        caps += [b.capability for r in self.routes for reg in r.regions for b in reg.bindings]
+        return caps
 
 
 @dataclass
@@ -425,15 +461,27 @@ def resolve(spec: ProductSpecification, descriptors: list[CapabilityDescriptor],
     if not spec.projection:
         issues.append("empty_projection")
 
-    # UI route bindings — same authority-conservation law one level up: a route card may only bind a
-    # BOUND capability (the archetype/console can't surface data the product didn't compose), and the
-    # archetype (if named) must be a known template.
+    # UI route/region bindings — same authority-conservation law one level up: a route card OR a
+    # composite-page region may only bind a BOUND capability (the console can't surface data the product
+    # didn't compose), a region's render-capability ``component`` must be a BOUND renderable one (like a
+    # surface), and the archetype (if named) must be a known template.
     if spec.ui is not None:
         if spec.ui.archetype is not None and spec.ui.archetype not in ARCHETYPES:
             issues.append(f"unknown_archetype:{spec.ui.archetype}")
-        for cap in spec.ui.bound_capabilities():
-            if cap not in chosen:
-                issues.append(f"route_unknown_capability:{cap}")
+        for r in spec.ui.routes:
+            for b in r.bindings:
+                if b.capability not in chosen:
+                    issues.append(f"route_unknown_capability:{b.capability}")
+            for reg in r.regions:
+                for b in reg.bindings:
+                    if b.capability not in chosen:
+                        issues.append(f"region_unknown_capability:{reg.id}:{b.capability}")
+                if reg.component is not None:
+                    comp = chosen.get(reg.component)
+                    if comp is None:
+                        issues.append(f"region_unknown_component:{reg.id}:{reg.component}")
+                    elif not is_render_capability(comp):
+                        issues.append(f"region_component_not_renderable:{reg.id}:{reg.component}")
 
     if issues:
         raise ResolutionError(issues)
