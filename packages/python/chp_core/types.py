@@ -772,7 +772,7 @@ class StreamResult:
     value would. Internal contract only: never serialized to the wire (the
     terminal SSE frame carries a standard InvocationResult)."""
 
-    data: JSON = None
+    data: JSON | None = None
 
 
 @dataclass(slots=True)
@@ -874,7 +874,7 @@ class InvocationEnvelope:
         if not isinstance(cap, str) or not cap:
             raise ValueError("capability_id must be a non-empty string")
 
-        def _obj(v: JSON, field: str) -> JSON:
+        def _obj(v: JSON | None, field: str) -> JSON:
             if v is None:
                 return {}
             if not isinstance(v, dict):

@@ -191,7 +191,6 @@ class SQLiteIncidentManager:
 
     def _row_to_incident(self, row: tuple) -> Incident:
         import json
-        from dataclasses import asdict
 
         (incident_id, title, severity, status, trigger_json,
          corr_json, detected_at, resolved_at, timeline_json) = row

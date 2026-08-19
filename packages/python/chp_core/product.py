@@ -24,7 +24,7 @@ import hashlib
 from dataclasses import dataclass, field, replace
 
 from .agent_interface import is_render_capability
-from .semver import best_satisfying, version_satisfies
+from .semver import best_satisfying
 from .signing import HostKey, _canon, _sign, _verify_sig
 from .types import CapabilityDescriptor
 

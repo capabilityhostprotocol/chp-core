@@ -587,7 +587,6 @@ def cmd_retention_apply(args: argparse.Namespace) -> int:
     """Apply retention policies to an evidence store (chain-preserving), then
     optionally compact. Config JSON: {"retain_days":30, "stores":[...],
     "policies":[{"policy_id","retain_days","applies_to",...}]}."""
-    import sys
     from ..store import SQLiteEvidenceStore
     from ..compliance import SQLiteComplianceManager
     from ..types import RetentionPolicy
@@ -1103,7 +1102,6 @@ def cmd_attest_verify(args: argparse.Namespace) -> int:
     """Verify a DSSE-enveloped in-toto attestation (§15, proposal 0021): the PAE
     signature is authentic AND the subject digest matches AND the embedded CHP
     bundle verifies. Exit 1 if invalid."""
-    import sys
 
     from .. import dsse
 
@@ -1120,7 +1118,6 @@ def cmd_head_inclusion(args: argparse.Namespace) -> int:
     SSHSIG and recompute the RFC 6962 Merkle root from one correlation's leaf up
     the audit path — with NO leaves snapshot and NO witness. Exit 1 if either
     the anchor or the inclusion fails."""
-    import sys
 
     from .. import signing
     from ..merkle import verify_store_head_inclusion

@@ -305,7 +305,8 @@ def _selfcheck() -> None:
             assert verify_inclusion(root, leaves[i], i, n, proof), (n, i)
             assert not verify_inclusion(root, b"FORGED", i, n, proof), (n, i)
             if proof:  # a tampered path fails
-                bad = list(proof); bad[0] = b"\x00" * 32
+                bad = list(proof)
+                bad[0] = b"\x00" * 32
                 assert not verify_inclusion(root, leaves[i], i, n, bad), (n, i)
     # Consistency: for every m <= n (n up to 9), the proof recomputes BOTH the
     # size-m and size-n roots; empty proof for m==0 and m==n.
@@ -323,7 +324,8 @@ def _selfcheck() -> None:
                 forged_old = merkle_root(leaves[:m - 1] + [b"REWRITTEN"])
                 assert not verify_consistency(forged_old, new_root, m, n, proof), (m, n)
                 # A tampered proof entry fails.
-                bad = list(proof); bad[0] = b"\x00" * 32
+                bad = list(proof)
+                bad[0] = b"\x00" * 32
                 assert not verify_consistency(old_root, new_root, m, n, bad), (m, n)
     # A truncated log (later root drops a leaf) is caught: proof for (m, n) cannot
     # validate against a second_root that removed leaves.

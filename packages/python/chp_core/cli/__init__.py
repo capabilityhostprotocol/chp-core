@@ -138,7 +138,15 @@ from ._work import (
     cmd_work_vc_version_bump,
 )
 
-__all__ = ["main", "build_parser"]
+__all__ = [
+    "main",
+    "build_parser",
+    # hooks helpers re-exported for tests + external callers (from chp_core.cli import _install_hooks)
+    "_install_hooks",
+    "_install_prepush_hook",
+    "_settings_path",
+    "_uninstall_hooks",
+]
 
 
 _START_HERE = """\

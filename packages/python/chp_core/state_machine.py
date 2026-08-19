@@ -337,7 +337,7 @@ def register_state_machine_capability(host: Any, sm: StateMachineCapability | No
         )
         try:
             record = sm.create(name, definition, context)
-        except Exception as exc:
+        except Exception:
             raise
         ctx.emit("state_machine_created", {"machine_id": record.machine_id, "initial_state": record.current_state}, redacted=False)
         return record.to_dict()
@@ -362,7 +362,7 @@ def register_state_machine_capability(host: Any, sm: StateMachineCapability | No
         ctx.emit("state_machine_transition_started", {"machine_id": machine_id, "event": event}, redacted=False)
         try:
             result = sm.transition(machine_id, event)
-        except Exception as exc:
+        except Exception:
             raise
         if result.allowed:
             record = sm.get(machine_id)
