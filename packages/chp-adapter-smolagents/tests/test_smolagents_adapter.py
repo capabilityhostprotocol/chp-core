@@ -63,14 +63,21 @@ class FakeBackend:
     def build_model(self, model_type: str, model_id: str, api_base: str, api_key: str) -> Any:
         return {"model_id": model_id, "type": model_type}
 
+    def make_chp_model(self, model_id: str, invoke: Callable[[dict], Any], *,
+                       temperature: float | None = None) -> Any:
+        self.model_temperature = temperature
+        return {"model_id": model_id, "chp_cap": True}
+
     def build_agent(self, model: Any, tools: list[Any], agent_type: str = "code",
-                    max_steps: int = 6, *, name=None, description=None, managed_agents=None) -> Any:
+                    max_steps: int = 6, *, name=None, description=None, managed_agents=None,
+                    planning_interval=None) -> Any:
         return {"name": name, "description": description, "tools": tools, "agent_type": agent_type}
 
     def run_agent(self, model: Any, tools: list[Any], task: str, max_steps: int,
-                  agent_type: str = "code", managed_agents=None) -> dict:
+                  agent_type: str = "code", managed_agents=None, planning_interval=None) -> dict:
         self.agent_type = agent_type
         self.managed_agents = managed_agents
+        self.planning_interval = planning_interval
         # Simulate the agent deciding to call the first tool with a payload.
         if tools:
             result = tools[0]["func"]({"text": "hello from agent"})
@@ -122,6 +129,26 @@ class TestRun:
         assert result.success
         assert result.data["steps"] == 2
         assert "reasoned directly" in result.data["answer"]
+
+    def test_chp_cap_pins_agentic_temperature_default_zero_and_override(self):
+        """Supercharge: the chp_cap model gets a deterministic temperature (default 0) for agentic
+        completions, overridable per run — the fix for the model hallucinating over its tool output."""
+        fake = FakeBackend()
+        store = SQLiteEvidenceStore(":memory:")
+        host = LocalCapabilityHost(store=store)
+        register_adapter(host, EchoAdapter())
+        register_adapter(host, SmolagentsAdapter(SmolagentsConfig(
+            model_type="chp_cap", model_id="fake-model", _backend=fake)))
+        _invoke(host, "chp.adapters.smolagents.run", {"task": "think"})
+        assert fake.model_temperature == 0.0                      # deterministic default
+        _invoke(host, "chp.adapters.smolagents.run", {"task": "think", "temperature": 0.5})
+        assert fake.model_temperature == 0.5                      # per-run override
+
+    def test_planning_interval_threads_to_the_agent(self):
+        fake = FakeBackend()
+        _invoke(_make_host(fake), "chp.adapters.smolagents.run",
+                {"task": "plan it", "planning_interval": 3})
+        assert fake.planning_interval == 3
 
     def test_tool_bridge_invokes_chp_capability(self):
         """The fake agent calls a tool → must round-trip through ctx.ainvoke to EchoAdapter."""

@@ -60,6 +60,8 @@ class SmolagentsConfig:
     model_timeout: float = 300.0  # a governed model call may warm a cold model; don't cut it short
     max_steps: int = 6
     tool_timeout: float = 120.0
+    temperature: float = 0.0  # deterministic agentic completions (tool-calling/reasoning); overridable
+    planning_interval: int | None = None  # re-plan every N steps (steadier multi-step orchestration)
     allowed_tools: list[str] | None = None  # None → any capability id may be exposed
     _backend: Any = field(default=None, repr=False)
 
@@ -134,6 +136,10 @@ class SmolagentsAdapter(BaseAdapter):
                                    "description": "specialist sub-agents the manager can delegate to: [{name, description, tools:[cap_ids], agent_type?}] — multi-agent orchestrator-workers"},
                 "num_ctx": {"type": "integer", "minimum": 256, "maximum": 262144,
                             "description": "context window for the model's completions (forwarded to the model cap, e.g. local_llm.chat) — raise it when exposing many tools so their schemas don't overflow the default context"},
+                "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0,
+                                "description": "sampling temperature for the model's agentic completions — default 0 (deterministic tool-calling/reasoning; raise only for creative tasks)"},
+                "planning_interval": {"type": "integer", "minimum": 1, "maximum": 20,
+                                      "description": "make the agent re-plan every N steps — steadier multi-step / multi-agent orchestration"},
             },
             "required": ["task"],
             "additionalProperties": False,
@@ -150,6 +156,10 @@ class SmolagentsAdapter(BaseAdapter):
         max_steps: int = payload.get("max_steps") or self._config.max_steps
         agent_type: str = payload.get("agent_type") or "code"
         num_ctx = payload.get("num_ctx")   # forwarded to the model cap so many-tool prompts fit
+        temperature = payload.get("temperature")
+        if temperature is None:
+            temperature = self._config.temperature
+        planning_interval = payload.get("planning_interval") or self._config.planning_interval
 
         if not model_id:
             raise ValueError("No model_id specified and none configured (set SMOLAGENTS_MODEL).")
@@ -210,7 +220,7 @@ class SmolagentsAdapter(BaseAdapter):
                     if not getattr(res, "success", False):
                         raise RuntimeError(getattr(res, "error", "model capability failed"))
                     return res.data
-                model = be.make_chp_model(model_id, _model_invoke)
+                model = be.make_chp_model(model_id, _model_invoke, temperature=temperature)
             else:
                 model = be.build_model(
                     model_type, model_id,
@@ -225,7 +235,7 @@ class SmolagentsAdapter(BaseAdapter):
                     sub.get("agent_type", "tool"), max_steps,
                     name=sub["name"], description=sub["description"]))
             result = await asyncio.to_thread(be.run_agent, model, tools, task, max_steps,
-                                             agent_type, managed_agents or None)
+                                             agent_type, managed_agents or None, planning_interval)
         except Exception as exc:
             ctx.emit("smolagents_run_failed", {
                 "model_id": model_id, "error": str(exc)[:500],
