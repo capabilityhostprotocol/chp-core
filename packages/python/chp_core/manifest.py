@@ -20,6 +20,7 @@ from .product import (
     Route,
     RouteBinding,
     SurfaceBinding,
+    View,
     product_digest,
 )
 
@@ -28,7 +29,13 @@ __all__ = ["parse_manifest", "merge_manifests", "manifest_hash"]
 
 def _binding(b: dict) -> RouteBinding:
     return RouteBinding(card=b["card"], capability=b["capability"],
-                        params=b.get("params"), extract=b.get("extract"))
+                        params=b.get("params"), extract=b.get("extract"), detail=b.get("detail"))
+
+
+def _view(v: dict) -> View:
+    return View(id=v["id"], source_capability=v["source_capability"],
+                output_schema=v.get("output_schema", {}), transform=v.get("transform"),
+                audience=v.get("audience"), decision_grade=v.get("decision_grade"))
 
 
 def _parse_ui(ui: dict) -> ProductUISchema:
@@ -39,15 +46,18 @@ def _parse_ui(ui: dict) -> ProductUISchema:
             bindings=[_binding(b) for b in r.get("bindings", [])],
             regions=[
                 Region(id=reg["id"], label=reg.get("label"), component=reg.get("component"),
-                       bindings=[_binding(b) for b in reg.get("bindings", [])], span=reg.get("span"))
+                       bindings=[_binding(b) for b in reg.get("bindings", [])], span=reg.get("span"),
+                       props=reg.get("props"))
                 for reg in r.get("regions", [])
             ],
             layout=r.get("layout"),
+            props=r.get("props"),
         )
         for r in ui.get("routes", [])
     ]
     return ProductUISchema(archetype=ui.get("archetype"), routes=routes,
-                           auth=ui.get("auth"), tenancy=ui.get("tenancy"))
+                           auth=ui.get("auth"), tenancy=ui.get("tenancy"),
+                           views=[_view(v) for v in ui.get("views", [])])
 
 
 def parse_manifest(data: dict) -> ProductSpecification:
