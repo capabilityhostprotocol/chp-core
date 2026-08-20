@@ -30,7 +30,7 @@ from .types import CapabilityDescriptor
 
 __all__ = [
     "Requirement", "ProductSpecification", "Binding", "ProductLock", "SurfaceBinding", "ComponentRef",
-    "Route", "RouteBinding", "ProductUISchema", "ARCHETYPES",
+    "Route", "RouteBinding", "View", "ProductUISchema", "ARCHETYPES",
     "AUTHORITY_CLASSES", "ASSURANCE_TIERS", "PROJECTION_MODES", "CONFORMANCE_CHECKS", "ConformanceResult",
     "ResolutionError", "resolve", "sign_lock", "verify_lock", "check_conformance", "product_digest",
 ]
@@ -173,6 +173,8 @@ class RouteBinding:
     capability: str
     params: dict | None = None
     extract: str | None = None
+    detail: dict | None = None       # master-detail drill-down: {capability, key, param} (selecting a row
+    #                                  invokes `capability` with {param: row[key]} — must be a BOUND cap)
 
     def to_dict(self) -> dict:
         out: dict[str, object] = {"card": self.card, "capability": self.capability}
@@ -180,6 +182,46 @@ class RouteBinding:
             out["params"] = self.params
         if self.extract is not None:
             out["extract"] = self.extract
+        if self.detail is not None:
+            out["detail"] = self.detail
+        return out
+
+
+@dataclass(frozen=True)
+class View:
+    """A first-class **data-shaping View** — a declared *derived* capability (chp-runtime's View
+    concept, ported). A View composes one ``source_capability`` and reshapes its result to
+    ``output_schema`` — the canonical shape a component consumes. "A view IS a capability", the peer of
+    "a component IS a render-capability": a route/region binding targets a View by putting its ``id`` in
+    the binding's ``capability`` (no separate binding field).
+
+    The View makes three things first-class that were previously implicit in a hand-written view-cap:
+    * ``output_schema`` is the **contract** the linter checks a binding against (no external catalog to
+      drift from — see ``chp_core.app_lint``);
+    * ``source_capability`` is the **authority + coverage link** — :func:`resolve` requires it to be a
+      BOUND capability (a View can't surface data the product didn't compose), and coverage credits it as
+      surfaced when a View over it is bound;
+    * ``audience`` / ``decision_grade`` carry the **governance** dimension (who it's for, how load-bearing).
+
+    ``transform`` names the reshape (a pluggable seam — a registered transform, or omitted when the
+    ``source_capability`` already emits ``output_schema``). Declaring the View does not itself execute
+    the reshape; the view-capability that does is registered on the host (v1) — auto-generating it from
+    this declaration is the forward upgrade path."""
+
+    id: str                              # the derived-capability id a binding targets
+    source_capability: str               # the raw capability this View composes (must be BOUND)
+    output_schema: dict = field(default_factory=dict)   # the shape it emits (the component's contract)
+    transform: str | None = None         # named reshape; None ⇒ source already emits output_schema
+    audience: str | None = None          # governance: who the View is for
+    decision_grade: str | None = None    # governance: how load-bearing (informational / decision / …)
+
+    def to_dict(self) -> dict:
+        out: dict[str, object] = {"id": self.id, "sourceCapability": self.source_capability,
+                                  "outputSchema": self.output_schema}
+        for k, v in (("transform", self.transform), ("audience", self.audience),
+                     ("decisionGrade", self.decision_grade)):
+            if v is not None:
+                out[k] = v
         return out
 
 
@@ -195,6 +237,7 @@ class Region:
     component: str | None = None
     bindings: list[RouteBinding] = field(default_factory=list)
     span: int | None = None
+    props: dict | None = None            # static (non-bound) component props, e.g. DataTable `columns`
 
     def to_dict(self) -> dict:
         out: dict[str, object] = {"id": self.id}
@@ -206,6 +249,8 @@ class Region:
             out["bindings"] = [b.to_dict() for b in self.bindings]
         if self.span is not None:
             out["span"] = self.span
+        if self.props is not None:
+            out["props"] = self.props
         return out
 
 
@@ -224,6 +269,7 @@ class Route:
     bindings: list[RouteBinding] = field(default_factory=list)
     regions: list[Region] = field(default_factory=list)
     layout: str | None = None
+    props: dict | None = None            # static (non-bound) component props, e.g. DataTable `columns`
 
     def to_dict(self) -> dict:
         out: dict[str, object] = {"id": self.id}
@@ -237,6 +283,8 @@ class Route:
             out["regions"] = [r.to_dict() for r in self.regions]
         if self.layout is not None:
             out["layout"] = self.layout
+        if self.props is not None:
+            out["props"] = self.props
         return out
 
 
@@ -250,6 +298,7 @@ class ProductUISchema:
     routes: list[Route] = field(default_factory=list)
     auth: dict | None = None            # {"required": bool}
     tenancy: dict | None = None         # {"requireOrg": bool, "rolesAllowed": [...]}
+    views: list[View] = field(default_factory=list)   # first-class data-shaping Views (derived caps)
 
     def to_dict(self) -> dict:
         out: dict[str, object] = {}
@@ -261,14 +310,25 @@ class ProductUISchema:
             out["auth"] = self.auth
         if self.tenancy is not None:
             out["tenancy"] = self.tenancy
+        if self.views:                                # guarded ⇒ view-less locks keep their old digest
+            out["views"] = [v.to_dict() for v in self.views]
         return out
 
     def bound_capabilities(self) -> list[str]:
         """Every capability the UI's route AND region bindings reference — checked against the Lock in
-        resolve() (authority conservation: the UI can't surface data the product didn't compose)."""
-        caps = [b.capability for r in self.routes for b in r.bindings]
-        caps += [b.capability for r in self.routes for reg in r.regions for b in reg.bindings]
+        resolve() (authority conservation: the UI can't surface data the product didn't compose). Includes
+        master-detail drill-down capabilities (a binding's ``detail.capability``)."""
+        all_bindings = [b for r in self.routes for b in r.bindings]
+        all_bindings += [b for r in self.routes for reg in r.regions for b in reg.bindings]
+        caps = [b.capability for b in all_bindings]
+        caps += [b.detail["capability"] for b in all_bindings if b.detail and b.detail.get("capability")]
         return caps
+
+    def view_sources(self) -> dict[str, str]:
+        """Map ``view id → source_capability`` for every declared View. Used to credit a source
+        capability as surfaced when a bound View derives from it (coverage) and to enforce the
+        View's authority-conservation link in resolve()."""
+        return {v.id: v.source_capability for v in self.views}
 
 
 @dataclass
@@ -489,18 +549,34 @@ def resolve(spec: ProductSpecification, descriptors: list[CapabilityDescriptor],
     if spec.ui is not None:
         if spec.ui.archetype is not None and spec.ui.archetype not in ARCHETYPES:
             issues.append(f"unknown_archetype:{spec.ui.archetype}")
+        # Declared Views are derived capabilities: a binding may target a View by id, and each View's
+        # source_capability must be BOUND (a View can't surface data the product didn't compose).
+        view_ids = {v.id for v in spec.ui.views}
+        for v in spec.ui.views:
+            if v.source_capability not in chosen:
+                issues.append(f"view_unbound_source:{v.id}:{v.source_capability}")
+
+        def _binding_target_ok(cap: str) -> bool:
+            return cap in chosen or cap in view_ids   # a raw bound cap OR a declared View id
+
+        def _check_detail(b: RouteBinding, where: str, ident: str) -> None:
+            # master-detail drill-down: the detail capability must be BOUND too (authority conservation)
+            if b.detail and not _binding_target_ok(b.detail.get("capability", "")):
+                issues.append(f"{where}_detail_unbound:{ident}:{b.detail.get('capability')}")
         for r in spec.ui.routes:
             for b in r.bindings:
-                if b.capability not in chosen:
+                if not _binding_target_ok(b.capability):
                     issues.append(f"route_unknown_capability:{b.capability}")
+                _check_detail(b, "route", r.id)
             if r.component is not None:                      # routes were never validated before (a gap):
                 issue = _component_issue(r.component, chosen, "route", r.id)
                 if issue:
                     issues.append(issue)
             for reg in r.regions:
                 for b in reg.bindings:
-                    if b.capability not in chosen:
+                    if not _binding_target_ok(b.capability):
                         issues.append(f"region_unknown_capability:{reg.id}:{b.capability}")
+                    _check_detail(b, "region", reg.id)
                 if reg.component is not None:                # now also accepts built-in @chp/ui components,
                     issue = _component_issue(reg.component, chosen, "region", reg.id)  # not only bound caps
                     if issue:
@@ -615,6 +691,27 @@ def _selfcheck() -> None:
         raise AssertionError("expected ResolutionError")
     except ResolutionError as e:
         assert "unresolved:a.one" in str(e)
+
+    # Views: a declared View is a derived cap — a binding may target its id; its source must be BOUND,
+    # and declaring a View changes the lock digest (it rides ProductUISchema → _core["ui"]).
+    view_ui = ProductUISchema(
+        archetype="data-driven",
+        routes=[Route(id="r", path="/", component="chp.widgets.StatGrid",
+                      bindings=[RouteBinding(card="stats", capability="v.a_stats", extract="stats")])],
+        views=[View(id="v.a_stats", source_capability="a.one", output_schema={"type": "object"})],
+    )
+    spec_v = ProductSpecification(id="product:v", version="0.1.0",
+                                  requires=[Requirement("a.one", ">=1.0 <2")], ui=view_ui)
+    lock_v = resolve(spec_v, descriptors)
+    assert lock_v.digest and lock_v.digest != resolve(
+        replace(spec_v, ui=None), descriptors).digest, "a declared View must ride the lock digest"
+    # a View whose source_capability isn't bound → ResolutionError (authority conservation on the View)
+    bad_ui = replace(view_ui, views=[View(id="v.a_stats", source_capability="a.missing")])
+    try:
+        resolve(replace(spec_v, ui=bad_ui), descriptors)
+        raise AssertionError("expected ResolutionError for unbound View source")
+    except ResolutionError as e:
+        assert "view_unbound_source:v.a_stats:a.missing" in str(e), str(e)
 
     # sign + verify round-trip, then tamper fails closed
     key = generate_keypair(tempfile.mkdtemp(), overwrite=True)
