@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+from dataclasses import replace
 
 import pytest
 
@@ -402,3 +403,41 @@ def test_tamper_fails_closed(spec, descriptors):
     lock.entitlements["a.two"] = "pack-TAMPERED"
     ok, reason = verify_lock(lock, key.public_key_b64)
     assert not ok and reason == "lock_digest_invalid"
+
+
+def test_view_is_a_derived_capability_binding_targets_it_and_source_must_be_bound():
+    # A first-class View {id, source_capability, output_schema}: a route binds it by id (a view IS a
+    # capability), and the View's source_capability must be a BOUND cap (authority conservation).
+    from chp_core.product import ProductUISchema, Route, RouteBinding, View
+    ui = ProductUISchema(
+        archetype="data-driven",
+        routes=[Route(id="r", path="/", component="chp.widgets.StatGrid",
+                      bindings=[RouteBinding(card="stats", capability="v.stats", extract="stats")])],
+        views=[View(id="v.stats", source_capability="a.two",
+                    output_schema={"type": "object"})])
+    spec = ProductSpecification("product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")], ui=ui)
+    lock = resolve(spec, [_desc("a.two", "2.0.0")])       # v.stats need NOT be a registered descriptor
+    assert lock.to_dict()["ui"]["views"][0] == {
+        "id": "v.stats", "sourceCapability": "a.two", "outputSchema": {"type": "object"}}
+
+
+def test_view_rides_the_lock_digest_and_is_guarded_for_backcompat():
+    from chp_core.product import ProductUISchema, Route, RouteBinding, View
+    base = ProductUISchema(routes=[Route(id="r", path="/", component="chp.widgets.StatGrid",
+                                         bindings=[RouteBinding(card="stats", capability="a.two")])])
+    with_view = replace(base, views=[View(id="v.x", source_capability="a.two")])
+    spec_no = ProductSpecification("product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")], ui=base)
+    spec_yes = ProductSpecification("product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")], ui=with_view)
+    lock_no, lock_yes = resolve(spec_no, [_desc("a.two", "2.0.0")]), resolve(spec_yes, [_desc("a.two", "2.0.0")])
+    assert "views" not in lock_no.to_dict()["ui"]          # guarded: a view-less lock keeps its old shape
+    assert lock_yes.digest != lock_no.digest               # declaring a View rides the digest
+
+
+def test_view_with_unbound_source_is_rejected():
+    from chp_core.product import ProductUISchema, View
+    spec = ProductSpecification(
+        "product:t", "0.1.0", [Requirement("a.two", ">=2.0 <3")],
+        ui=ProductUISchema(views=[View(id="v.x", source_capability="a.MISSING")]))
+    with pytest.raises(ResolutionError) as exc:
+        resolve(spec, [_desc("a.two", "2.0.0")])
+    assert "view_unbound_source:v.x:a.MISSING" in str(exc.value)
