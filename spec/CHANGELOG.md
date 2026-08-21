@@ -5,7 +5,89 @@ release notes). Format follows [Keep a Changelog](https://keepachangelog.com/).
 Every entry that changes canonical bytes or wire behavior names its regression
 gate.
 
-## [0.9.2] — Adapter operational contract (timeout, retry, health) over 0.9.1
+## [0.9.3] — Capability Economy surface: execution-truth + trust-semantics + supply/resolver over 0.9.2
+
+The CHP v0.6 "Capability Economy" wave (arcs 0043–0053). A large ADDITIVE surface — every new
+object is a new type/schema or an omit-when-absent field, so an unused envelope stays
+byte-identical. ONE new reserved outcome + ONE new reserved evidence type are registered
+(`indeterminate` / `execution_indeterminate`); everything else adds no reserved code.
+
+### Added — Tier A: execution-truth (admission ≠ execution ≠ effect)
+- **Dual digests** (proposal 0043): `action_digest` (semantic action — capability + principal +
+  input + semantic_context; routing EXCLUDED) and `invocation_digest` (the governed attempt —
+  identity + actor/binding/provider/host routing), both over chp-jcs-v1 so a substituted provider
+  keeps `action_digest` but changes `invocation_digest` and requires fresh admission. New
+  `spec/test-vectors/digests.json` + `provider-substitution.json`, recomputed byte-for-byte by the
+  independent `verify.mjs` (CONF-002/006). Regression gate: `test_digests.py`,
+  `test_execution_vectors.py`.
+- **`CapabilityBinding`** + `binding_digest` (content-addressed WHAT×WHOM×WHERE). New
+  `schemas/capability-binding.schema.json`.
+- **`AdmissionDecision`** — the reified admission-gate outcome bound to `invocation_digest`,
+  admitted/denied never collapsed into success; a later revocation MUST NOT rewrite a decision
+  valid when made. New `schemas/admission-decision.schema.json`. Gate: `test_admission.py`.
+- **Four-state `InvariantEvaluation`** — satisfied/unsatisfied/unknown/error; a mandatory invariant
+  returning unknown/error MUST NOT be treated as satisfied. New
+  `schemas/invariant-evaluation.schema.json`. Gate: `test_invariant_evaluation.py`.
+- **`execution_id`** distinct from `invocation_id`; **new reserved outcome `indeterminate`** + **new
+  reserved evidence type `execution_indeterminate`** (registered across CORE_OUTCOMES,
+  CORE_EVIDENCE_TYPES, schemas, spec, ts-types, pinning tests) — a host that cannot know whether an
+  effect occurred records indeterminate, not failure; reconciliation appends a record without
+  rewriting history. Gate: `test_execution_identity.py`, `test_core_evidence_types_frozen`.
+- **ExecutionGrant generalization:** `build_approval_grant` extended with optional
+  `invocation_digest` / `action_digest` / `binding_id` / `audience` / `max_attempts` (each
+  omit-when-absent → byte-identical to a pre-0043 grant); a grant minted for one executor is
+  rejected for another. Gate: `test_approval_grant.py`.
+- **`EffectEvidence`** — an effect determination (confirmed/indeterminate/unobserved/refuted)
+  distinct from completion status; is_confirmed() ≠ success. New
+  `schemas/effect-evidence.schema.json`. Gate: `test_effect.py`.
+- **Transport result restraint** (CHP-CORE-022): a transport delegates to the host pipeline and
+  never fabricates a result; acceptance/liveness is not admission/execution. Gate:
+  `test_transport_restraint.py`.
+
+### Added — Tier B: trust-semantics (evidence-backed claims, not truth)
+- **`ClaimType` / `Assertion` / `VerificationResult`** — an assertion is an evidence-backed claim BY
+  an issuer ABOUT a subject, NOT truth; a valid signature proves attribution/integrity, not truth,
+  and integrity is separate from trust-policy acceptance. Plus `active_assertions`
+  (supersede/revoke create new records), `validate_assertion_value` (four-state), **`derive_edges`**
+  (assertions → graph edges labeled `derived` + traceable, conflict preserved — CHP-SEM-006/007),
+  **`Assertion.inference`** (a value marked as a system inference, not asserted fact — CHP-SEM-009),
+  and assertion signing (`sign_assertion` / `verify_assertion_signature`, proposal 0050). New
+  `schemas/{claim-type,assertion,verification-result}.schema.json`. Gate: `test_assertions.py`,
+  `test_assertion_lifecycle.py`, `test_assertion_signing.py`, `test_assertion_semantics.py`.
+- **`EntitySubject`** — a durable entity whose stable id survives key/email/endpoint rotation;
+  rejects permanent conclusions. New `schemas/entity-subject.schema.json`. Gate: `test_entities.py`.
+- **`ReadinessAssessment` (frozen) + `VerificationPlan`** — derived, contextual, per-market
+  readiness from per-requirement four-state results; NEVER admission; a historical assessment is
+  immutable (re-evaluation is a new record). New `schemas/{readiness-assessment,verification-plan}`.
+  Gate: `test_readiness.py`, `test_readiness_immutability.py`.
+
+### Added — Tier C: supply / resolver / discovery
+- **`CapabilityDefinition`** (provider-independent semantic capability) + relationship algebra —
+  a declared relationship ALONE never grants substitution (default-deny); similarity ≠ equivalence.
+  New `schemas/capability-definition.schema.json`.
+- **Resolver:** `CapabilityRequirement` / `ResolvedCandidate` / immutable `CapabilityResolution` +
+  `resolve()` — hard constraints dominate score (no preference compensates an unsatisfied mandatory
+  requirement); resolution ≠ admission. Computed **`functional_fit`** + **`evidence_fit`**
+  (via `require_fit` / `required_evidence`) gate eligibility, and undetermined fit is PRESERVED as
+  unknown, never silently promoted. New `schemas/{capability-requirement,capability-resolution}`.
+  Gate: `test_resolver.py`, `test_capability_contract.py`, `test_evidence_fit.py`.
+- **Contract validation:** `ContractCheck` + `validate_input` / `validate_output` / `check_effect`
+  (four-state; missing schema/validator → unknown, never a silent pass). New
+  `schemas/contract-check.schema.json`.
+- **Supply:** `ProviderProfile` / `CapabilityOffer` / `EvidenceContract` — descriptive supply
+  records; an EvidenceContract is a PROMISE, not evidence; publishing an offer is not admission. New
+  `schemas/{provider-profile,capability-offer,evidence-contract}.schema.json`.
+- **Discovery:** `project_capabilities_txt` + **`host_capabilities_txt`** — a running host
+  self-publishes its semantic capabilities to a discovery-only capabilities.txt (id/version/
+  description + href pointers); any admission/authorization field is stripped, never advertised. New
+  `schemas/capabilities-txt.schema.json`. Gate: `test_supply_wiring.py`, `test_discovery_e2e.py`.
+
+### Conformance
+- **H1 (licensed human) / M1 (industrial machine) / S1 (software)** full-chain reference fixtures
+  (entity→claim→verify→readiness→resolution→admission→grant→execution→effect), the CHP-CONF-003/004/
+  005 acceptance gate. Gate: `test_{h1,m1,s1}_fixture.py`.
+
+
 
 ### Added (additive; no new reserved code)
 - **Host-enforced timeout** (chp-v0.2.md §20, proposal 0038): `descriptor.timeout_s` — the
