@@ -179,8 +179,9 @@ An invocation result outcome is one of:
 - `failure`: execution began but failed
 - `denied`: the host rejected execution before the capability handler completed
 - `skipped`: the host intentionally did not execute a registered capability, for example because it is disabled
+- `indeterminate`: execution began but the host cannot safely determine whether the external side effect occurred, for example a crash after an irreversible dispatch (proposal 0043)
 
-`success` MUST be true only when `outcome` is `success`.
+`success` MUST be true only when `outcome` is `success`. An `indeterminate` outcome is neither success nor failure; it MUST NOT be rewritten as either. A later reconciliation ADDS a new record and MUST NOT rewrite the earlier `indeterminate` observation.
 
 Successful invocations MUST emit `execution_started` and `execution_completed`.
 

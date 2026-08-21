@@ -198,7 +198,11 @@ RiskLevel = Literal["low", "medium", "high", "critical"]
 IncidentSeverity = Literal["P1", "P2", "P3", "P4"]
 IncidentStatus = Literal["open", "investigating", "escalated", "resolved", "closed"]
 
-ExecutionOutcome = Literal["success", "failure", "denied", "skipped"]
+# "indeterminate" (proposal 0043, CHP-CORE-014): the host cannot safely know whether an
+# external side effect occurred (e.g. a crash after an irreversible dispatch). It is NOT
+# success and NOT failure and MUST NOT be rewritten as either by reconciliation
+# (CHP-CORE-015); a later observation ADDS a record, it never erases the uncertainty.
+ExecutionOutcome = Literal["success", "failure", "denied", "skipped", "indeterminate"]
 
 CapabilityStatus = Literal["draft", "experimental", "certified", "deprecated"]
 CapabilityLocality = Literal["local", "edge", "cloud", "hybrid", "any"]
@@ -830,6 +834,45 @@ class Actor:
 
 
 @dataclass(slots=True)
+class CapabilityBinding:
+    """A governed binding of a semantic capability to a provider+host topology
+    (proposal 0043; schemas/capability-binding.schema.json). Identifies WHAT
+    (capability), by WHOM (provider), WHERE (host), at a versioned binding identity.
+
+    Distinct from the capability itself: many bindings may supply one capability
+    (CHP-CAP-013), and provider/host/executor stay distinct references even when a
+    self-hosted deployment maps them to one entity (CHP-CORE-021). A governance-relevant
+    change produces a new binding version or digest (CHP-CAP-011)."""
+
+    id: str
+    version: str
+    capability: JSON  # {"id": ..., "version": ...}
+    provider: JSON  # entity ref {"id": ..., "type"?: ...}
+    host: JSON  # entity ref {"id": ..., "type"?: ...}
+
+    def to_dict(self) -> JSON:
+        return asdict(self)
+
+    @classmethod
+    def from_mapping(cls, value: JSON) -> "CapabilityBinding":
+        if not isinstance(value, dict):
+            raise ValueError("capability binding must be a JSON object")
+        for key in ("id", "version"):
+            if not isinstance(value.get(key), str) or not value[key]:
+                raise ValueError(f"binding.{key} must be a non-empty string")
+        for key in ("capability", "provider", "host"):
+            if not isinstance(value.get(key), dict):
+                raise ValueError(f"binding.{key} must be a JSON object")
+        return cls(
+            id=value["id"],
+            version=value["version"],
+            capability=dict(value["capability"]),
+            provider=dict(value["provider"]),
+            host=dict(value["host"]),
+        )
+
+
+@dataclass(slots=True)
 class InvocationEnvelope:
     capability_id: str
     payload: JSON = field(default_factory=dict)
@@ -862,6 +905,11 @@ class InvocationEnvelope:
     # invocation_id + payload commitment) to resume past an approval_required gate
     # and execute exactly once. None = today's behavior (omit-when-absent).
     approval_ref: JSON | None = None
+    # OPTIONAL resolved CapabilityBinding (proposal 0043): the exact provider+host
+    # topology this attempt targets, typically from a resolver/market. When present the
+    # host binds invocation_digest to it; when absent a self-hosted binding is
+    # synthesized (provider == host). Omit-when-None → byte-identical wire pre-0043.
+    binding: JSON | None = None
 
     @classmethod
     def from_mapping(cls, value: JSON) -> "InvocationEnvelope":
@@ -904,6 +952,10 @@ class InvocationEnvelope:
             # the resume gate), omit-when-absent (proposal 0037).
             approval_ref=(_obj(value.get("approval_ref"), "approval_ref")
                           if value.get("approval_ref") else None),
+            # Validate + canonicalize the binding at the trust boundary (0043);
+            # omit-when-absent so pre-0043 envelopes are byte-identical.
+            binding=(CapabilityBinding.from_mapping(value["binding"]).to_dict()
+                     if value.get("binding") else None),
         )
 
     def to_dict(self) -> JSON:
@@ -919,6 +971,8 @@ class InvocationEnvelope:
             del data["require_output_schema"]  # additive: default False absent (proposal 0029)
         if data.get("approval_ref") is None:
             del data["approval_ref"]  # additive (proposal 0037): absent stays absent
+        if data.get("binding") is None:
+            del data["binding"]  # additive (proposal 0043): absent stays absent
         return data
 
 
@@ -948,6 +1002,23 @@ class ExecutionEvidence:
     # byte-identically.
     hash_scheme: str | None = None
     payload_commitment: str | None = None
+    # Execution-truth digests (proposal 0043). action_digest identifies the semantic
+    # action (capability + principal + input + semantic_context), stable across
+    # provider/host routing; invocation_digest binds the exact governed attempt. Both
+    # omit-when-None so pre-0043 events serialize byte-identically. invocation_digest is
+    # populated once CapabilityBinding is first-class (a later 0043 slice).
+    action_digest: str | None = None
+    invocation_digest: str | None = None
+    # Execution instance identity (proposal 0043, CHP-CORE-012): distinct from
+    # invocation_id so governed intent is never conflated with a runtime execution
+    # attempt. Set on execution lifecycle events; omit-when-None → pre-0043 events
+    # serialize byte-identically. Populated by the emission slice.
+    execution_id: str | None = None
+    # Reified AdmissionDecision (proposal 0043, CHP-CORE-029) attached to an
+    # execution_started event: the admitted decision that let this attempt through, bound
+    # to invocation_digest + four-state invariant refs. Omit-when-None so other events and
+    # pre-0043 events serialize byte-identically.
+    admission: JSON | None = None
 
     def to_dict(self) -> JSON:
         data = asdict(self)
@@ -963,7 +1034,113 @@ class ExecutionEvidence:
             data.pop("hash_scheme", None)
         if self.payload_commitment is None:
             data.pop("payload_commitment", None)
+        if self.action_digest is None:
+            data.pop("action_digest", None)
+        if self.invocation_digest is None:
+            data.pop("invocation_digest", None)
+        if self.execution_id is None:
+            data.pop("execution_id", None)
+        if self.admission is None:
+            data.pop("admission", None)
         return data
+
+
+@dataclass(slots=True)
+class AdmissionDecision:
+    """The reified outcome of the admission gate pipeline for ONE governed attempt
+    (proposal 0043; schemas/admission-decision.schema.json). Binds the exact invocation
+    (invocation_id + invocation_digest) to a single admitted/denied result and the
+    invariant/gate evaluations that produced it.
+
+    This is the UNIFICATION anchor (CHP-CORE-029): what were separate per-gate decision
+    events (chp-platform entitlement/matter/screen + core invariants, each recorded under
+    its own synthetic id via _ledger) converge on one AdmissionDecision bound to the real
+    invocation_digest. Admission is NOT execution and NOT effect (CHP-CORE-001); a later
+    authority revocation MUST NOT rewrite a decision that was valid when made
+    (CHP-AUTH-016). invariant_evaluations carries lightweight refs [{"id","status"}] whose
+    status is the four-state satisfied/unsatisfied/unknown/error (forward-compatible with
+    the InvariantEvaluation type)."""
+
+    invocation_id: str
+    invocation_digest: str
+    result: str  # "admitted" | "denied"
+    id: str = field(default_factory=lambda: new_id("adm"))
+    decided_at: str = field(default_factory=utc_now)
+    invariant_evaluations: list[JSON] = field(default_factory=list)
+    host_id: str | None = None
+    denial: DenialReason | None = None
+
+    def to_dict(self) -> JSON:
+        data = asdict(self)
+        if self.denial is not None:
+            data["denial"] = self.denial.to_dict()
+        else:
+            data.pop("denial", None)
+        if data.get("host_id") is None:
+            data.pop("host_id", None)
+        return data
+
+
+@dataclass(slots=True)
+class InvariantEvaluation:
+    """Four-state outcome of evaluating one invariant for a governed attempt
+    (proposal 0043; schemas/invariant-evaluation.schema.json, CHP-CORE-028).
+
+    result is exactly one of satisfied / unsatisfied / unknown / error. A mandatory
+    invariant returning unknown or error MUST NOT be treated as satisfied (CHP-CORE-017):
+    only 'satisfied' satisfies — see is_satisfied(). Distinct from EvaluationResult (a
+    reflection/score pass), which is not an admission invariant result."""
+
+    invocation_id: str
+    invariant_id: str
+    result: str  # satisfied | unsatisfied | unknown | error
+    id: str = field(default_factory=lambda: new_id("ive"))
+    evaluated_at: str = field(default_factory=utc_now)
+    mandatory: bool = True
+    evidence_refs: list[str] = field(default_factory=list)
+    evaluator: str | None = None
+    details: JSON = field(default_factory=dict)
+
+    SATISFIED: ClassVar[str] = "satisfied"
+    UNSATISFIED: ClassVar[str] = "unsatisfied"
+    UNKNOWN: ClassVar[str] = "unknown"
+    ERROR: ClassVar[str] = "error"
+    STATES: ClassVar[frozenset[str]] = frozenset(
+        {"satisfied", "unsatisfied", "unknown", "error"}
+    )
+
+    def __post_init__(self) -> None:
+        if self.result not in self.STATES:
+            raise ValueError(f"invariant result must be one of {sorted(self.STATES)}")
+
+    def is_satisfied(self) -> bool:
+        """Only 'satisfied' satisfies — unsatisfied/unknown/error never do (CHP-CORE-017)."""
+        return self.result == self.SATISFIED
+
+    @staticmethod
+    def status_from(passed: bool | None, *, errored: bool = False) -> str:
+        """Bridge the live pipeline's binary/None gate to the four-state result: an
+        evaluation that raised → error; True → satisfied; False → unsatisfied; None
+        (couldn't determine) → unknown. Never collapses unknown/error into satisfied."""
+        if errored:
+            return InvariantEvaluation.ERROR
+        if passed is None:
+            return InvariantEvaluation.UNKNOWN
+        return InvariantEvaluation.SATISFIED if passed else InvariantEvaluation.UNSATISFIED
+
+    def to_dict(self) -> JSON:
+        data = asdict(self)
+        if self.evaluator is None:
+            data.pop("evaluator", None)
+        if not data.get("evidence_refs"):
+            data.pop("evidence_refs", None)
+        if not data.get("details"):
+            data.pop("details", None)
+        return data
+
+    def to_admission_ref(self) -> JSON:
+        """Compact ref for AdmissionDecision.invariant_evaluations: {id, status}."""
+        return {"id": self.invariant_id, "status": self.result}
 
 
 @dataclass(slots=True)

@@ -179,7 +179,7 @@ class WorkCLITests(unittest.TestCase):
             self.assertIn("CapabilityDescriptor", alignment["data"]["core_objects"])
             self.assertEqual(
                 alignment["data"]["outcomes"],
-                ["success", "failure", "denied", "skipped"],
+                ["success", "failure", "denied", "skipped", "indeterminate"],
             )
 
             replay = self.run_cli(["work", "replay", correlation_id, "--store", store])

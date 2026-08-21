@@ -20,7 +20,7 @@ export interface JsonObject {
 
 export type CapabilityRisk = "low" | "medium" | "high" | "critical";
 export type ChpV01InvocationMode = "sync" | "async" | "stream" | "fire_and_forget";
-export type ChpV01ExecutionOutcome = "success" | "failure" | "denied" | "skipped";
+export type ChpV01ExecutionOutcome = "success" | "failure" | "denied" | "skipped" | "indeterminate";
 export type AssuranceLevel = "S1" | "S2" | "S3";
 export type InvariantEnforcement = "declarative" | "host" | "runtime";
 export type InvariantFailureBehavior = "deny" | "warn" | "degrade";
@@ -38,6 +38,7 @@ export const CHP_V0_1_OUTCOMES = [
   "failure",
   "denied",
   "skipped",
+  "indeterminate",
 ] as const satisfies readonly ChpV01ExecutionOutcome[];
 
 export const CHP_V0_1_CORE_EVIDENCE_TYPES = [

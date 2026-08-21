@@ -102,11 +102,15 @@ def lookup_recorded_result(store: Any, invocation_id: str) -> "InvocationResult 
     )
 
 from .store import EVENT_HASH_V2, SQLiteEvidenceStore, _payload_commitment
+from .digests import action_digest as _compute_action_digest
+from .digests import binding_digest as _compute_binding_digest
+from .digests import invocation_digest as _compute_invocation_digest
 from .decorators import adapt_callable, get_capability_descriptor
 from .policy import PolicyConfig, evaluate_policy, load_policy
 from .redaction import redact_payload
 from .types import (
     Actor,
+    AdmissionDecision,
     AssuranceMetadata,
     CapabilityDescriptor,
     CORE_EVIDENCE_TYPES,
@@ -116,6 +120,7 @@ from .types import (
     ExecutionEvidence,
     HostDescriptor,
     InvariantDescriptor,
+    InvariantEvaluation,
     InvocationEnvelope,
     InvocationResult,
     JSON,
@@ -945,11 +950,23 @@ class LocalCapabilityHost:
         assert entry is not None  # _prepare contract: no early result ⇒ resolved entry
         descriptor = entry.descriptor
 
+        # One execution_id per execution attempt (proposal 0043, CHP-CORE-012), shared by
+        # this attempt's lifecycle events so the started/completed|failed pair is one
+        # runtime execution distinct from the invocation identity.
+        execution_id = new_id("exec")
+        # Reify the admission decision that let this attempt through (CHP-CORE-029): real
+        # four-state invariant results bound to the exact invocation_digest, attached to
+        # execution_started as an additive field — no new event, so sequences are unchanged.
+        _, _inv_digest = self._attempt_digests(envelope)
+        admission = (self._build_admission(descriptor, envelope, _inv_digest).to_dict()
+                     if _inv_digest is not None else None)
         started = self.emit_evidence(
             "execution_started",
             envelope,
             payload={"capability_uri": descriptor.capability_uri},
             outcome=None,
+            execution_id=execution_id,
+            admission=admission,
         )
         ctx = CapabilityExecutionContext(self, envelope)
 
@@ -985,6 +1002,7 @@ class LocalCapabilityHost:
                          **_usage_of(data), **ometa},
                 outcome="success",
                 redacted=False,
+                execution_id=execution_id,
             )
             return self._record_result(InvocationResult(
                 invocation_id=envelope.invocation_id,
@@ -1016,6 +1034,7 @@ class LocalCapabilityHost:
                         else {}
                     ),
                 },
+                execution_id=execution_id,
             )
             return self._record_result(InvocationResult(
                 invocation_id=envelope.invocation_id,
@@ -1059,11 +1078,23 @@ class LocalCapabilityHost:
         assert entry is not None  # _prepare contract: no early result ⇒ resolved entry
         descriptor = entry.descriptor
 
+        # One execution_id per execution attempt (proposal 0043, CHP-CORE-012), shared by
+        # this attempt's lifecycle events so the started/completed|failed pair is one
+        # runtime execution distinct from the invocation identity.
+        execution_id = new_id("exec")
+        # Reify the admission decision that let this attempt through (CHP-CORE-029): real
+        # four-state invariant results bound to the exact invocation_digest, attached to
+        # execution_started as an additive field — no new event, so sequences are unchanged.
+        _, _inv_digest = self._attempt_digests(envelope)
+        admission = (self._build_admission(descriptor, envelope, _inv_digest).to_dict()
+                     if _inv_digest is not None else None)
         started = self.emit_evidence(
             "execution_started",
             envelope,
             payload={"capability_uri": descriptor.capability_uri},
             outcome=None,
+            execution_id=execution_id,
+            admission=admission,
         )
         ctx = CapabilityExecutionContext(self, envelope)
         from .types import StreamResult
@@ -1103,6 +1134,7 @@ class LocalCapabilityHost:
                          **_usage_of(data), **stream_meta, **ometa},
                 outcome="success",
                 redacted=False,
+                execution_id=execution_id,
             )
             result = InvocationResult(
                 invocation_id=envelope.invocation_id,
@@ -1135,6 +1167,7 @@ class LocalCapabilityHost:
                         else {}
                     ),
                 },
+                execution_id=execution_id,
             )
             fail_result = InvocationResult(
                 invocation_id=envelope.invocation_id,
@@ -1162,6 +1195,8 @@ class LocalCapabilityHost:
         redacted: bool = True,
         error: JSON | None = None,
         denial: DenialReason | None = None,
+        execution_id: str | None = None,
+        admission: JSON | None = None,
     ) -> ExecutionEvidence:
         # chp-stable-v1 forbids floats in canonicalized (hashed) content — float
         # serialization diverges across languages (Python 0.0 vs JS 0), which
@@ -1172,6 +1207,7 @@ class LocalCapabilityHost:
         final_payload = _stringify_floats(
             redact_payload(payload or {}) if redacted else (payload or {})
         )
+        action_digest_val, invocation_digest_val = self._attempt_digests(envelope)
         event = ExecutionEvidence(
             event_id=new_id("evt"),
             event_type=event_type,
@@ -1195,8 +1231,93 @@ class LocalCapabilityHost:
             # verification. Existing v1 events are untouched.
             hash_scheme=EVENT_HASH_V2,
             payload_commitment=_payload_commitment(final_payload),
+            action_digest=action_digest_val,
+            invocation_digest=invocation_digest_val,
+            execution_id=execution_id,
+            admission=admission,
         )
         return self.store.append(event)  # type: ignore[return-value]
+
+    def _attempt_digests(self, envelope: InvocationEnvelope) -> tuple[str | None, str | None]:
+        """Compute (action_digest, invocation_digest) for this attempt (proposal 0043).
+
+        action_digest is the semantic action, over the pre-redaction input so redaction
+        never changes identity, stable across provider/host routing. invocation_digest binds
+        the exact governed attempt = invocation identity + routing (binding/provider/host):
+        the resolved envelope.binding when present, else a synthesized self-hosted binding
+        with a content-addressed id (provider == host, distinct refs — CHP-CORE-021).
+        Defensive — a canonicalization failure returns None so evidence recording is never
+        broken and no undigested record is fabricated."""
+        cap_ref: dict[str, Any] = {"id": envelope.capability_id}
+        if envelope.version:
+            cap_ref["version"] = envelope.version
+        sem_ctx = (envelope.metadata or {}).get("semantic_context")
+        try:
+            action_digest_val: str | None = _compute_action_digest(
+                capability=cap_ref,
+                principal=envelope.subject or {},
+                action_input=_stringify_floats(envelope.payload or {}),
+                semantic_context=_stringify_floats(sem_ctx) if isinstance(sem_ctx, dict) else {},
+            )
+        except (ValueError, TypeError):
+            return None, None
+        if action_digest_val is None:
+            return None, None
+        try:
+            if isinstance(envelope.binding, dict) and envelope.binding.get("id"):
+                b = envelope.binding
+                provider_ref = b.get("provider") or {"id": self.host_id}
+                host_ref = b.get("host") or {"id": self.host_id}
+                binding_ref = {"id": b["id"], "version": b.get("version") or "1"}
+            else:
+                provider_ref = {"id": self.host_id}
+                host_ref = {"id": self.host_id}
+                binding_ref = {
+                    "id": _compute_binding_digest(
+                        capability=cap_ref, provider=provider_ref, host=host_ref
+                    ),
+                    "version": "1",
+                }
+            invocation_digest_val: str | None = _compute_invocation_digest(
+                invocation_id=envelope.invocation_id,
+                action_digest=action_digest_val,
+                actor=envelope.actor or {},
+                principal=envelope.subject or {},
+                binding=binding_ref,
+                provider=provider_ref,
+                host=host_ref,
+                governance_context={},
+            )
+        except (ValueError, TypeError):
+            invocation_digest_val = None
+        return action_digest_val, invocation_digest_val
+
+    def _build_admission(
+        self, descriptor: CapabilityDescriptor, envelope: InvocationEnvelope,
+        invocation_digest: str,
+    ) -> AdmissionDecision:
+        """Reify the admission decision that let this attempt through (proposal 0043,
+        CHP-CORE-029): the real four-state result of each HOST-enforced invariant (a
+        deny-violation would have already denied, so any violation reaching here was
+        warn/degrade → unsatisfied), bound to the exact invocation_digest. Only built on
+        the admitted path (execution_started); the denial path already carries DenialReason.
+        Unifies the per-gate decisions the chp-platform gates record onto one record."""
+        evals: list[JSON] = []
+        for inv in descriptor.invariants:
+            if inv.enforcement != "host":
+                continue  # only host-enforced invariants are evaluated at this gate
+            try:
+                violated = bool(evaluate_invariant_against_payload(inv, envelope.payload))
+                status = InvariantEvaluation.UNSATISFIED if violated else InvariantEvaluation.SATISFIED
+            except Exception:  # noqa: BLE001 — an evaluator that raises is 'error', not satisfied
+                status = InvariantEvaluation.ERROR
+            evals.append(InvariantEvaluation(
+                invocation_id=envelope.invocation_id, invariant_id=inv.id, result=status,
+            ).to_admission_ref())
+        return AdmissionDecision(
+            invocation_id=envelope.invocation_id, invocation_digest=invocation_digest,
+            result="admitted", invariant_evaluations=evals, host_id=self.host_id,
+        )
 
     def record_turn(
         self,

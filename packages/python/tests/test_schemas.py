@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 import unittest
@@ -61,11 +60,11 @@ class SchemaValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.schemas["evidence-event.schema.json"]["title"], "ExecutionEvidence")
         self.assertEqual(
             self.schemas["invocation-result.schema.json"]["properties"]["outcome"]["enum"],
-            ["success", "failure", "denied", "skipped"],
+            ["success", "failure", "denied", "skipped", "indeterminate"],
         )
         self.assertEqual(
             self.schemas["evidence-event.schema.json"]["properties"]["outcome"]["enum"],
-            ["success", "failure", "denied", "skipped", None],
+            ["success", "failure", "denied", "skipped", "indeterminate", None],
         )
 
     async def test_reference_objects_match_schemas(self) -> None:

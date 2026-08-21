@@ -12,7 +12,7 @@
     "correlation": { "$ref": "https://chp.dev/schemas/v0.1/correlation-context.schema.json" },
     "outcome": {
       "type": "string",
-      "enum": ["success", "failure", "denied", "skipped"]
+      "enum": ["success", "failure", "denied", "skipped", "indeterminate"]
     },
     "success": { "type": "boolean" },
     "data": true,

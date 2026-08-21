@@ -51,6 +51,10 @@
     "actor": {
       "$ref": "https://chp.dev/schemas/v0.2/actor.schema.json",
       "description": "OPTIONAL first-class actor (chp-application-contract.md section 3.1, proposal 0034): a structured, caller-asserted identity. The verified subject remains the accountability record; actor enriches it and drives per-actor policy (descriptor.policy.allowed_actors). Omitted = today's behavior (additive)."
+    },
+    "binding": {
+      "$ref": "https://chp.dev/schemas/v0.1/capability-binding.schema.json",
+      "description": "OPTIONAL resolved CapabilityBinding (proposal 0043): the exact provider+host topology this attempt targets, typically from a resolver/market. When present the host binds invocation_digest to it; absent, a self-hosted binding is synthesized (provider == host). Omitted = today's behavior (additive)."
     }
   }
 }
