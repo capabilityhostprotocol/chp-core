@@ -120,6 +120,7 @@ from .contract import (
 from .discovery import host_capabilities_txt, project_capabilities_txt
 from .effect import EffectEvidence
 from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
+from .commerce import Order, Payment, Quote, dispute_bundle, scoped_metrics
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -253,6 +254,11 @@ __all__ = [
     "validate_output",
     "ClaimType",
     "EffectEvidence",
+    "Order",
+    "Payment",
+    "Quote",
+    "dispute_bundle",
+    "scoped_metrics",
     "EntitySubject",
     "EvidenceContract",
     "ProviderProfile",
