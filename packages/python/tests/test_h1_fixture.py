@@ -22,6 +22,7 @@ from chp_core import (
     CapabilityDescriptor,
     CapabilityRequirement,
     CorrelationContext,
+    EffectEvidence,
     EntitySubject,
     InvariantEvaluation,
     InvocationEnvelope,
@@ -36,7 +37,6 @@ from chp_core.digests import action_digest, invocation_digest
 from chp_core.host import _stringify_floats
 from chp_core.signing import build_approval_grant, generate_keypair, verify_approval_grant
 from chp_core.store import _payload_commitment
-from chp_core.types import ExecutionEvidence
 
 _LAWYER = EntitySubject(id="urn:chp:entity:jane-lawyer", kind="person")
 _CLIENT = {"id": "urn:chp:entity:acme"}                 # the requester/principal
@@ -136,11 +136,10 @@ def test_h1_licensed_professional_to_effect():
     events = host.replay("h1")
     assert {e["action_digest"] for e in events if e.get("action_digest")} == {ad}
 
-    # Stage 8 — effect (the signed opinion) distinct from executor completion (CHP-CORE-016).
-    effect = ExecutionEvidence(event_id="evt_opinion", event_type="effect_confirmed",
-                               invocation_id=inv_id, capability_id="legal.document.review",
-                               capability_version="1.0.0", host_id="legal-network",
-                               correlation=env.correlation, outcome="success",
-                               execution_id="exec_h1", subject={"kind": "effect", "id": "opinion:acme-merger"})
-    assert effect.event_type != "execution_completed"
-    assert effect.to_dict()["subject"]["kind"] == "effect"
+    # Stage 8 — effect (the signed opinion) as first-class EffectEvidence, distinct from executor
+    # completion (CHP-CORE-016): its own observer provenance + determination, no outcome field.
+    effect = EffectEvidence(invocation_id=inv_id, subject={"kind": "effect", "id": "opinion:acme-merger"},
+                            determination="confirmed", observer={"id": "urn:chp:verifier:legal-market"},
+                            execution_id="exec_h1")
+    assert effect.is_confirmed()
+    assert "outcome" not in effect.to_dict()   # effect is not executor completion

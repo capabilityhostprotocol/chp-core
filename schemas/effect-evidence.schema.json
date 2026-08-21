@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/effect-evidence.schema.json",
+  "title": "EffectEvidence",
+  "description": "An observation of an external side effect, distinct from executor completion status (proposal 0047, CHP-CORE-016). Carries its own observer provenance and a four-state determination; indeterminate ties to CHP-CORE-014 and is never silently confirmed. Append-only (CHP-CORE-015).",
+  "type": "object",
+  "required": ["id", "invocation_id", "subject", "determination", "observer", "observed_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "invocation_id": {"type": "string", "minLength": 1},
+    "execution_id": {"type": "string", "minLength": 1},
+    "subject": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"kind": {"type": "string"}, "id": {"type": "string", "minLength": 1}}},
+    "determination": {"enum": ["confirmed", "indeterminate", "unobserved", "refuted"]},
+    "observer": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}},
+    "observed_state": {"type": "object"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "observed_at": {"type": "string", "format": "date-time"}
+  }
+}

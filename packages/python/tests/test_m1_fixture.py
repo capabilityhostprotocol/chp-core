@@ -24,6 +24,7 @@ from chp_core import (
     CapabilityDescriptor,
     CapabilityRequirement,
     CorrelationContext,
+    EffectEvidence,
     EntitySubject,
     InvariantEvaluation,
     InvocationEnvelope,
@@ -38,7 +39,6 @@ from chp_core.digests import action_digest, invocation_digest
 from chp_core.host import _stringify_floats
 from chp_core.signing import build_approval_grant, generate_keypair, verify_approval_grant
 from chp_core.store import _payload_commitment
-from chp_core.types import ExecutionEvidence
 
 _MACHINE = EntitySubject(id="urn:chp:entity:weld-cell-7", kind="machine")
 _OPERATOR = {"id": "urn:chp:entity:operator-sam"}          # the authorizing operator (principal)
@@ -131,14 +131,11 @@ def test_m1_machine_to_effect_with_current_safety():
 
     # CHP-CORE-016: command completion is NOT the physical effect. Weld telemetry is a SEPARATE
     # effect record — the command "completed" while the actual effect is observed independently.
-    telemetry = ExecutionEvidence(event_id="evt_weld_tele", event_type="effect_confirmed",
-                                  invocation_id=inv_id, capability_id="industrial.weld.execute",
-                                  capability_version="1.0.0", host_id="line-controller",
-                                  correlation=env.correlation, outcome="success",
-                                  execution_id="exec_m1",
-                                  subject={"kind": "effect", "id": "weld:A3-14", "penetration_mm": "6"})
-    assert telemetry.event_type != "execution_completed"
-    assert telemetry.to_dict()["subject"]["kind"] == "effect"
+    telemetry = EffectEvidence(invocation_id=inv_id, subject={"kind": "effect", "id": "weld:A3-14"},
+                               determination="confirmed", observer={"id": "urn:chp:observer:weld-inspector"},
+                               execution_id="exec_m1", observed_state={"penetration_mm": "6"})
+    assert telemetry.is_confirmed()
+    assert "outcome" not in telemetry.to_dict()   # telemetry effect is not command completion
 
 
 def test_m1_expired_safety_interlock_blocks_admission():
