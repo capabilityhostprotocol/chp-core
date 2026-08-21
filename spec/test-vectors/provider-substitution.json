@@ -1,0 +1,85 @@
+{
+  "action_digest": "sha256:c5b4633e76898f824e7faf1901f473ac38c8c0046adb66f98e388b9a57b5fe5c",
+  "description": "Same action via two providers: action_digest stable, invocation_digest changes, and the ExecutionGrant bound to A is rejected for B \u2014 provider substitution requires fresh admission (CHP-CORE-004/005/006/009, CHP-CONF-006).",
+  "expected": {
+    "action_digest_stable": true,
+    "grant_valid_for_a": true,
+    "grant_valid_for_b": false,
+    "invocation_digest_changed": true
+  },
+  "grant_for_a": {
+    "action_digest": "sha256:c5b4633e76898f824e7faf1901f473ac38c8c0046adb66f98e388b9a57b5fe5c",
+    "approval_id": "apr_fixture_a",
+    "approver": "56475aa75463474c",
+    "approver_identity": {
+      "host_id": "56475aa75463474c",
+      "public_key": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
+    },
+    "audience": "prov-a",
+    "binding_id": "bnd_a",
+    "canonicalization": "chp-stable-v1",
+    "decision": "granted",
+    "invocation_digest": "sha256:cdc5b4f8dbf00cf1f7f8b62c532620b611564a665f4ce22e4aa8a26e4b378c01",
+    "invocation_id": "inv_fixture_a",
+    "kind": "approval-grant",
+    "max_attempts": 1,
+    "payload_commitment": "fe63cf9369e847eaac71392cbe7f78a0e9cab4dc2f21e96af4ce478e3ac7bb1b",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "56475aa75463474c",
+      "signature": "nOzRaRDiIqIPFyQhSy6QIJN5YnixDz8nqEIs8OQMEa/EJdgqniCI5ZUZUJnhlVkKtokZcoVPMSZAKQTVitoGAA=="
+    },
+    "valid_until": "2027-01-01T00:00:00Z"
+  },
+  "invocation_a": {
+    "executor": "prov-a",
+    "invocation_digest": "sha256:cdc5b4f8dbf00cf1f7f8b62c532620b611564a665f4ce22e4aa8a26e4b378c01",
+    "invocation_document": {
+      "action_digest": "sha256:c5b4633e76898f824e7faf1901f473ac38c8c0046adb66f98e388b9a57b5fe5c",
+      "actor": {
+        "id": "urn:chp:actor:requester"
+      },
+      "binding": {
+        "id": "bnd_a"
+      },
+      "governance_context": {},
+      "host": {
+        "id": "host-a"
+      },
+      "invocation_id": "inv_fixture_a",
+      "principal": {
+        "id": "urn:chp:entity:acme"
+      },
+      "protocol": "chp/0.1",
+      "provider": {
+        "id": "prov-a"
+      }
+    }
+  },
+  "invocation_b": {
+    "executor": "prov-b",
+    "invocation_digest": "sha256:0d23d3cc288b3d739e1e601ad1135fabbd38755b5149d75f14b4fadbf167b682",
+    "invocation_document": {
+      "action_digest": "sha256:c5b4633e76898f824e7faf1901f473ac38c8c0046adb66f98e388b9a57b5fe5c",
+      "actor": {
+        "id": "urn:chp:actor:requester"
+      },
+      "binding": {
+        "id": "bnd_b"
+      },
+      "governance_context": {},
+      "host": {
+        "id": "host-b"
+      },
+      "invocation_id": "inv_fixture_b",
+      "principal": {
+        "id": "urn:chp:entity:acme"
+      },
+      "protocol": "chp/0.1",
+      "provider": {
+        "id": "prov-b"
+      }
+    }
+  },
+  "kind": "provider-substitution"
+}

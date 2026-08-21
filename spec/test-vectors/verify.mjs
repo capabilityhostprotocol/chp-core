@@ -784,6 +784,44 @@ if (input.kind === "adapter-provenance") {
   console.log(ok
     ? `VALID (dsse in-toto attestation: ${stmt.subject?.[0]?.name} → bundle ${String(bundle.root_hash).slice(0, 16)}…)`
     : "INVALID");
+} else if (input.kind === "execution-digests") {
+  // Recompute both digests independently (CHP-CORE-004/005, CHP-CONF-002): a digest is
+  // "sha256:" + SHA256 over the chp-jcs-v1 canonical document — the same JCS as signatures.
+  const dg = (doc) => "sha256:" + sha256hex(canonJcs(doc));
+  const adOk = dg(input.action_document) === input.action_digest;
+  const invOk = dg(input.invocation_document) === input.invocation_digest;
+  const bindOk = input.invocation_document.action_digest === input.action_digest;
+  if (!adOk) console.error("action_digest mismatch");
+  if (!invOk) console.error("invocation_digest mismatch");
+  if (!bindOk) console.error("invocation does not bind the action_digest");
+  ok = adOk && invOk && bindOk;
+  console.log(ok
+    ? `VALID (execution-digests: action ${input.action_digest.slice(0, 23)}…, invocation ${input.invocation_digest.slice(0, 23)}…)`
+    : "INVALID");
+} else if (input.kind === "provider-substitution") {
+  // Same action via two providers (CHP-CORE-004/005/006/009, CHP-CONF-006): action_digest is
+  // STABLE (routing excluded), invocation_digest CHANGES (routing bound), and the grant minted
+  // for A's attempt is bound to A's invocation_digest + executor — a host cross-checking it
+  // rejects it for B (fresh admission required). All checked by independent recompute.
+  const dg = (doc) => "sha256:" + sha256hex(canonJcs(doc));
+  const a = input.invocation_a, b = input.invocation_b, g = input.grant_for_a;
+  const invA = dg(a.invocation_document), invB = dg(b.invocation_document);
+  const stable = a.invocation_document.action_digest === input.action_digest
+              && b.invocation_document.action_digest === input.action_digest;
+  const changed = invA !== invB && invA === a.invocation_digest && invB === b.invocation_digest;
+  const boundAonly = g.invocation_digest === a.invocation_digest && g.audience === a.executor
+                  && g.invocation_digest !== b.invocation_digest && g.audience !== b.executor;
+  if (!stable) console.error("action_digest not stable across providers");
+  if (!changed) console.error("invocation_digest did not change / mismatch");
+  if (!boundAonly) console.error("grant is not exclusively bound to A");
+  ok = stable && changed && boundAonly
+    && input.expected.action_digest_stable === true
+    && input.expected.invocation_digest_changed === true
+    && input.expected.grant_valid_for_a === true
+    && input.expected.grant_valid_for_b === false;
+  console.log(ok
+    ? `VALID (provider-substitution: action stable, invocation A≠B, grant bound to A only)`
+    : "INVALID");
 } else {
   ok = verifyOne(input);
   console.log(ok ? `VALID (${input.assurance}, ${input.events.length} events)` : "INVALID");
