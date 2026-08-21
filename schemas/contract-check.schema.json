@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/contract-check.schema.json",
+  "title": "ContractCheck",
+  "description": "Reified result of checking an invocation against a CapabilityDefinition's input/output/effect contracts (proposal 0051, CHP-CAP-004/005/006). Each aspect and the derived result are four-state satisfied/unsatisfied/unknown/error; only 'satisfied' satisfies and a missing schema/validator is 'unknown', never a silent pass.",
+  "type": "object",
+  "required": ["id", "definition_id", "checks", "result", "checked_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "definition_id": {"type": "string", "minLength": 1},
+    "checks": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "enum": ["satisfied", "unsatisfied", "unknown", "error"]},
+      "propertyNames": {"enum": ["input", "output", "effect"]}
+    },
+    "result": {"type": "string", "enum": ["satisfied", "unsatisfied", "unknown", "error"]},
+    "checked_at": {"type": "string", "format": "date-time"}
+  }
+}
