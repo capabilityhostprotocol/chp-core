@@ -1615,24 +1615,42 @@ def verify_disclosure_receipt(receipt: dict) -> BundleVerification:
 
 _APPROVAL_GRANT_FIELDS = ("kind", "approval_id", "invocation_id", "decision",
                           "approver", "valid_until", "payload_commitment",
-                          "canonicalization")
+                          "canonicalization",
+                          # ExecutionGrant generalization (proposal 0043, CHP-CORE-030):
+                          # bind the exact governed attempt + intended executor + single-use
+                          # budget. Signed only when present (the header omits absent keys),
+                          # so a grant minted without them verifies byte-identically to the
+                          # pre-0043 approval grant.
+                          "invocation_digest", "action_digest", "binding_id",
+                          "audience", "max_attempts")
 
 
 def approval_grant_header(grant: dict) -> dict:
-    """The approver-signed header of an approval grant (§19, proposal 0037)."""
-    return {k: grant.get(k) for k in _APPROVAL_GRANT_FIELDS}
+    """The approver-signed header of an approval grant (§19, proposal 0037; extended by
+    proposal 0043). Absent keys are OMITTED, so an additive field never alters the header
+    of a grant that never carried it — old grants keep verifying."""
+    return {k: grant.get(k) for k in _APPROVAL_GRANT_FIELDS if k in grant}
 
 
 def build_approval_grant(approver_key: HostKey, *, invocation_id: str,
                          payload_commitment: str, approval_id: str, valid_until: str,
-                         decision: str = "granted") -> dict:
+                         decision: str = "granted", invocation_digest: str | None = None,
+                         action_digest: str | None = None, binding_id: str | None = None,
+                         audience: str | None = None,
+                         max_attempts: int | None = None) -> dict:
     """An approver's ed25519-signed grant authorizing a specific invocation to resume
     and execute (§19, proposal 0037): *"I, ``approver``, ``decision`` invocation
     ``invocation_id`` committing payload ``payload_commitment``, valid until
     ``valid_until``."* Binds the invocation id AND the payload commitment, so a resumed
     invocation cannot swap the payload after approval. Verified offline like a mandate;
     the durable approval-queue service (chp-platform, arc 4b) produces these. Mirrors the
-    disclosure-receipt / mandate signed-record shape."""
+    disclosure-receipt / mandate signed-record shape.
+
+    ExecutionGrant generalization (proposal 0043, CHP-CORE-030): optionally binds the exact
+    governed attempt (``invocation_digest`` / ``action_digest`` / ``binding_id``), the
+    intended executor (``audience``), and a single-use budget (``max_attempts``, v0.1 == 1).
+    Each is signed into the header only when present, so a grant minted without them is
+    byte-identical to the pre-0043 approval grant."""
     if not approver_key.can_sign:
         raise SigningUnavailable("approver key has no private component; cannot sign a grant")
     grant: dict = {
@@ -1645,6 +1663,13 @@ def build_approval_grant(approver_key: HostKey, *, invocation_id: str,
         "payload_commitment": payload_commitment,
         "canonicalization": CANONICALIZATION,
     }
+    for _key, _val in (("invocation_digest", invocation_digest),
+                       ("action_digest", action_digest),
+                       ("binding_id", binding_id),
+                       ("audience", audience),
+                       ("max_attempts", max_attempts)):
+        if _val is not None:
+            grant[_key] = _val
     grant["approver_identity"] = {
         "host_id": approver_key.key_id,
         "public_key": approver_key.public_key_b64,
@@ -1659,12 +1684,17 @@ def build_approval_grant(approver_key: HostKey, *, invocation_id: str,
 
 @_fail_closed_bv
 def verify_approval_grant(grant: dict, *, at_time: str,
-                          expected_approver_key: str | None = None) -> BundleVerification:
+                          expected_approver_key: str | None = None,
+                          expected_audience: str | None = None) -> BundleVerification:
     """Verify an approval grant offline (§19, proposal 0037): structure, the approver's
     ed25519 signature over the canonical header, ``binds_signer`` (approver == signing
     ``key_id``), the temporal window (not expired at ``at_time``), and an optional pinned
     approver key. It does NOT prove the named invocation exists — the host cross-checks
-    ``invocation_id`` + ``payload_commitment`` against the envelope at the resume gate."""
+    ``invocation_id`` + ``payload_commitment`` against the envelope at the resume gate.
+
+    ExecutionGrant generalization (proposal 0043): when ``expected_audience`` is given, the
+    grant's signed ``audience`` MUST match the verifying executor (CHP-CORE-009) — a grant
+    minted for another executor is rejected."""
     checks: dict[str, bool] = {}
     checks["structure"] = (grant.get("kind") == "approval-grant"
                            and bool(grant.get("approval_id"))
@@ -1680,6 +1710,8 @@ def verify_approval_grant(grant: dict, *, at_time: str,
     checks["temporal"] = bool(grant.get("valid_until")) and at_time <= str(grant.get("valid_until"))
     if expected_approver_key is not None:
         checks["approver_pinned"] = (grant.get("approver") == expected_approver_key)
+    if expected_audience is not None:
+        checks["audience"] = (grant.get("audience") == expected_audience)
     valid = all(checks.values())
     reason = None if valid else "approval-grant checks failed: " + ", ".join(
         k for k, v in checks.items() if not v)

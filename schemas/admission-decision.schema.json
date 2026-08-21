@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/admission-decision.schema.json",
+  "title": "AdmissionDecision",
+  "description": "The reified outcome of the admission gate pipeline for one governed attempt (proposal 0043, CHP-CORE-029). Binds the exact invocation (invocation_id + invocation_digest) to a single admitted/denied result and the invariant/gate evaluations that produced it. Unifies what were separate per-gate decisions (entitlement/matter/screen + core invariants). Admission is not execution and not effect (CHP-CORE-001).",
+  "type": "object",
+  "required": ["id", "invocation_id", "invocation_digest", "result", "invariant_evaluations", "decided_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "invocation_id": {"type": "string", "minLength": 1},
+    "invocation_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "result": {"type": "string", "enum": ["admitted", "denied"]},
+    "invariant_evaluations": {
+      "type": "array",
+      "description": "Refs to the invariant/gate evaluations that produced this decision. status is the four-state satisfied/unsatisfied/unknown/error; unknown or error MUST NOT be treated as satisfied (CHP-CORE-017).",
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["satisfied", "unsatisfied", "unknown", "error"]}
+        }
+      }
+    },
+    "decided_at": {"type": "string", "format": "date-time"},
+    "host_id": {"type": "string", "minLength": 1},
+    "denial": {
+      "type": "object",
+      "description": "Present when result is denied. chp-dev extension over the package v0.1 candidate (which carries no denial field) — the reserved DenialReason (code/message). Pending upstream into the 0043 candidate.",
+      "required": ["code", "message"],
+      "additionalProperties": true,
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string"}
+      }
+    }
+  }
+}

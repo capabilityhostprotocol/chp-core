@@ -15,6 +15,11 @@
     "valid_until": {"type": "string", "format": "date-time", "description": "Expiry; a resume after this is rejected."},
     "payload_commitment": {"type": "string", "minLength": 1, "description": "sha256(chp-stable-v1(payload)) of the approved request payload — binds the payload so a resume cannot swap it."},
     "canonicalization": {"type": "string"},
+    "invocation_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "ExecutionGrant generalization (proposal 0043, CHP-CORE-030): binds the exact governed attempt — a grant for one invocation_digest does not authorize a re-routed attempt. Signed; omit-when-absent."},
+    "action_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "The semantic action this grant authorizes (proposal 0043). Signed; omit-when-absent."},
+    "binding_id": {"type": "string", "minLength": 1, "description": "The concrete CapabilityBinding this grant targets (proposal 0043, CHP-CORE-008). Signed; omit-when-absent."},
+    "audience": {"type": "string", "minLength": 1, "description": "The intended executor; a verifying executor rejects a grant whose audience is not itself (proposal 0043, CHP-CORE-009). Signed; omit-when-absent."},
+    "max_attempts": {"type": "integer", "const": 1, "description": "Single-use budget — v0.1 authorizes exactly one execution attempt (proposal 0043, CHP-CORE-030). Signed; omit-when-absent (single-use is also enforced at runtime by approval_id/nonce consumption)."},
     "approver_identity": {
       "type": "object",
       "required": ["host_id", "public_key"],

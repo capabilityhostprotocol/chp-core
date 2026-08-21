@@ -36,7 +36,8 @@ def test_grant_build_and_verify() -> None:
                              approval_id="ap-1", valid_until="2099-01-01T00:00:00Z")
     assert verify_approval_grant(g, at_time="2026-07-15T00:00:00Z").valid
     assert not verify_approval_grant(g, at_time="2099-06-01T00:00:00Z").valid   # expired
-    tampered = dict(g); tampered["invocation_id"] = "inv-EVIL"
+    tampered = dict(g)
+    tampered["invocation_id"] = "inv-EVIL"
     assert not verify_approval_grant(tampered, at_time="2026-07-15T00:00:00Z").valid  # sig breaks
     assert not verify_approval_grant(g, at_time="2026-07-15T00:00:00Z",
                                      expected_approver_key="other").valid       # wrong pin
@@ -128,7 +129,8 @@ def test_approval_ref_omit_when_absent_byte_identical() -> None:
     e = InvocationEnvelope(capability_id="c.cap", invocation_id="i1",
                            requested_at="2026-01-01T00:00:00Z")
     assert "approval_ref" not in e.to_dict()
-    canon = lambda o: hashlib.sha256(json.dumps(o, sort_keys=True).encode()).hexdigest()
+    def canon(o):
+        return hashlib.sha256(json.dumps(o, sort_keys=True).encode()).hexdigest()
     d0 = e.to_dict()
     e.approval_ref = {"kind": "approval-grant"}
     assert "approval_ref" in e.to_dict()
@@ -146,3 +148,39 @@ def test_approval_grant_vector_matches() -> None:
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v", "--no-header", "-p", "no:cacheprovider", "--no-cov"]))
+
+
+def test_execution_grant_generalization() -> None:
+    """proposal 0043 (CHP-CORE-030): an approval grant generalized with execution-truth
+    bindings + audience + single-use budget verifies; the new fields are SIGNED (tampering
+    breaks the signature); an audience mismatch is rejected (CHP-CORE-009); and a grant
+    minted without them carries none of the new keys (backward compat)."""
+    import jsonschema
+
+    k = generate_keypair(tempfile.mkdtemp())
+    digest = "sha256:" + "a" * 64
+    g = build_approval_grant(
+        k, invocation_id="inv-1", payload_commitment="pc", approval_id="ap-1",
+        valid_until="2099-01-01T00:00:00Z", invocation_digest=digest,
+        action_digest=digest, binding_id="binding_1", audience="executor-A", max_attempts=1,
+    )
+    schema = json.loads(
+        (Path(__file__).resolve().parents[3] / "schemas/chp-approval-grant.schema.json").read_text()
+    )
+    jsonschema.validate(g, schema)
+    assert g["invocation_digest"] == digest and g["audience"] == "executor-A"
+
+    assert verify_approval_grant(g, at_time="2026-07-15T00:00:00Z",
+                                 expected_audience="executor-A").valid
+    assert not verify_approval_grant(g, at_time="2026-07-15T00:00:00Z",
+                                     expected_audience="executor-B").valid  # wrong executor
+
+    tampered = dict(g)
+    tampered["invocation_digest"] = "sha256:" + "b" * 64
+    assert not verify_approval_grant(tampered, at_time="2026-07-15T00:00:00Z").valid  # signed
+
+    plain = build_approval_grant(k, invocation_id="inv-1", payload_commitment="pc",
+                                 approval_id="ap-1", valid_until="2099-01-01T00:00:00Z")
+    assert not (set(plain) & {"invocation_digest", "action_digest", "binding_id",
+                              "audience", "max_attempts"})
+    assert verify_approval_grant(plain, at_time="2026-07-15T00:00:00Z").valid

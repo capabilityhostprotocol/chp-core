@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/invariant-evaluation.schema.json",
+  "title": "InvariantEvaluation",
+  "description": "Four-state outcome of evaluating one invariant for a governed attempt (proposal 0043, CHP-CORE-028). result is exactly one of satisfied/unsatisfied/unknown/error; a mandatory invariant returning unknown or error MUST NOT be treated as satisfied (CHP-CORE-017).",
+  "type": "object",
+  "required": ["id", "invocation_id", "invariant_id", "result", "evaluated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "invocation_id": {"type": "string", "minLength": 1},
+    "invariant_id": {"type": "string", "minLength": 1},
+    "result": {"type": "string", "enum": ["satisfied", "unsatisfied", "unknown", "error"]},
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "mandatory": {"type": "boolean"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "evaluator": {"type": "string", "minLength": 1},
+    "details": {"type": "object"}
+  }
+}

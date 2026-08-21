@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/capability-binding.schema.json",
+  "title": "CapabilityBinding",
+  "description": "A governed binding of a semantic capability to a provider+host topology (proposal 0043). Identifies WHAT (capability) supplied by WHOM (provider) WHERE (host) at a versioned binding identity. Distinct from the capability itself; provider/host stay distinct references even when a self-hosted deployment maps them to one entity (CHP-CORE-021).",
+  "type": "object",
+  "required": ["id", "version", "capability", "provider", "host"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "capability": {
+      "type": "object",
+      "required": ["id", "version"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1}
+      }
+    },
+    "provider": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": true,
+      "properties": {"id": {"type": "string", "minLength": 1}}
+    },
+    "host": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": true,
+      "properties": {"id": {"type": "string", "minLength": 1}}
+    }
+  }
+}

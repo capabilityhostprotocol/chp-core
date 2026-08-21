@@ -19,7 +19,7 @@ CORE_OBJECTS = [
     "ReplayQuery",
     "ReplayResult",
 ]
-CORE_OUTCOMES = ["success", "failure", "denied", "skipped"]
+CORE_OUTCOMES = ["success", "failure", "denied", "skipped", "indeterminate"]
 CORE_SCHEMA_FILES = {
     "CapabilityDescriptor": "schemas/capability-descriptor.schema.json",
     "HostDescriptor": "schemas/host-descriptor.schema.json",
