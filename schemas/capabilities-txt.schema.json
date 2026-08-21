@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/capabilities-txt.schema.json",
+  "title": "CapabilitiesTxt",
+  "description": "A capabilities.txt discovery document (proposal 0049, CHP-SUP-009/010/011): a machine-discoverable capability surface. Discovery only, NOT execution or authorization — no admission/authorization/qualification fields.",
+  "type": "object",
+  "required": ["chp", "host", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "chp": {"type": "string", "minLength": 1},
+    "host": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}, "name": {"type": "string"}}},
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "version": {"type": "string"},
+          "description": {"type": "string"},
+          "bindings": {"type": "object", "properties": {"href": {"type": "string"}}},
+          "offers": {"type": "object", "properties": {"href": {"type": "string"}}}
+        }
+      }
+    }
+  }
+}

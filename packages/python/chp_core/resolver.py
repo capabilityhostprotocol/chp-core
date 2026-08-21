@@ -62,6 +62,16 @@ class CapabilityResolution:
         return data
 
 
+def offer_to_candidate(offer: object, *, satisfied_hard: list[str], score: int = 0) -> ResolvedCandidate:
+    """Build a resolver candidate from a published CapabilityOffer — the supply→resolve seam
+    (proposal 0049). ``offer`` is a CapabilityOffer (or a dict with a ``binding``). The candidate
+    is DESCRIPTIVE: which hard constraints the offer supports is the CALLER's evaluation (against
+    the offer's EvidenceContract + verified assertions), NEVER a conclusion baked into the offer
+    (CHP-SUP-002/007). No score compensates for a missing hard constraint at resolve() time."""
+    binding = offer.binding if hasattr(offer, "binding") else offer["binding"]  # type: ignore[index]
+    return ResolvedCandidate(binding=binding, satisfied_hard=list(satisfied_hard), score=score)
+
+
 def resolve(
     requirement: CapabilityRequirement,
     candidates: list[ResolvedCandidate],
