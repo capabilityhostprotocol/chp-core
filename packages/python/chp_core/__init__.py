@@ -90,7 +90,13 @@ from .safety import RuleBasedSafetyEvaluator, register_safety_capability
 from .compliance import SQLiteComplianceManager, register_compliance_capability
 from .incident import InMemoryIncidentManager, SQLiteIncidentManager, register_incident_capability
 from .persistence import setup_sqlite_capabilities
-from .assertions import Assertion, ClaimType, VerificationResult
+from .assertions import (
+    Assertion,
+    ClaimType,
+    VerificationResult,
+    active_assertions,
+    validate_assertion_value,
+)
 from .entities import EntitySubject
 from .readiness import ReadinessAssessment, VerificationPlan
 from .capability_definition import CapabilityDefinition, CapabilityRelationship
@@ -236,6 +242,8 @@ __all__ = [
     "ReadinessAssessment",
     "VerificationPlan",
     "VerificationResult",
+    "active_assertions",
+    "validate_assertion_value",
     "CapabilityDescriptor",
     "CapabilityHostHTTPServer",
     "RemoteCapabilityHost",

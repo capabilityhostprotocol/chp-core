@@ -126,3 +126,36 @@ class VerificationResult:
         if not data.get("details"):
             data.pop("details", None)
         return data
+
+
+def active_assertions(assertions: list[Assertion]) -> list[Assertion]:
+    """The ACTIVE subset of a set of assertions (CHP-SEM-008): an assertion is superseded if a
+    later assertion supersedes its id, or revoked if any assertion revokes its id. Superseded and
+    revoked assertions are PRESERVED in history but excluded from the active set — supersession
+    and revocation create NEW records, they never mutate an existing one (immutability)."""
+    superseded = {a.supersedes for a in assertions if a.supersedes}
+    revoked = {a.revokes for a in assertions if a.revokes}
+    inactive = superseded | revoked
+    return [a for a in assertions if a.id not in inactive]
+
+
+def validate_assertion_value(assertion: Assertion, claim_type: ClaimType) -> str:
+    """Four-state validation of an assertion's value against its ClaimType.value_schema
+    (CHP-SEM-010): satisfied (valid), unsatisfied (invalid), unknown (jsonschema not installed —
+    validation could not run, never silently satisfied), error (the value_schema itself is
+    invalid). Raises ValueError if the claim_type does not match the assertion's claim_type."""
+    if assertion.claim_type != claim_type.id:
+        raise ValueError(
+            f"claim_type mismatch: assertion={assertion.claim_type!r} claim_type={claim_type.id!r}"
+        )
+    try:
+        import jsonschema
+    except ImportError:
+        return "unknown"
+    try:
+        jsonschema.validate(assertion.value, claim_type.value_schema)
+        return "satisfied"
+    except jsonschema.ValidationError:
+        return "unsatisfied"
+    except jsonschema.SchemaError:
+        return "error"
