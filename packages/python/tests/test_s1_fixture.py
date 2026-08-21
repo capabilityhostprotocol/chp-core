@@ -25,6 +25,7 @@ from chp_core import (
     CapabilityDescriptor,
     CapabilityRequirement,
     CorrelationContext,
+    EffectEvidence,
     EntitySubject,
     InvariantEvaluation,
     InvocationEnvelope,
@@ -138,14 +139,12 @@ def test_s1_software_entity_to_effect():
     # Stage 8 — effect: schema introspection confirms the migration. Effect evidence is a
     # SEPARATE record from executor completion (CHP-CORE-016), with its own execution_id.
     completion = next(e for e in events if e["event_type"] == "execution_completed")
-    effect = ExecutionEvidence(
-        event_id="evt_effect", event_type="effect_confirmed", invocation_id=inv_id,
-        capability_id="database.schema.migrate", capability_version="1.0.0",
-        host_id="prod-deploy-host", correlation=env.correlation, outcome="success",
-        execution_id="exec_s1_1", subject={"kind": "effect", "id": "orders_db@v2"},
-    )
-    assert effect.event_type != completion["event_type"]   # effect != completion
-    assert effect.to_dict()["subject"]["kind"] == "effect"
+    effect = EffectEvidence(invocation_id=inv_id, subject={"kind": "effect", "id": "orders_db@v2"},
+                            determination="confirmed", observer={"id": "urn:chp:observer:schema-introspection"},
+                            execution_id="exec_s1_1")
+    assert effect.is_confirmed()                           # effect confirmed by introspection
+    assert "outcome" not in effect.to_dict()               # effect != executor completion (CHP-CORE-016)
+    assert completion["outcome"] == "success"              # completion is a SEPARATE truth
     assert effect.execution_id != effect.invocation_id     # CHP-CORE-012
 
 
@@ -266,10 +265,9 @@ def test_s1_economy_to_execution_full_chain():
     events = host.replay("s1full")
     assert {e["action_digest"] for e in events if e.get("action_digest")} == {ad}
 
-    # Stage 8 — effect evidence distinct from executor completion (CHP-CORE-016).
-    effect = ExecutionEvidence(event_id="evt_eff", event_type="effect_confirmed",
-                               invocation_id=inv_id, capability_id="database.schema.migrate",
-                               capability_version="1.0.0", host_id="prod-deploy-host",
-                               correlation=env.correlation, outcome="success",
-                               execution_id="exec_full", subject={"kind": "effect", "id": "orders_db@v2"})
-    assert effect.event_type != "execution_completed"
+    # Stage 8 — effect as first-class EffectEvidence, distinct from executor completion (CHP-CORE-016).
+    effect = EffectEvidence(invocation_id=inv_id, subject={"kind": "effect", "id": "orders_db@v2"},
+                            determination="confirmed", observer={"id": "urn:chp:observer:schema-introspection"},
+                            execution_id="exec_full")
+    assert effect.is_confirmed()
+    assert "outcome" not in effect.to_dict()   # effect is a separate truth from completion

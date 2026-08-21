@@ -100,6 +100,7 @@ from .resolver import (
     ResolvedCandidate,
     resolve,
 )
+from .effect import EffectEvidence
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -222,6 +223,7 @@ __all__ = [
     "ResolvedCandidate",
     "resolve",
     "ClaimType",
+    "EffectEvidence",
     "EntitySubject",
     "ReadinessAssessment",
     "VerificationPlan",
