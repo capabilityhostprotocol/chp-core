@@ -90,6 +90,16 @@ def test_catches_dangling_ref(sandbox):
     assert not _findings(sandbox)["dangling_ref"].ok
 
 
+def test_catches_uncovered_sec_threat(sandbox):
+    # SEC-016: a SEC MUST threat left baseline (untested) is flagged as a coverage hole.
+    rows = _load_csv(sandbox)
+    sec = next(r for r in rows if r["domain"] == "SEC" and r["normative_level"] == "MUST")
+    sec["status"], sec["test_evidence"] = "baseline", ""
+    _write_csv(sandbox, rows)
+    f = _findings(sandbox)["sec_threat_coverage"]
+    assert not f.ok and sec["id"] in f.detail
+
+
 def test_emit_release_evidence_projects_the_crosswalk():
     ev = rv.emit_release_evidence(rv.BASE, release="0.60.0")
     assert ev["release"] == "0.60.0"
