@@ -117,7 +117,7 @@ from .contract import (
     validate_input,
     validate_output,
 )
-from .discovery import project_capabilities_txt
+from .discovery import host_capabilities_txt, project_capabilities_txt
 from .effect import EffectEvidence
 from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
 from .planning import PlanningContext, ReflectionContext
@@ -243,6 +243,7 @@ __all__ = [
     "ResolvedCandidate",
     "offer_to_candidate",
     "project_capabilities_txt",
+    "host_capabilities_txt",
     "resolve",
     "ContractCheck",
     "check_contract",
