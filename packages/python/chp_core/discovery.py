@@ -51,6 +51,19 @@ def project_capabilities_txt(
     return doc
 
 
+def host_capabilities_txt(descriptor: JSON, *, chp_version: str = "0.1",
+                          base_href: str = "/capabilities") -> JSON:
+    """Project a LIVE host descriptor (from ``LocalCapabilityHost.discover()`` / GET /host) into a
+    capabilities.txt document — the end-to-end discovery link (CHP-SUP-009/010/011): a running CHP
+    host self-publishes its semantic capabilities without a hand-authored feed. The descriptor's
+    capability entries (id/version/description) are projected discovery-only; admission/authorization
+    is never advertised (project_capabilities_txt enforces this)."""
+    host = {k: descriptor[k] for k in ("id", "name") if descriptor.get(k) is not None}
+    return project_capabilities_txt(
+        host=host, capabilities=descriptor.get("capabilities", []),
+        chp_version=chp_version, base_href=base_href)
+
+
 def _assert_discovery_only(doc: JSON) -> None:
     def scan(obj: Any) -> None:
         if isinstance(obj, dict):
