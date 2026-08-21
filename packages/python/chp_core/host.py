@@ -119,6 +119,7 @@ from .types import (
     DenialReason,
     ExecutionEvidence,
     HostDescriptor,
+    IndeterminateExecution,
     InvariantDescriptor,
     InvariantEvaluation,
     InvocationEnvelope,
@@ -1015,6 +1016,28 @@ class LocalCapabilityHost:
                 evidence_ids=[started.event_id, *ctx._evidence_ids, completed.event_id],
                 started_at=started.timestamp,
             ))
+        except IndeterminateExecution as exc:
+            # The handler crashed after an irreversible dispatch and cannot confirm the
+            # side effect (CHP-CORE-014): indeterminate, NOT failure. Reconciliation later
+            # adds a record and never rewrites this one (CHP-CORE-015).
+            indeterminate = self.emit_evidence(
+                "execution_indeterminate",
+                envelope,
+                payload={"capability_uri": descriptor.capability_uri},
+                outcome="indeterminate",
+                execution_id=execution_id,
+            )
+            return self._record_result(InvocationResult(
+                invocation_id=envelope.invocation_id,
+                capability_id=descriptor.id,
+                capability_version=descriptor.version,
+                correlation=envelope.correlation,
+                outcome="indeterminate",
+                success=False,  # indeterminate is never success (CHP-CORE-002)
+                error={"type": exc.__class__.__name__, "message": str(exc)},
+                evidence_ids=[started.event_id, *ctx._evidence_ids, indeterminate.event_id],
+                started_at=started.timestamp,
+            ))
         except Exception as exc:
             failed = self.emit_evidence(
                 "execution_failed",
@@ -1151,6 +1174,29 @@ class LocalCapabilityHost:
             # chunks so a retried id (or a Last-Event-ID reconnect) re-streams.
             self._record_result(result, chunks=chunks or None)
             yield {"result": result}
+        except IndeterminateExecution as exc:
+            # Streaming handler crashed after an irreversible dispatch, side effect
+            # unconfirmed (CHP-CORE-014): indeterminate, not failure.
+            indeterminate = self.emit_evidence(
+                "execution_indeterminate",
+                envelope,
+                payload={"capability_uri": descriptor.capability_uri},
+                outcome="indeterminate",
+                execution_id=execution_id,
+            )
+            indet_result = InvocationResult(
+                invocation_id=envelope.invocation_id,
+                capability_id=descriptor.id,
+                capability_version=descriptor.version,
+                correlation=envelope.correlation,
+                outcome="indeterminate",
+                success=False,
+                error={"type": exc.__class__.__name__, "message": str(exc)},
+                evidence_ids=[started.event_id, *ctx._evidence_ids, indeterminate.event_id],
+                started_at=started.timestamp,
+            )
+            self._record_result(indet_result)
+            yield {"result": indet_result}
         except Exception as exc:
             failed = self.emit_evidence(
                 "execution_failed",

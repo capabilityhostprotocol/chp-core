@@ -21,7 +21,7 @@
     "event_id": { "type": "string", "minLength": 1 },
     "event_type": {
       "type": "string",
-      "description": "Core values include execution_started, execution_completed, execution_failed, execution_denied, and execution_skipped. Capability-specific event types are allowed."
+      "description": "Core values include execution_started, execution_completed, execution_failed, execution_denied, execution_skipped, and execution_indeterminate. Capability-specific event types are allowed."
     },
     "invocation_id": { "type": "string", "minLength": 1 },
     "capability_id": { "type": "string", "minLength": 1 },

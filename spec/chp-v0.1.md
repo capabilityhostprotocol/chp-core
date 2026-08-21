@@ -128,6 +128,7 @@ Core event types:
 - `execution_failed`
 - `execution_denied`
 - `execution_skipped`
+- `execution_indeterminate`
 
 Capability-specific event types are allowed when they are structured and correlated. For example, the reference `trace_execution` capability emits `execution_observed`.
 
@@ -190,6 +191,8 @@ Failed invocations MUST emit `execution_started` and `execution_failed`.
 Denied invocations MUST emit `execution_denied`. Denial may occur before `execution_started`.
 
 Skipped invocations MUST emit `execution_skipped`.
+
+Indeterminate invocations — an execution that began but whose external side effect cannot be confirmed (proposal 0043) — MUST emit `execution_started` and `execution_indeterminate` with `outcome` `indeterminate`, and MUST NOT emit `execution_completed` or `execution_failed` for that attempt.
 
 Schema: `schemas/invocation-result.schema.json`
 

@@ -18,6 +18,10 @@ CORE_EVIDENCE_TYPES = {
     "execution_failed",
     "execution_denied",
     "execution_skipped",
+    # An execution whose external side effect cannot be confirmed (proposal 0043,
+    # CHP-CORE-014): the terminal event is neither completed nor failed. Reconciliation
+    # ADDS a record and never rewrites it (CHP-CORE-015).
+    "execution_indeterminate",
 }
 
 SESSION_EVIDENCE_TYPES = {
@@ -203,6 +207,14 @@ IncidentStatus = Literal["open", "investigating", "escalated", "resolved", "clos
 # success and NOT failure and MUST NOT be rewritten as either by reconciliation
 # (CHP-CORE-015); a later observation ADDS a record, it never erases the uncertainty.
 ExecutionOutcome = Literal["success", "failure", "denied", "skipped", "indeterminate"]
+
+
+class IndeterminateExecution(Exception):
+    """Raised by a capability handler when it crashed AFTER an irreversible external
+    dispatch and cannot confirm whether the side effect occurred (proposal 0043,
+    CHP-CORE-014). The host records outcome=indeterminate on an execution_indeterminate
+    event — NOT failure — and reconciliation later ADDS a record without rewriting it
+    (CHP-CORE-015). A plain exception, by contrast, is a failure (the effect did not land)."""
 
 CapabilityStatus = Literal["draft", "experimental", "certified", "deprecated"]
 CapabilityLocality = Literal["local", "edge", "cloud", "hybrid", "any"]
