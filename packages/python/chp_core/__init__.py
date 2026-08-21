@@ -119,6 +119,7 @@ from .contract import (
 )
 from .discovery import host_capabilities_txt, project_capabilities_txt
 from .effect import EffectEvidence
+from .federation import MarketDescriptor, federable, source_priority_key
 from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
 from .commerce import Order, Payment, Quote, dispute_bundle, scoped_metrics
 from .composition import (
@@ -273,6 +274,9 @@ __all__ = [
     "classify",
     "compensation_node",
     "ready_nodes",
+    "MarketDescriptor",
+    "federable",
+    "source_priority_key",
     "EntitySubject",
     "EvidenceContract",
     "ProviderProfile",

@@ -48,6 +48,7 @@ class ResolvedCandidate:
     score: int = 0
     definition: CapabilityDefinition | None = None  # supplied when computed fit is used
     evidence_contract: object | None = None  # candidate's EvidenceContract, for evidence fit (CHP-RES-005)
+    source_market: JSON | None = None  # {id, ...} — the market/registry this candidate came from (CHP-FED-003)
 
 
 @dataclass(slots=True)
@@ -123,6 +124,8 @@ def resolve(
     def record(c: ResolvedCandidate, fits: dict[str, str]) -> JSON:
         rec: JSON = {"binding": c.binding, "score": c.score, "satisfied_hard": sorted(c.satisfied_hard)}
         rec.update(fits)
+        if c.source_market is not None:  # preserve federated source provenance (CHP-FED-003)
+            rec["source_market"] = c.source_market
         return rec
 
     return CapabilityResolution(
