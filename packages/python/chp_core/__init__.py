@@ -121,6 +121,14 @@ from .discovery import host_capabilities_txt, project_capabilities_txt
 from .effect import EffectEvidence
 from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
 from .commerce import Order, Payment, Quote, dispute_bundle, scoped_metrics
+from .composition import (
+    Composition,
+    CompositionEdge,
+    CompositionNode,
+    classify,
+    compensation_node,
+    ready_nodes,
+)
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -259,6 +267,12 @@ __all__ = [
     "Quote",
     "dispute_bundle",
     "scoped_metrics",
+    "Composition",
+    "CompositionEdge",
+    "CompositionNode",
+    "classify",
+    "compensation_node",
+    "ready_nodes",
     "EntitySubject",
     "EvidenceContract",
     "ProviderProfile",
