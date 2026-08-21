@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/capability-offer.schema.json",
+  "title": "CapabilityOffer",
+  "description": "Packages a CapabilityBinding into a selectable offer (proposal 0048, CHP-SUP-005). Not a Core execution record; publishing an offer is not admission (CHP-SUP-008); a governance-relevant change produces a new version (CHP-SUP-006).",
+  "type": "object",
+  "required": ["id", "version", "binding", "provider", "evidence_contract"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "binding": {"type": "object"},
+    "provider": {"type": "object"},
+    "evidence_contract": {"type": "object"},
+    "service_scope": {"type": "object"},
+    "jurisdiction": {"type": "string", "minLength": 1},
+    "availability": {"type": "object"},
+    "commercial_terms": {"type": "object"},
+    "validity": {"type": "object"}
+  }
+}
