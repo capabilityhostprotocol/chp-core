@@ -63,7 +63,7 @@ You can also ask what a policy *would* have done to a run that already happened:
 
 CHP is not another agent framework, tool protocol, or workflow engine. It is the **governed evidence plane** at the capability boundary: what ran *and* what governed it (policy, risk tier, safety checks, human approval, autonomy budgets, denial) emit onto one signed, correlated record. Observability tools split execution across separate, optional, unsigned signals and carry no governance; CHP unifies both and proves them.
 
-**Status:** CHP is a pre-1.0 **release candidate (v0.9.2)** — a frozen, additive wire surface backed by two independent implementations (Python + TypeScript) that pass conformance. `chp-core` ships on PyPI.
+**Status:** CHP is a pre-1.0 **release candidate (v0.9.3)** — a frozen, additive wire surface backed by two independent implementations (Python + TypeScript) that pass conformance. `chp-core` ships on PyPI.
 
 ## What CHP Defines
 
