@@ -17,6 +17,7 @@
     "valid_until": {"type": "string", "format": "date-time"},
     "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "supersedes": {"type": "string", "minLength": 1},
-    "revokes": {"type": "string", "minLength": 1}
+    "revokes": {"type": "string", "minLength": 1},
+    "inference": {"type": "object", "description": "Present when the value is a system INFERENCE rather than a directly issued claim (CHP-SEM-009): {basis:[refs], method}. Labeled as inference, never asserted as fact."}
   }
 }

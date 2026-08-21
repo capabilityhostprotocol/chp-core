@@ -58,10 +58,18 @@ class Assertion:
     evidence: list[str] = field(default_factory=list)
     supersedes: str | None = None
     revokes: str | None = None
+    inference: JSON | None = None  # {basis:[refs], method} — see is_inferred() (CHP-SEM-009)
+
+    def is_inferred(self) -> bool:
+        """Whether this assertion's value is a system INFERENCE rather than a directly issued
+        claim (CHP-SEM-009). An inference carries its ``basis`` + ``method`` in ``inference`` and
+        MUST be labeled as such — never presented as an asserted fact. A consumer distinguishes
+        the two by this flag; the label is preserved through to_dict."""
+        return self.inference is not None
 
     def to_dict(self) -> JSON:
         data = asdict(self)
-        for k in ("valid_from", "valid_until", "supersedes", "revokes"):
+        for k in ("valid_from", "valid_until", "supersedes", "revokes", "inference"):
             if data.get(k) is None:
                 data.pop(k, None)
         if not data.get("evidence"):
@@ -159,3 +167,26 @@ def validate_assertion_value(assertion: Assertion, claim_type: ClaimType) -> str
         return "unsatisfied"
     except jsonschema.SchemaError:
         return "error"
+
+
+def derive_edges(assertions: list[Assertion]) -> list[JSON]:
+    """Project the ACTIVE assertions into graph edges, each LABELED derived (CHP-SEM-006).
+
+    An edge is subject —(claim_type)→ value, but it is NOT an asserted fact: it is DERIVED from
+    an assertion and carries ``kind: "derived"`` plus ``derived_from`` (the assertion id) so the
+    projection is always traceable back to its source and never mistaken for ground truth. Only
+    active assertions project (superseded/revoked ones do not, CHP-SEM-008); an edge inherits the
+    ``inferred`` flag from its source assertion (CHP-SEM-009). Contradictory active assertions on
+    the same subject+claim_type both project — the projection preserves conflict, it never merges
+    (CHP-SEM-007)."""
+    edges: list[JSON] = []
+    for a in active_assertions(assertions):
+        edges.append({
+            "subject": a.subject,
+            "predicate": a.claim_type,
+            "object": a.value,
+            "kind": "derived",
+            "derived_from": a.id,
+            "inferred": a.is_inferred(),
+        })
+    return edges

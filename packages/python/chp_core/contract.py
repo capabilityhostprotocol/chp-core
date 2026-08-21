@@ -92,6 +92,27 @@ def functional_fit(required: CapabilityDefinition, candidate: CapabilityDefiniti
     return SATISFIED
 
 
+def evidence_fit(required_evidence: list[str], contract: object | None) -> str:
+    """CHP-RES-005 — does a candidate's EvidenceContract satisfy a requirement's evidence needs?
+
+    ``required_evidence`` is the evidence kinds the requirement needs execution to produce;
+    ``contract`` is the candidate's EvidenceContract (declaring ``execution_produces``) or None.
+    Four-state, unknown-preserving: no evidence required → satisfied (nothing to meet); a contract
+    that promises every required kind → satisfied; one missing any → unsatisfied; no contract when
+    evidence IS required → UNKNOWN (cannot judge — never silently satisfied, CHP-RES-011).
+
+    Note the contract is a PROMISE, not evidence (EvidenceContract ≠ Evidence): a satisfied
+    evidence-fit means the candidate is ELIGIBLE to be resolved, not that the evidence exists —
+    Core still evaluates the actual evidence at execution."""
+    if not required_evidence:
+        return SATISFIED
+    if contract is None:
+        return UNKNOWN
+    produces = set(getattr(contract, "execution_produces", None)
+                   or (contract.get("execution_produces", []) if isinstance(contract, dict) else []))
+    return SATISFIED if set(required_evidence) <= produces else UNSATISFIED
+
+
 def derive_result(checks: dict[str, str]) -> str:
     """Aggregate per-aspect four-state checks into one result. Only 'satisfied' satisfies:
     any error → error; any unsatisfied → unsatisfied; any unknown → unknown; else satisfied.
