@@ -21,9 +21,13 @@ from typing import ClassVar
 from .types import JSON, new_id, utc_now
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class ReadinessAssessment:
-    """Derived, contextual readiness. See module docstring for the invariants."""
+    """Derived, contextual readiness. See module docstring for the invariants.
+
+    FROZEN (CHP-RDY-008): a historical assessment is immutable — it can never be rewritten in
+    place. Re-evaluation (CHP-RDY-005) constructs a NEW assessment (fresh id + evaluated_at),
+    leaving the prior record unchanged; a relying store appends, never mutates."""
 
     subject: JSON  # {entity, capability, binding, market} — readiness is per-context
     profile: JSON  # {id, version}

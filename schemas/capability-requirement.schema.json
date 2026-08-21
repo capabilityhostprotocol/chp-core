@@ -10,6 +10,7 @@
     "id": {"type": "string", "minLength": 1},
     "capability": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}, "version": {"type": "string"}}},
     "hard": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "preferences": {"type": "array", "items": {"type": "string", "minLength": 1}}
+    "preferences": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "required_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}, "description": "Evidence kinds the requirement needs execution to produce; matched against a candidate's EvidenceContract (CHP-RES-005)."}
   }
 }

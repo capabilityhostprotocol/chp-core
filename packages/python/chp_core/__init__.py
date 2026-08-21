@@ -95,6 +95,7 @@ from .assertions import (
     ClaimType,
     VerificationResult,
     active_assertions,
+    derive_edges,
     validate_assertion_value,
 )
 from .entities import EntitySubject
@@ -111,6 +112,7 @@ from .contract import (
     ContractCheck,
     check_contract,
     check_effect,
+    evidence_fit,
     functional_fit,
     validate_input,
     validate_output,
@@ -257,6 +259,8 @@ __all__ = [
     "VerificationPlan",
     "VerificationResult",
     "active_assertions",
+    "derive_edges",
+    "evidence_fit",
     "validate_assertion_value",
     "CapabilityDescriptor",
     "CapabilityHostHTTPServer",

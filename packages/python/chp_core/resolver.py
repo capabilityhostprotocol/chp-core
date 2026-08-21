@@ -28,6 +28,7 @@ class CapabilityRequirement:
     capability: JSON  # {id, version?}
     hard: list[str] = field(default_factory=list)  # names of mandatory constraints
     preferences: list[str] = field(default_factory=list)
+    required_evidence: list[str] = field(default_factory=list)  # evidence kinds needed (CHP-RES-005)
     id: str = field(default_factory=lambda: new_id("req"))
 
     def to_dict(self) -> JSON:
@@ -46,6 +47,7 @@ class ResolvedCandidate:
     satisfied_hard: list[str] = field(default_factory=list)
     score: int = 0
     definition: CapabilityDefinition | None = None  # supplied when computed fit is used
+    evidence_contract: object | None = None  # candidate's EvidenceContract, for evidence fit (CHP-RES-005)
 
 
 @dataclass(slots=True)
@@ -92,36 +94,41 @@ def resolve(
     set yields an unresolved resolution, never a silent pick.
 
     When ``require_fit`` (the requirement's CapabilityDefinition) is given, functional fit is
-    COMPUTED per candidate (CHP-RES-003): a candidate is eligible only when its fit is
-    'satisfied'. Fit that is 'unknown' or 'unsatisfied' EXCLUDES the candidate — unknown is never
-    silently promoted (CHP-RES-011). The computed fit is recorded on each candidate record."""
-    from .contract import SATISFIED, UNKNOWN, functional_fit
+    COMPUTED per candidate (CHP-RES-003). When ``requirement.required_evidence`` is non-empty,
+    evidence fit is COMPUTED against each candidate's EvidenceContract (CHP-RES-005). A candidate
+    is eligible only when EVERY computed fit is 'satisfied'; 'unknown'/'unsatisfied' EXCLUDES it —
+    unknown is never silently promoted (CHP-RES-011). Each computed fit is recorded per candidate."""
+    from .contract import SATISFIED, UNKNOWN, evidence_fit, functional_fit
 
     required = set(requirement.hard)
+    need_evidence = bool(requirement.required_evidence)
 
-    def fit_of(c: ResolvedCandidate) -> str | None:
-        if require_fit is None:
-            return None
-        return functional_fit(require_fit, c.definition) if c.definition is not None else UNKNOWN
+    def fits_of(c: ResolvedCandidate) -> dict[str, str]:
+        fits: dict[str, str] = {}
+        if require_fit is not None:
+            fits["functional_fit"] = (
+                functional_fit(require_fit, c.definition) if c.definition is not None else UNKNOWN)
+        if need_evidence:
+            fits["evidence_fit"] = evidence_fit(requirement.required_evidence, c.evidence_contract)
+        return fits
 
-    scored = [(c, fit_of(c)) for c in candidates]
+    scored = [(c, fits_of(c)) for c in candidates]
     eligible = [
-        (c, f) for c, f in scored
-        if required <= set(c.satisfied_hard) and (f is None or f == SATISFIED)
+        (c, fits) for c, fits in scored
+        if required <= set(c.satisfied_hard) and all(v == SATISFIED for v in fits.values())
     ]
     ranked = sorted(eligible, key=lambda cf: (-cf[0].score, str(cf[0].binding.get("id", ""))))
     selected = ranked[0][0].binding if ranked else None
 
-    def record(c: ResolvedCandidate, f: str | None) -> JSON:
+    def record(c: ResolvedCandidate, fits: dict[str, str]) -> JSON:
         rec: JSON = {"binding": c.binding, "score": c.score, "satisfied_hard": sorted(c.satisfied_hard)}
-        if f is not None:
-            rec["functional_fit"] = f
+        rec.update(fits)
         return rec
 
     return CapabilityResolution(
         requirement_id=requirement.id,
         selected=selected,
-        candidates=[record(c, f) for c, f in ranked],
+        candidates=[record(c, fits) for c, fits in ranked],
         provenance=provenance or {},
         result="resolved" if selected is not None else "unresolved",
     )
