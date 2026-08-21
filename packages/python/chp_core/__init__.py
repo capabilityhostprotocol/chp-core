@@ -98,8 +98,10 @@ from .resolver import (
     CapabilityRequirement,
     CapabilityResolution,
     ResolvedCandidate,
+    offer_to_candidate,
     resolve,
 )
+from .discovery import project_capabilities_txt
 from .effect import EffectEvidence
 from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
 from .planning import PlanningContext, ReflectionContext
@@ -223,6 +225,8 @@ __all__ = [
     "CapabilityRequirement",
     "CapabilityResolution",
     "ResolvedCandidate",
+    "offer_to_candidate",
+    "project_capabilities_txt",
     "resolve",
     "ClaimType",
     "EffectEvidence",
