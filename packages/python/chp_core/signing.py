@@ -1718,6 +1718,58 @@ def verify_approval_grant(grant: dict, *, at_time: str,
     return BundleVerification(valid, "signed", checks, reason)
 
 
+_ASSERTION_HEADER_FIELDS = ("id", "claim_type", "issuer", "subject", "value",
+                            "issued_at", "valid_from", "valid_until")
+
+
+def assertion_header(assertion: dict) -> dict:
+    """The issuer-signed header of an assertion (proposal 0050): the claim-defining fields.
+    Absent optional fields are OMITTED, so a signature covers exactly what the assertion carried."""
+    return {k: assertion.get(k) for k in _ASSERTION_HEADER_FIELDS if k in assertion}
+
+
+def sign_assertion(issuer_key: HostKey, assertion: dict) -> dict:
+    """Sign an assertion with the issuer's ed25519 key (proposal 0050): binds the claim
+    (id/claim_type/issuer/subject/value/validity) so a verifier proves integrity + attribution.
+    A valid signature proves ATTRIBUTION/INTEGRITY, not truth (CHP-VER-002). Returns the assertion
+    with signer_identity + signature attached (mirrors the mandate/grant signed-record shape)."""
+    if not issuer_key.can_sign:
+        raise SigningUnavailable("issuer key has no private component; cannot sign an assertion")
+    signed = dict(assertion)
+    signed["signer_identity"] = {"host_id": issuer_key.key_id, "public_key": issuer_key.public_key_b64}
+    signed["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": issuer_key.key_id,
+        "signature": _sign(issuer_key._private, _canon(assertion_header(assertion))),
+    }
+    return signed
+
+
+@_fail_closed_bv
+def verify_assertion_signature(signed: dict, *,
+                               expected_issuer_key: str | None = None) -> BundleVerification:
+    """Verify a signed assertion offline (proposal 0050): structure, the issuer's ed25519
+    signature over the canonical header, ``binds_signer`` (signer_identity == signing key_id), and
+    an optional pinned issuer key. Integrity/attribution only — NOT truth (CHP-VER-002) and NOT
+    trust acceptance (CHP-VER-011); a relying policy decides whether to accept, and whether the
+    signing key belongs to the claimed issuer is a separate trust-anchor question."""
+    checks: dict[str, bool] = {}
+    checks["structure"] = bool(signed.get("id")) and bool(signed.get("claim_type"))
+    ident = signed.get("signer_identity") or {}
+    pub = str(ident.get("public_key") or "")
+    sig = signed.get("signature") or {}
+    checks["binds_signer"] = (ident.get("host_id") == sig.get("key_id"))
+    checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM and bool(pub)
+                           and _verify_sig(pub, _canon(assertion_header(signed)),
+                                           str(sig.get("signature") or "")))
+    if expected_issuer_key is not None:
+        checks["issuer_pinned"] = (ident.get("host_id") == expected_issuer_key)
+    valid = all(checks.values())
+    reason = None if valid else "assertion-signature checks failed: " + ", ".join(
+        k for k, v in checks.items() if not v)
+    return BundleVerification(valid, "signed", checks, reason)
+
+
 _MANDATE_HEADER_FIELDS = ("kind", "mandate_id", "delegate_id", "scope",
                           "valid_from", "valid_until", "created_at",
                           "canonicalization")
