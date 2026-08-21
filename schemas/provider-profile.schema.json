@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/provider-profile.schema.json",
+  "title": "ProviderProfile",
+  "description": "A descriptive supply projection over an entity (proposal 0048, CHP-SUP-002). Must not encode context-free permanent conclusions (qualified/authorized/approved).",
+  "type": "object",
+  "required": ["id", "entity"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "entity": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}},
+    "capability_declarations": {"type": "array", "items": {"type": "object"}},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "discovery_metadata": {"type": "object"},
+    "service_metadata": {"type": "object"}
+  }
+}

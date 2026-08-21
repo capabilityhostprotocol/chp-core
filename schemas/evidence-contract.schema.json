@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/evidence-contract.schema.json",
+  "title": "EvidenceContract",
+  "description": "Declares what evidence execution is EXPECTED to produce (proposal 0048, CHP-CAP-014, CHP-SUP-007). A promise, NOT evidence — EvidenceContract != Evidence; it must not assert the evidence already exists.",
+  "type": "object",
+  "required": ["id", "execution_produces", "effect_observation"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "execution_produces": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "effect_observation": {"type": "object", "additionalProperties": true, "properties": {"available": {"type": "boolean"}}}
+  }
+}

@@ -101,6 +101,7 @@ from .resolver import (
     resolve,
 )
 from .effect import EffectEvidence
+from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -217,6 +218,7 @@ __all__ = [
     "Assertion",
     "CapabilityBinding",
     "CapabilityDefinition",
+    "CapabilityOffer",
     "CapabilityRelationship",
     "CapabilityRequirement",
     "CapabilityResolution",
@@ -225,6 +227,8 @@ __all__ = [
     "ClaimType",
     "EffectEvidence",
     "EntitySubject",
+    "EvidenceContract",
+    "ProviderProfile",
     "ReadinessAssessment",
     "VerificationPlan",
     "VerificationResult",
