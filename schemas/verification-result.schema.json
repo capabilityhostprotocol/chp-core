@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/verification-result.schema.json",
+  "title": "VerificationResult",
+  "description": "Structured, immutable outcome of verifying one Assertion (proposal 0044, CHP-VER-001..010). Preserves per-check four-state results + verifier provenance + an overall result. NOT trust: a valid signature proves integrity, not truth (CHP-VER-002); integrity verification is separate from trust-policy acceptance (CHP-VER-011).",
+  "type": "object",
+  "required": ["id", "assertion", "verifier", "checks", "result", "verified_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "assertion": {"type": "string", "minLength": 1},
+    "verifier": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}},
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]}, "integrity": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]}, "issuer_identity": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]},
+        "subject_binding": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]}, "value_binding": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]}, "freshness": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]}, "revocation": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]}
+      }
+    },
+    "result": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]},
+    "verified_at": {"type": "string", "format": "date-time"},
+    "valid_until": {"type": "string", "format": "date-time"},
+    "details": {"type": "object"}
+  }
+}

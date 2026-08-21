@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/entity-subject.schema.json",
+  "title": "EntitySubject",
+  "description": "A durable entity with a stable id — the subject of assertions/capabilities/roles (proposal 0044, CHP-ENT-001..). id is stable across mutable display/identifier/key changes; only explicit succession (succeeds_id) creates a new entity. kind is informational and grants nothing (CHP-ENT-003). External identifiers are evidence-backed claims, not canonical identity (CHP-ENT-002).",
+  "type": "object",
+  "required": ["id", "kind", "status", "version", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["active", "suspended", "offboarded"]},
+    "display": {"type": "object"},
+    "identifiers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "value", "assertion"],
+        "additionalProperties": true,
+        "properties": {
+          "kind": {"type": "string", "minLength": 1},
+          "value": {"type": "string"},
+          "assertion": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "assertion_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "succeeds_id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/capability-requirement.schema.json",
+  "title": "CapabilityRequirement",
+  "description": "What a requester needs: an abstract capability + mandatory (hard) constraints + preferences (proposal 0045, CHP-RES-001). Hard constraints are eligibility gates; preferences only rank among the eligible. Not an invocation (CHP-SUP-001).",
+  "type": "object",
+  "required": ["id", "capability"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "capability": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}, "version": {"type": "string"}}},
+    "hard": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "preferences": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}
