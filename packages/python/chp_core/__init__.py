@@ -107,6 +107,14 @@ from .resolver import (
     offer_to_candidate,
     resolve,
 )
+from .contract import (
+    ContractCheck,
+    check_contract,
+    check_effect,
+    functional_fit,
+    validate_input,
+    validate_output,
+)
 from .discovery import project_capabilities_txt
 from .effect import EffectEvidence
 from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
@@ -234,6 +242,12 @@ __all__ = [
     "offer_to_candidate",
     "project_capabilities_txt",
     "resolve",
+    "ContractCheck",
+    "check_contract",
+    "check_effect",
+    "functional_fit",
+    "validate_input",
+    "validate_output",
     "ClaimType",
     "EffectEvidence",
     "EntitySubject",

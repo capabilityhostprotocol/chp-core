@@ -11,8 +11,12 @@ The resolution record is immutable and deterministic, and preserves provenance (
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING
 
 from .types import JSON, new_id, utc_now
+
+if TYPE_CHECKING:
+    from .capability_definition import CapabilityDefinition
 
 
 @dataclass(slots=True)
@@ -34,11 +38,14 @@ class CapabilityRequirement:
 class ResolvedCandidate:
     """A candidate binding scored against a requirement — descriptive, not authoritative.
     satisfied_hard lists which mandatory constraints this candidate satisfies; score (an int
-    ranking signal, never CHP truth) ranks ONLY among the eligible."""
+    ranking signal, never CHP truth) ranks ONLY among the eligible. ``definition`` is the
+    candidate's CapabilityDefinition, supplied when the resolver should COMPUTE functional fit
+    (resolve(require_fit=...)) rather than trust asserted satisfied_hard (CHP-RES-003)."""
 
     binding: JSON  # {id, ...}
     satisfied_hard: list[str] = field(default_factory=list)
     score: int = 0
+    definition: CapabilityDefinition | None = None  # supplied when computed fit is used
 
 
 @dataclass(slots=True)
@@ -77,22 +84,44 @@ def resolve(
     candidates: list[ResolvedCandidate],
     *,
     provenance: JSON | None = None,
+    require_fit: CapabilityDefinition | None = None,
 ) -> CapabilityResolution:
     """Filter candidates to the ELIGIBLE (those satisfying EVERY hard constraint — CHP-RES-002,
     no score compensates), rank the eligible by score descending, and select the top. The
     ranking is deterministic (score, then binding id tiebreak — CHP-RES-016). An empty eligible
-    set yields an unresolved resolution, never a silent pick."""
+    set yields an unresolved resolution, never a silent pick.
+
+    When ``require_fit`` (the requirement's CapabilityDefinition) is given, functional fit is
+    COMPUTED per candidate (CHP-RES-003): a candidate is eligible only when its fit is
+    'satisfied'. Fit that is 'unknown' or 'unsatisfied' EXCLUDES the candidate — unknown is never
+    silently promoted (CHP-RES-011). The computed fit is recorded on each candidate record."""
+    from .contract import SATISFIED, UNKNOWN, functional_fit
+
     required = set(requirement.hard)
-    eligible = [c for c in candidates if required <= set(c.satisfied_hard)]
-    ranked = sorted(eligible, key=lambda c: (-c.score, str(c.binding.get("id", ""))))
-    selected = ranked[0].binding if ranked else None
+
+    def fit_of(c: ResolvedCandidate) -> str | None:
+        if require_fit is None:
+            return None
+        return functional_fit(require_fit, c.definition) if c.definition is not None else UNKNOWN
+
+    scored = [(c, fit_of(c)) for c in candidates]
+    eligible = [
+        (c, f) for c, f in scored
+        if required <= set(c.satisfied_hard) and (f is None or f == SATISFIED)
+    ]
+    ranked = sorted(eligible, key=lambda cf: (-cf[0].score, str(cf[0].binding.get("id", ""))))
+    selected = ranked[0][0].binding if ranked else None
+
+    def record(c: ResolvedCandidate, f: str | None) -> JSON:
+        rec: JSON = {"binding": c.binding, "score": c.score, "satisfied_hard": sorted(c.satisfied_hard)}
+        if f is not None:
+            rec["functional_fit"] = f
+        return rec
+
     return CapabilityResolution(
         requirement_id=requirement.id,
         selected=selected,
-        candidates=[
-            {"binding": c.binding, "score": c.score, "satisfied_hard": sorted(c.satisfied_hard)}
-            for c in ranked
-        ],
+        candidates=[record(c, f) for c, f in ranked],
         provenance=provenance or {},
         result="resolved" if selected is not None else "unresolved",
     )
