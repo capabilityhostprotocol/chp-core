@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/claim-type.schema.json",
+  "title": "ClaimType",
+  "description": "A canonical, versioned claim type with a value schema and a namespace authority (proposal 0044, CHP-SEM-002). The authority owns the definition it publishes.",
+  "type": "object",
+  "required": ["id", "version", "value_schema", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "value_schema": {"type": "object"},
+    "description": {"type": "string"},
+    "subject_kinds": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "namespace_authority": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}}
+  }
+}

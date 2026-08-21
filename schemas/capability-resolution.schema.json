@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/capability-resolution.schema.json",
+  "title": "CapabilityResolution",
+  "description": "The immutable, deterministic record of resolving a requirement to a selected candidate (proposal 0045, CHP-RES-007/009/016). Ranking happens only among candidates that satisfy every hard constraint (CHP-RES-002). Resolution is not admission (CHP-RES-008).",
+  "type": "object",
+  "required": ["id", "requirement_id", "candidates", "provenance", "result", "resolved_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "requirement_id": {"type": "string", "minLength": 1},
+    "selected": {"type": "object"},
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["binding", "score", "satisfied_hard"],
+        "additionalProperties": false,
+        "properties": {
+          "binding": {"type": "object"},
+          "score": {"type": "integer"},
+          "satisfied_hard": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "provenance": {"type": "object"},
+    "result": {"enum": ["resolved", "unresolved"]},
+    "resolved_at": {"type": "string", "format": "date-time"}
+  }
+}

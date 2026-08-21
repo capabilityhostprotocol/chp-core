@@ -90,6 +90,16 @@ from .safety import RuleBasedSafetyEvaluator, register_safety_capability
 from .compliance import SQLiteComplianceManager, register_compliance_capability
 from .incident import InMemoryIncidentManager, SQLiteIncidentManager, register_incident_capability
 from .persistence import setup_sqlite_capabilities
+from .assertions import Assertion, ClaimType, VerificationResult
+from .entities import EntitySubject
+from .readiness import ReadinessAssessment, VerificationPlan
+from .capability_definition import CapabilityDefinition, CapabilityRelationship
+from .resolver import (
+    CapabilityRequirement,
+    CapabilityResolution,
+    ResolvedCandidate,
+    resolve,
+)
 from .planning import PlanningContext, ReflectionContext
 from .delegation import DelegationContext, register_planning_capability
 from .session import AgentSession, wrap_tool_call
@@ -203,7 +213,19 @@ __all__ = [
     "CapabilityIdempotency",
     "CapabilityStatus",
     "AdmissionDecision",
+    "Assertion",
     "CapabilityBinding",
+    "CapabilityDefinition",
+    "CapabilityRelationship",
+    "CapabilityRequirement",
+    "CapabilityResolution",
+    "ResolvedCandidate",
+    "resolve",
+    "ClaimType",
+    "EntitySubject",
+    "ReadinessAssessment",
+    "VerificationPlan",
+    "VerificationResult",
     "CapabilityDescriptor",
     "CapabilityHostHTTPServer",
     "RemoteCapabilityHost",

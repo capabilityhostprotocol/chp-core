@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/assertion.schema.json",
+  "title": "Assertion",
+  "description": "An evidence-backed claim: an issuer asserts a claim_type about a subject with a value (proposal 0044, CHP-SEM-001/011). Not truth — a VerificationResult evaluates it and a relying policy decides trust. Immutable; supersede/revoke create new records.",
+  "type": "object",
+  "required": ["id", "claim_type", "issuer", "subject", "value", "issued_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "claim_type": {"type": "string", "minLength": 1},
+    "issuer": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}},
+    "subject": {"type": "object", "required": ["kind", "id"], "additionalProperties": true, "properties": {"kind": {"type": "string", "minLength": 1}, "id": {"type": "string", "minLength": 1}}},
+    "value": {},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "valid_from": {"type": "string", "format": "date-time"},
+    "valid_until": {"type": "string", "format": "date-time"},
+    "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "supersedes": {"type": "string", "minLength": 1},
+    "revokes": {"type": "string", "minLength": 1}
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/readiness-assessment.schema.json",
+  "title": "ReadinessAssessment",
+  "description": "Derived, contextual readiness of an entity toward a capability/binding in a market (proposal 0044, CHP-RDY-001..010, CHP-ENT-007). Not a permanent entity boolean; derived from per-requirement four-state results; expiry-bound; unknown -> incomplete (CHP-RDY-007). Readiness never implies admission (CHP-RDY-003).",
+  "type": "object",
+  "required": ["id", "subject", "profile", "requirements", "result", "evaluated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "subject": {
+      "type": "object",
+      "required": ["entity", "capability", "binding", "market"],
+      "additionalProperties": true,
+      "properties": {"entity": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}}, "capability": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}}, "binding": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}}, "market": {"type": "object", "required": ["id"], "additionalProperties": true, "properties": {"id": {"type": "string", "minLength": 1}}}}
+    },
+    "profile": {"type": "object", "required": ["id", "version"], "additionalProperties": false, "properties": {"id": {"type": "string", "minLength": 1}, "version": {"type": "string", "minLength": 1}}},
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "result"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "result": {"enum": ["satisfied", "unsatisfied", "unknown", "error"]},
+          "assertions": {"type": "array", "items": {"type": "string"}},
+          "verification_results": {"type": "array", "items": {"type": "string"}},
+          "details": {"type": "object"}
+        }
+      }
+    },
+    "result": {"enum": ["eligible", "ineligible", "incomplete", "stale", "suspended"]},
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "valid_until": {"type": "string", "format": "date-time"}
+  }
+}
