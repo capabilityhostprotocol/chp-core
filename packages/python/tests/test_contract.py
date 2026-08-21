@@ -35,6 +35,7 @@ def test_core_evidence_types_frozen():
         "execution_failed",
         "execution_denied",
         "execution_skipped",
+        "execution_indeterminate",  # proposal 0043, CHP-CORE-014
     }
 
 

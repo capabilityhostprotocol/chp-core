@@ -91,3 +91,71 @@ def test_host_emits_one_shared_execution_id_across_lifecycle():
     (eid,) = exec_ids
     assert eid.startswith("exec")
     assert eid != lifecycle[0]["invocation_id"]  # distinct from invocation_id (CHP-CORE-012)
+
+
+def test_handler_raising_indeterminate_records_indeterminate_not_failure():
+    """Emission (proposal 0043, CHP-CORE-014): a handler that raises IndeterminateExecution
+    (crashed after an irreversible dispatch) yields outcome=indeterminate on an
+    execution_indeterminate event — never execution_failed/completed, never success."""
+    import asyncio
+
+    from chp_core import (
+        CapabilityDescriptor,
+        CorrelationContext,
+        IndeterminateExecution,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+    )
+
+    async def handler(_ctx, _payload):
+        raise IndeterminateExecution("dispatched migration, lost connection before confirm")
+
+    host = LocalCapabilityHost("h", store=SQLiteEvidenceStore(":memory:"))
+    host.register(CapabilityDescriptor(id="svc.migrate", version="1.0.0", description="x"), handler)
+    result = asyncio.run(host.ainvoke("svc.migrate", {}, correlation=CorrelationContext(correlation_id="c")))
+
+    assert result.outcome == "indeterminate"
+    assert result.success is False
+    seq = [e["event_type"] for e in host.replay("c")]
+    assert "execution_indeterminate" in seq
+    assert "execution_completed" not in seq and "execution_failed" not in seq
+    indet = next(e for e in host.replay("c") if e["event_type"] == "execution_indeterminate")
+    assert indet["outcome"] == "indeterminate"
+    assert indet["execution_id"].startswith("exec")
+
+
+def test_stream_handler_raising_indeterminate_records_indeterminate():
+    """The streaming path also treats IndeterminateExecution as indeterminate, not failure
+    (proposal 0043, CHP-CORE-014)."""
+    import asyncio
+
+    from chp_core import (
+        CapabilityDescriptor,
+        CorrelationContext,
+        IndeterminateExecution,
+        InvocationEnvelope,
+        LocalCapabilityHost,
+        SQLiteEvidenceStore,
+    )
+
+    async def handler(_ctx, _payload):
+        for _ in ():  # never yields, but makes this an async generator (streaming)
+            yield {}
+        raise IndeterminateExecution("streamed, dispatched, unconfirmed")
+
+    host = LocalCapabilityHost("h", store=SQLiteEvidenceStore(":memory:"))
+    host.register(
+        CapabilityDescriptor(id="svc.stream", version="1.0.0", description="x", modes=["stream"]),
+        handler,
+    )
+    env = InvocationEnvelope(capability_id="svc.stream", mode="stream", payload={},
+                             correlation=CorrelationContext(correlation_id="c"))
+
+    async def run():
+        return [item async for item in host.ainvoke_stream(env)]
+
+    results = asyncio.run(run())
+    assert results[-1]["result"].outcome == "indeterminate"
+    seq = [e["event_type"] for e in host.replay("c")]
+    assert "execution_indeterminate" in seq
+    assert "execution_failed" not in seq

@@ -13,7 +13,7 @@ extensions MUST be reverse-DNS namespaced (`com.acme.…`) — see
 | `AUTONOMY_EVIDENCE_TYPES` | `approval_denied`, `approval_grant_verified`, `approval_granted`, `approval_requested`, `budget_exceeded` |
 | `COGNITION_EVIDENCE_TYPES` | `delegation_accepted`, `delegation_completed`, `delegation_created`, `delegation_reassigned`, `delegation_rejected`, `memory_deleted`, `memory_read`, `memory_written`, `outcome_scored`, `plan_completed`, `plan_created`, `plan_failed`, `plan_revised`, `plan_step_completed`, `plan_step_started`, `reflection_completed`, `reflection_started` |
 | `COMPLIANCE_EVIDENCE_TYPES` | `compliance_report_generated`, `evidence_purged`, `evidence_redacted`, `retention_policy_applied` |
-| `CORE_EVIDENCE_TYPES` | `execution_completed`, `execution_denied`, `execution_failed`, `execution_skipped`, `execution_started` |
+| `CORE_EVIDENCE_TYPES` | `execution_completed`, `execution_denied`, `execution_failed`, `execution_indeterminate`, `execution_skipped`, `execution_started` |
 | `DOMAIN_EVENT_EVIDENCE_TYPES` | `domain_event_emitted`, `domain_event_operation_failed`, `domain_events_queried` |
 | `FEDERATION_EVIDENCE_TYPES` | `task_participants_declared` |
 | `GRAPH_EVIDENCE_TYPES` | `graph_entity_added`, `graph_operation_failed`, `graph_queried`, `graph_relation_added`, `graph_traversed` |

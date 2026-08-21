@@ -68,6 +68,7 @@ export const CORE_EVIDENCE_TYPES = [
   "execution_completed",
   "execution_denied",
   "execution_failed",
+  "execution_indeterminate",
   "execution_skipped",
   "execution_started",
 ] as const;
