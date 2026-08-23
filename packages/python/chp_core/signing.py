@@ -1637,7 +1637,8 @@ def build_approval_grant(approver_key: HostKey, *, invocation_id: str,
                          decision: str = "granted", invocation_digest: str | None = None,
                          action_digest: str | None = None, binding_id: str | None = None,
                          audience: str | None = None,
-                         max_attempts: int | None = None) -> dict:
+                         max_attempts: int | None = None,
+                         bound_by: list[str] | None = None) -> dict:
     """An approver's ed25519-signed grant authorizing a specific invocation to resume
     and execute (§19, proposal 0037): *"I, ``approver``, ``decision`` invocation
     ``invocation_id`` committing payload ``payload_commitment``, valid until
@@ -1650,9 +1651,20 @@ def build_approval_grant(approver_key: HostKey, *, invocation_id: str,
     governed attempt (``invocation_digest`` / ``action_digest`` / ``binding_id``), the
     intended executor (``audience``), and a single-use budget (``max_attempts``, v0.1 == 1).
     Each is signed into the header only when present, so a grant minted without them is
-    byte-identical to the pre-0043 approval grant."""
+    byte-identical to the pre-0043 approval grant.
+
+    ``bound_by`` (CHP-TEMP-003): the validity bounds of the mandatory evidence/authority this grant's
+    admission depends on. If given, the grant MUST NOT outlive any of them — minting one that would
+    is refused, so a grant can never authorize execution past the authority it rests on."""
     if not approver_key.can_sign:
         raise SigningUnavailable("approver key has no private component; cannot sign a grant")
+    if bound_by:
+        from .temporal import grant_outlives_bound
+        outlived = grant_outlives_bound(valid_until, bound_by)
+        if outlived is not None:
+            raise ValueError(
+                f"grant valid_until {valid_until} outlives a depended-on validity bound {outlived} "
+                f"(CHP-TEMP-003); clamp it to the min bound before minting")
     grant: dict = {
         "kind": "approval-grant",
         "approval_id": approval_id,

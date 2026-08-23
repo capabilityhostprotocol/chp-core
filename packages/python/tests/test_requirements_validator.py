@@ -114,6 +114,25 @@ def test_catches_uncovered_sec_threat(sandbox):
     assert not f.ok and sec["id"] in f.detail
 
 
+def test_release_manifest_is_complete_and_digests_recompute():
+    # CONF-011: the manifest enumerates version + maturity targets + package files, with recomputable
+    # sha256 digests for the release-critical machine artifacts, and validates against its schema.
+    import hashlib
+
+    m = rv.emit_release_manifest(version="9.9.9")
+    assert m["release"] == "9.9.9"
+    assert m["maturity_targets"] and all({"id", "maturity", "domains"} <= set(t) for t in m["maturity_targets"])
+    assert any(f.endswith("chp_core/__init__.py") for f in m["package_files"])
+    assert m["content_digests"], "no release-critical artifacts digested"
+    # a digest must actually match the file it names
+    rel, dig = next(iter(m["content_digests"].items()))
+    assert dig == "sha256:" + hashlib.sha256((rv.ROOT / rel).read_bytes()).hexdigest()
+
+    schema = json.loads((rv.ROOT / "schemas/release-manifest.schema.json").read_text())
+    import jsonschema
+    jsonschema.validate(m, schema)
+
+
 def test_emit_release_evidence_projects_the_crosswalk():
     ev = rv.emit_release_evidence(rv.BASE, release="0.60.0")
     assert ev["release"] == "0.60.0"

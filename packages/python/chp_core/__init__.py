@@ -100,6 +100,15 @@ from .assertions import (
 )
 from .entities import EntitySubject
 from .readiness import ReadinessAssessment, VerificationPlan, plan_item
+from .temporal import (
+    TEMPORAL_DIMENSIONS,
+    ClockReading,
+    assess_freshness,
+    clamp_grant_validity,
+    concurrent,
+    grant_outlives_bound,
+    temporal_envelope,
+)
 from .capability_definition import CapabilityDefinition, CapabilityRelationship
 from .resolver import (
     CapabilityRequirement,
@@ -280,6 +289,13 @@ __all__ = [
     "ReadinessAssessment",
     "VerificationPlan",
     "plan_item",
+    "TEMPORAL_DIMENSIONS",
+    "ClockReading",
+    "assess_freshness",
+    "clamp_grant_validity",
+    "concurrent",
+    "grant_outlives_bound",
+    "temporal_envelope",
     "VerificationResult",
     "active_assertions",
     "derive_edges",

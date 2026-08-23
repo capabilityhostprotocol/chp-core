@@ -36,6 +36,20 @@ def test_grant_build_and_verify() -> None:
                              approval_id="ap-1", valid_until="2099-01-01T00:00:00Z")
     assert verify_approval_grant(g, at_time="2026-07-15T00:00:00Z").valid
     assert not verify_approval_grant(g, at_time="2099-06-01T00:00:00Z").valid   # expired
+
+
+def test_grant_refused_when_it_outlives_a_depended_on_bound() -> None:
+    # CHP-TEMP-003: a grant MUST NOT outlive any mandatory evidence/authority validity bound its
+    # admission depends on. Minting one that would is refused; within-bounds still mints.
+    import pytest
+    k = generate_keypair(tempfile.mkdtemp())
+    with pytest.raises(ValueError):
+        build_approval_grant(k, invocation_id="inv-1", payload_commitment="pc", approval_id="ap-1",
+                             valid_until="2027-01-01T00:00:00Z",
+                             bound_by=["2026-09-01T00:00:00Z"])  # grant outlives the evidence bound
+    g = build_approval_grant(k, invocation_id="inv-1", payload_commitment="pc", approval_id="ap-1",
+                             valid_until="2026-08-01T00:00:00Z", bound_by=["2026-09-01T00:00:00Z"])
+    assert verify_approval_grant(g, at_time="2026-07-15T00:00:00Z").valid
     tampered = dict(g)
     tampered["invocation_id"] = "inv-EVIL"
     assert not verify_approval_grant(tampered, at_time="2026-07-15T00:00:00Z").valid  # sig breaks
