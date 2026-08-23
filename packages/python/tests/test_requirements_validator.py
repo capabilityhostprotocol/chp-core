@@ -144,7 +144,9 @@ def test_catches_promotion_without_full_implementation(sandbox):
     # CHP-CONF-010: a concept promoted to a STABLE/NORMATIVE maturity while a requirement in its
     # domain is still baseline is caught — semantic closure/conformance MUST precede promotion.
     rows = _load_csv(sandbox)
-    dom = next(r["domain"] for r in rows if r["status"] == "baseline")  # a domain with a baseline req
+    rows[0]["status"] = "baseline"          # force a baseline requirement (the live crosswalk is 300/300)
+    _write_csv(sandbox, rows)
+    dom = rows[0]["domain"]                  # its domain — promoting a concept over it must be caught
     comps = json.loads((sandbox / "components.json").read_text())
     clist = comps.get("components") if isinstance(comps, dict) else comps
     clist.append({"id": "premature", "version": "1", "maturity": "CORE-NORMATIVE", "domains": [dom]})
