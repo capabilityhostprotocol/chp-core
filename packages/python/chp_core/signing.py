@@ -1805,6 +1805,11 @@ def mandate_header(mandate: dict) -> dict:
         # Use-count cap (§10, proposal 0026) is signed only when present, so an
         # uncapped mandate's header is byte-identical to pre-0026.
         header["max_invocations"] = mandate["max_invocations"]
+    if mandate.get("delegable"):
+        # Redelegation opt-in (CHP-AUTH-004): signed only when granted, so a
+        # non-delegable mandate's header is byte-identical to pre-0004. Because it
+        # is SIGNED, the permission cannot be forged onto a mandate after the fact.
+        header["delegable"] = mandate["delegable"]
     return header
 
 
@@ -1848,7 +1853,8 @@ def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
                   created_at: str, mandate_id: str | None = None,
                   anchors: list[dict] | None = None,
                   key_history: list[dict] | None = None,
-                  max_invocations: int | None = None) -> dict:
+                  max_invocations: int | None = None,
+                  delegable: bool = False) -> dict:
     """A principal's signed grant of BOUNDED authority to a delegate (proposal
     0002, chp-v0.2.md §10): "delegate D may invoke capabilities in SCOPE on my
     behalf until VALID_UNTIL."
@@ -1874,6 +1880,10 @@ def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
     if max_invocations is not None:
         # Signed-header use-count cap (§10, proposal 0026), omit-when-absent.
         mandate["max_invocations"] = max_invocations
+    if delegable:
+        # Redelegation permission (CHP-AUTH-004): default DENY — a mandate is NOT
+        # redelegatable unless the principal explicitly grants it here. Signed, omit-when-absent.
+        mandate["delegable"] = True
     mandate["principal"] = {
         "host_id": principal_id,
         "public_key": host_key.public_key_b64,
@@ -1893,7 +1903,8 @@ def build_mandate(principal_id: str, host_key: HostKey, *, delegate_id: str,
 def build_sub_mandate(parent: dict, host_key: HostKey, *, delegate_id: str,
                       scope: list[str], valid_from: str, valid_until: str,
                       created_at: str, mandate_id: str | None = None,
-                      anchors: list[dict] | None = None) -> dict:
+                      anchors: list[dict] | None = None,
+                      delegable: bool = False) -> dict:
     """Attenuate a PARENT mandate into a sub-mandate (proposal 0009). The signer
     is the parent's delegate acting as a sub-principal — ``host_key`` MUST
     attest the parent's ``delegate_id`` (the delegate join). Refuses to sign a
@@ -1902,6 +1913,11 @@ def build_sub_mandate(parent: dict, host_key: HostKey, *, delegate_id: str,
     signature); the child commits to it via the signed ``parent_id``."""
     if not host_key.can_sign:
         raise SigningUnavailable("sub-principal key has no private component; cannot sign")
+    # Redelegation opt-in (CHP-AUTH-004): a mandate is non-transitive BY DEFAULT — it may be
+    # redelegated only if its principal explicitly marked it delegable. Fail fast at build.
+    if not parent.get("delegable"):
+        raise ValueError("parent mandate is not delegable (CHP-AUTH-004): redelegation requires "
+                         "explicit 'delegable' permission in the parent authority")
     from .types import new_id
     principal_id = str(parent.get("delegate_id") or "")
     child: dict = {
@@ -1922,6 +1938,8 @@ def build_sub_mandate(parent: dict, host_key: HostKey, *, delegate_id: str,
         "host_identity": build_attestation(
             principal_id, host_key, valid_from=created_at, anchors=anchors),
     }
+    if delegable:
+        child["delegable"] = True  # this sub-mandate may itself be redelegated (opt-in, AUTH-004)
     att = _attenuates(child, parent)
     if not all(att.values()):
         raise ValueError("sub-mandate does not attenuate its parent: "
@@ -2027,6 +2045,10 @@ def verify_mandate(mandate: dict, *, at_time: str | None = None,
     if parent is not None:
         att_checks = _attenuates(mandate, parent)
         checks.update(att_checks)
+        # Redelegation opt-in (CHP-AUTH-004): this sub-mandate only exists validly if its parent
+        # EXPLICITLY permitted redelegation. A parent that never granted it fails the whole chain —
+        # forging it is impossible because 'delegable' is in the parent's SIGNED header.
+        checks["parent_delegable"] = parent.get("delegable") is True
         # Only recurse when depth is sane — an over-deep or malformed embedded
         # chain must fail WITHOUT recursing toward the interpreter's limit.
         if att_checks["depth"] and isinstance(parent, dict):
