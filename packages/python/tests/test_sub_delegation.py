@@ -42,20 +42,21 @@ class SubDelegationTests(unittest.TestCase):
         self.vf = _iso(now - timedelta(minutes=1))
         self.root_vu = _iso(now + timedelta(hours=4))
         self.created = _iso(now)
-        # root grants the worker a broad scope + a 4h window.
+        # root grants the worker a broad scope + a 4h window, AND explicitly permits redelegation
+        # (CHP-AUTH-004 — non-transitive by default, so a delegatable root must opt in).
         self.root = signing.build_mandate(
             "root-principal", self.root_key, delegate_id="worker",
             scope=["chp.adapters.audit.*", "demo.echo"],
-            valid_from=self.vf, valid_until=self.root_vu, created_at=self.created)
+            valid_from=self.vf, valid_until=self.root_vu, created_at=self.created, delegable=True)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def _sub(self, *, scope, valid_until, delegate="tool-runner"):
+    def _sub(self, *, scope, valid_until, delegate="tool-runner", delegable=False):
         return signing.build_sub_mandate(
             self.root, self.worker_key, delegate_id=delegate,
             scope=scope, valid_from=self.vf, valid_until=valid_until,
-            created_at=self.created)
+            created_at=self.created, delegable=delegable)
 
     def test_valid_chain_verifies(self) -> None:
         sub = self._sub(scope=["demo.echo"], valid_until=_iso(
@@ -67,6 +68,30 @@ class SubDelegationTests(unittest.TestCase):
         self.assertTrue(v.valid, v.reason)
         self.assertTrue(v.checks["parent_valid"])
         self.assertEqual(signing.mandate_root_principal(sub), "root-principal")
+
+    def test_non_delegable_parent_refused_at_build(self) -> None:
+        # CHP-AUTH-004: a mandate is non-transitive BY DEFAULT — a parent that did not opt in cannot
+        # be redelegated. build refuses (fail fast).
+        non_delegable = signing.build_mandate(
+            "root-principal", self.root_key, delegate_id="worker",
+            scope=["demo.echo"], valid_from=self.vf, valid_until=self.root_vu,
+            created_at=self.created)  # delegable defaults False
+        with self.assertRaises(ValueError) as ctx:
+            signing.build_sub_mandate(
+                non_delegable, self.worker_key, delegate_id="tool-runner", scope=["demo.echo"],
+                valid_from=self.vf, valid_until=self.root_vu, created_at=self.created)
+        self.assertIn("AUTH-004", str(ctx.exception))
+
+    def test_stripped_delegable_rejected_at_verify(self) -> None:
+        # CHP-AUTH-004: stripping the parent's redelegation permission post-signing fails verify —
+        # parent_delegable is False, and the parent signature breaks too (delegable is header-signed).
+        sub = self._sub(scope=["demo.echo"], valid_until=_iso(
+            datetime.now(timezone.utc) + timedelta(hours=1)))
+        self.assertTrue(signing.verify_mandate(sub, at_time=_now()).valid)
+        sub["parent"] = {**sub["parent"], "delegable": False}  # forge away the permission
+        v = signing.verify_mandate(sub, at_time=_now())
+        self.assertFalse(v.valid)
+        self.assertFalse(v.checks["parent_delegable"])
 
     def test_scope_widening_rejected_at_build(self) -> None:
         # demo.other is NOT in the parent scope → build refuses.
@@ -135,14 +160,20 @@ class SubDelegationTests(unittest.TestCase):
         self.assertFalse(v.valid)
 
     def test_single_hop_mandate_unchanged(self) -> None:
-        # A mandate with no parent has the classic 8-field header and no new keys.
-        self.assertNotIn("depth", self.root)
-        self.assertNotIn("parent_id", self.root)
-        self.assertNotIn("parent", self.root)
-        header = signing.mandate_header(self.root)
+        # A plain (non-delegable) single-hop mandate has the classic 8-field header and no new keys
+        # (delegable is omit-when-absent, so byte-identical to pre-0004). self.root opts into
+        # redelegation and legitimately carries the extra signed 'delegable' field.
+        plain = signing.build_mandate(
+            "root-principal", self.root_key, delegate_id="worker",
+            scope=["demo.echo"], valid_from=self.vf, valid_until=self.root_vu, created_at=self.created)
+        self.assertNotIn("depth", plain)
+        self.assertNotIn("parent_id", plain)
+        self.assertNotIn("delegable", plain)
+        header = signing.mandate_header(plain)
         self.assertEqual(set(header), set(signing._MANDATE_HEADER_FIELDS))
-        self.assertTrue(signing.verify_mandate(
-            self.root, at_time=_now(), delegate_id="worker").valid)
+        # self.root, being delegable, DOES carry the extra signed field
+        self.assertEqual(self.root.get("delegable"), True)
+        self.assertIn("delegable", signing.mandate_header(self.root))
 
 
 class SubDelegationGateTests(unittest.IsolatedAsyncioTestCase):
@@ -156,7 +187,7 @@ class SubDelegationGateTests(unittest.IsolatedAsyncioTestCase):
         vf, vu, created = _iso(now - timedelta(minutes=1)), _iso(now + timedelta(hours=2)), _iso(now)
         root = signing.build_mandate(
             "root-principal", root_key, delegate_id="worker",
-            scope=["demo.echo"], valid_from=vf, valid_until=vu, created_at=created)
+            scope=["demo.echo"], valid_from=vf, valid_until=vu, created_at=created, delegable=True)
         sub = signing.build_sub_mandate(
             root, worker_key, delegate_id="tool-runner", scope=["demo.echo"],
             valid_from=vf, valid_until=_iso(now + timedelta(hours=1)), created_at=created)
@@ -189,7 +220,7 @@ class SubDelegationGateTests(unittest.IsolatedAsyncioTestCase):
         vf, vu, created = _iso(now - timedelta(minutes=1)), _iso(now + timedelta(hours=2)), _iso(now)
         root = signing.build_mandate(
             "root-principal", root_key, delegate_id="worker",
-            scope=["demo.echo"], valid_from=vf, valid_until=vu, created_at=created)
+            scope=["demo.echo"], valid_from=vf, valid_until=vu, created_at=created, delegable=True)
         sub = signing.build_sub_mandate(
             root, worker_key, delegate_id="tool-runner", scope=["demo.echo"],
             valid_from=vf, valid_until=_iso(now + timedelta(hours=1)), created_at=created)
