@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/release-manifest.schema.json",
+  "title": "ReleaseManifest",
+  "description": "Package-integrity manifest for a release (CHP-CONF-011): version, maturity targets, package files, and content digests for release-critical machine artifacts. Distinct from the requirements evidence bundle (RQC-008).",
+  "type": "object",
+  "required": ["release", "maturity_targets", "package_files", "content_digests"],
+  "additionalProperties": false,
+  "properties": {
+    "release": {"type": "string", "minLength": 1},
+    "maturity_targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "maturity", "domains"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "maturity": {"type": "string", "minLength": 1},
+          "domains": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "package_files": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "content_digests": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    }
+  }
+}

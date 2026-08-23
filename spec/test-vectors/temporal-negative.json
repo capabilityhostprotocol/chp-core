@@ -1,0 +1,36 @@
+{
+  "description": "CHP-TEMP-006 — temporal negative conformance vectors. Each case is one a conformant implementation MUST reject (stale evidence, revocation-after-admission, overlapping clock uncertainty, grant overrun). Executed by packages/python/tests/test_temporal.py against the chp_core temporal kernel.",
+  "vectors": [
+    {
+      "id": "stale-evidence",
+      "requirement": "CHP-TEMP-002",
+      "note": "evidence well inside no declared window is still stale once older than the policy max-age",
+      "issued_at": "2026-01-01T00:00:00Z",
+      "at_time": "2026-08-01T00:00:00Z",
+      "max_age_seconds": 86400,
+      "expect": "stale"
+    },
+    {
+      "id": "revocation-after-admission",
+      "requirement": "CHP-TEMP-005",
+      "note": "a later revocation MUST NOT rewrite the earlier record; re-evaluation produces a NEW record",
+      "expect": "new-record-not-rewrite"
+    },
+    {
+      "id": "overlapping-clock-uncertainty",
+      "requirement": "CHP-TEMP-004",
+      "note": "two readings whose uncertainty windows overlap cannot be strictly ordered",
+      "a": {"time": "2026-08-01T00:00:00Z", "source": "ntp", "uncertainty_s": 2.0},
+      "b": {"time": "2026-08-01T00:00:01Z", "source": "local", "uncertainty_s": 2.0},
+      "expect": "concurrent"
+    },
+    {
+      "id": "grant-overrun",
+      "requirement": "CHP-TEMP-003",
+      "note": "a grant whose valid_until is past a depended-on validity bound outlives its authority",
+      "grant_valid_until": "2026-12-31T00:00:00Z",
+      "depended_bounds": ["2026-09-01T00:00:00Z"],
+      "expect": "outlives-bound"
+    }
+  ]
+}
