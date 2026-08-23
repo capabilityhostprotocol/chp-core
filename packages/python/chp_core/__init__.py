@@ -99,7 +99,7 @@ from .assertions import (
     validate_assertion_value,
 )
 from .entities import EntitySubject
-from .readiness import ReadinessAssessment, VerificationPlan
+from .readiness import ReadinessAssessment, VerificationPlan, plan_item
 from .capability_definition import CapabilityDefinition, CapabilityRelationship
 from .resolver import (
     CapabilityRequirement,
@@ -279,6 +279,7 @@ __all__ = [
     "ProviderProfile",
     "ReadinessAssessment",
     "VerificationPlan",
+    "plan_item",
     "VerificationResult",
     "active_assertions",
     "derive_edges",
