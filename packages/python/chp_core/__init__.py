@@ -96,6 +96,7 @@ from .assertions import (
     VerificationResult,
     active_assertions,
     derive_edges,
+    independent_sources,
     validate_assertion_value,
 )
 from .entities import EntitySubject
@@ -311,6 +312,7 @@ __all__ = [
     "VerificationResult",
     "active_assertions",
     "derive_edges",
+    "independent_sources",
     "evidence_fit",
     "validate_assertion_value",
     "CapabilityDescriptor",

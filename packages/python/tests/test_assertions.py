@@ -82,3 +82,17 @@ def test_verification_result_rejects_bad_status():
     with pytest.raises(ValueError):
         VerificationResult(assertion="a", verifier={"id": "v"},
                            checks={"integrity": "definitely"}, result="satisfied")
+
+
+def test_independent_sources_collapses_projections_of_one_source():
+    # CHP-TRUST-006: multiple projections of ONE underlying source corroborate once, not N.
+    from chp_core import independent_sources
+    edges = [
+        {"object": "v", "derived_from": "asrt_1"},
+        {"object": "v", "derived_from": "asrt_1"},   # same source projected twice
+        {"object": "v", "derived_from": "asrt_2"},
+    ]
+    assert independent_sources(edges, key=lambda e: e.get("derived_from")) == 2  # not 3
+    # an unattributed item is its own source — never silently merged into a known one
+    mixed = [{"derived_from": "asrt_1"}, {"derived_from": None}, {"derived_from": None}]
+    assert independent_sources(mixed, key=lambda e: e.get("derived_from")) == 3
