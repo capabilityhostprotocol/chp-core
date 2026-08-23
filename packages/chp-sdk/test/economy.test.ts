@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { activeAssertions, independentSources, conflictingAssertions } from '../src/assertions.js';
 import { resolve } from '../src/resolver.js';
 import { isEvidenceSubject, isEffectEvidence } from '../src/economy-types.js';
+import { deriveReadiness } from '../src/readiness.js';
 
 const dir = fileURLToPath(new URL('../../../spec/test-vectors/', import.meta.url));
 const load = (f: string) => JSON.parse(readFileSync(dir + f, 'utf8'));
@@ -29,6 +30,15 @@ describe('economy pure-function parity', () => {
     expect(conflictingAssertions([a1, { ...a2, supersedes: 'x1' }])).toHaveLength(0);
     // and active-set filtering drops the superseded one
     expect(activeAssertions([a1, { ...a2, supersedes: 'x1' }]).map((a) => a.id)).toEqual(['x2']);
+  });
+
+  it('deriveReadiness is never eligible unless every requirement is satisfied (CHP-RDY-007)', () => {
+    expect(deriveReadiness([{ result: 'satisfied' }, { result: 'satisfied' }])).toBe('eligible');
+    expect(deriveReadiness([{ result: 'unsatisfied' }])).toBe('ineligible');
+    expect(deriveReadiness([{ result: 'unknown' }])).toBe('incomplete'); // never silently eligible
+    expect(deriveReadiness([])).toBe('incomplete'); // no requirements → not eligible
+    expect(deriveReadiness([{ result: 'satisfied' }], { stale: true })).toBe('stale'); // override
+    expect(deriveReadiness([{ result: 'satisfied' }], { suspended: true })).toBe('suspended');
   });
 
   it('resolve hard-filter: no score compensates a missing hard constraint (CHP-RES-002)', () => {

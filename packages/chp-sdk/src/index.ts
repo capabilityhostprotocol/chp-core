@@ -27,6 +27,7 @@ export {
   type AssertionLike, type Conflict,
 } from './assertions.js';
 export { resolve, type CandidateLike, type RequirementLike, type Resolution } from './resolver.js';
+export { deriveReadiness, type ReadinessResult } from './readiness.js';
 export {
   isEvidenceSubject, isEffectEvidence, EVIDENCE_SUBJECT_KINDS, EFFECT_DETERMINATIONS,
   type EvidenceSubject, type EvidenceSubjectKind, type EffectEvidence, type EffectDetermination,
