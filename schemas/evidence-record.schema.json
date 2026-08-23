@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/evidence-record.schema.json",
+  "title": "EvidenceRecord",
+  "description": "Generalized candidate evidence machine schema (CHP-CORE-027): evidence about ANY subject, not only invocations, with explicit issuer + claim provenance. invocation_id is OPTIONAL — evidence can concern a binding, artifact, effect, or external subject with no invocation. Distinct from the invocation-centric evidence-event.schema.json.",
+  "type": "object",
+  "required": ["id", "event_type", "subject", "issuer", "claim_type", "recorded_at"],
+  "additionalProperties": false,
+  "$defs": {
+    "subject": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "enum": ["entity", "capability", "binding", "invocation", "execution", "artifact", "effect", "external"]},
+        "id": {"type": "string", "minLength": 1},
+        "ref": {"type": "object"}
+      }
+    }
+  },
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "event_type": {"type": "string", "minLength": 1},
+    "subject": {"$ref": "#/$defs/subject"},
+    "issuer": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": true,
+      "description": "CHP-CORE-027: explicit issuer provenance — who is making this evidentiary statement.",
+      "properties": {"id": {"type": "string", "minLength": 1}}
+    },
+    "claim_type": {"type": "string", "minLength": 1, "description": "CHP-CORE-027: the kind of claim this evidence carries."},
+    "invocation_id": {"type": "string", "minLength": 1, "description": "OPTIONAL — present only when the evidence concerns an invocation."},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "evidence_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "assurance": {"type": "string"}
+  }
+}

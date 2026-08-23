@@ -1,0 +1,23 @@
+{
+  "description": "CHP-CORE-032 — positive AND negative conformance vectors for the core candidate schemas hardened in this arc (evidence-subject, evidence-record, effect-evidence, and the invocation digest fields). A conformant validator MUST accept every positive and reject every negative. Run by packages/python/tests/test_core_machine_contract.py.",
+  "positive": [
+    {"id": "subject-binding", "schema": "evidence-subject.schema.json", "instance": {"kind": "binding", "id": "b1"}},
+    {"id": "subject-external", "schema": "evidence-subject.schema.json", "instance": {"kind": "external", "id": "did:web:example.com", "ref": {"scheme": "did"}}},
+    {"id": "record-non-invocation", "schema": "evidence-record.schema.json", "instance": {"id": "ev1", "event_type": "assertion_recorded", "subject": {"kind": "artifact", "id": "art1"}, "issuer": {"id": "urn:chp:issuer:x"}, "claim_type": "chp.integrity.hash", "recorded_at": "2026-08-23T00:00:00Z"}},
+    {"id": "effect-valid", "schema": "effect-evidence.schema.json", "instance": {"id": "eff1", "invocation_id": "inv1", "subject": {"kind": "database", "id": "orders"}, "determination": "confirmed", "observer": {"id": "obs1"}, "observed_at": "2026-08-23T00:00:00Z"}}
+  ],
+  "negative": [
+    {"id": "subject-bad-kind", "schema": "evidence-subject.schema.json", "instance": {"kind": "nonsense", "id": "x"}, "reason": "kind not in the eight-subject enum (CORE-019)"},
+    {"id": "subject-missing-id", "schema": "evidence-subject.schema.json", "instance": {"kind": "entity"}, "reason": "id required"},
+    {"id": "record-missing-issuer", "schema": "evidence-record.schema.json", "instance": {"id": "ev2", "event_type": "x", "subject": {"kind": "binding", "id": "b1"}, "claim_type": "c", "recorded_at": "2026-08-23T00:00:00Z"}, "reason": "issuer required (CORE-027)"},
+    {"id": "record-bad-subject-kind", "schema": "evidence-record.schema.json", "instance": {"id": "ev3", "event_type": "x", "subject": {"kind": "nope", "id": "b1"}, "issuer": {"id": "i"}, "claim_type": "c", "recorded_at": "2026-08-23T00:00:00Z"}, "reason": "subject kind not in enum"},
+    {"id": "effect-missing-observer", "schema": "effect-evidence.schema.json", "instance": {"id": "eff2", "invocation_id": "inv1", "subject": {"kind": "database", "id": "orders"}, "determination": "confirmed", "observed_at": "2026-08-23T00:00:00Z"}, "reason": "observer required"},
+    {"id": "effect-bad-determination", "schema": "effect-evidence.schema.json", "instance": {"id": "eff3", "invocation_id": "inv1", "subject": {"kind": "database", "id": "orders"}, "determination": "maybe", "observer": {"id": "obs1"}, "observed_at": "2026-08-23T00:00:00Z"}, "reason": "determination not in the four-state enum"}
+  ],
+  "invocation_digest_field": {
+    "schema": "invocation-envelope.schema.json",
+    "note": "CHP-CORE-026: action_digest and invocation_digest are distinct sha256:-patterned fields",
+    "valid": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "invalid": "not-a-digest"
+  }
+}
