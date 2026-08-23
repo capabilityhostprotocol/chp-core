@@ -55,6 +55,16 @@
     "binding": {
       "$ref": "https://chp.dev/schemas/v0.1/capability-binding.schema.json",
       "description": "OPTIONAL resolved CapabilityBinding (proposal 0043): the exact provider+host topology this attempt targets, typically from a resolver/market. When present the host binds invocation_digest to it; absent, a self-hosted binding is synthesized (provider == host). Omitted = today's behavior (additive)."
+    },
+    "action_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "CHP-CORE-026: the SEMANTIC action digest (capability + principal + input + semantic_context), distinct from invocation_digest. Routing does not change it (CHP-CORE-004/006). OPTIONAL until the invocation is resolved."
+    },
+    "invocation_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "CHP-CORE-026: the governed-ATTEMPT digest (invocation identity + governance-relevant routing), a DISTINCT field from action_digest. Any routing change changes it and requires fresh admission (CHP-CORE-005/007). OPTIONAL until resolved."
     }
   }
 }

@@ -99,6 +99,7 @@ from .assertions import (
     validate_assertion_value,
 )
 from .entities import EntitySubject
+from .evidence_subject import EvidenceSubject
 from .readiness import ReadinessAssessment, VerificationPlan, plan_item
 from .temporal import (
     TEMPORAL_DIMENSIONS,
@@ -299,6 +300,7 @@ __all__ = [
     "ReadinessAssessment",
     "VerificationPlan",
     "plan_item",
+    "EvidenceSubject",
     "TEMPORAL_DIMENSIONS",
     "ClockReading",
     "assess_freshness",

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/evidence-subject.schema.json",
+  "title": "EvidenceSubject",
+  "description": "The subject a piece of evidence is about (CHP-CORE-019): an entity, capability, binding, invocation, execution, artifact, effect, or extensible external subject. kind is informational and grants nothing.",
+  "type": "object",
+  "required": ["kind", "id"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {"type": "string", "enum": ["entity", "capability", "binding", "invocation", "execution", "artifact", "effect", "external"]},
+    "id": {"type": "string", "minLength": 1},
+    "ref": {"type": "object", "description": "Optional locator for an external/extensible subject (e.g. scheme + uri)."}
+  }
+}
