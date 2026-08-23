@@ -193,6 +193,31 @@ def derive_edges(assertions: list[Assertion]) -> list[JSON]:
     return edges
 
 
+def conflicting_assertions(assertions: list["Assertion"]) -> list[JSON]:
+    """Groups of ACTIVE assertions that CONFLICT — the same subject + claim_type carrying DIFFERENT
+    values — and so cannot be resolved by picking one (CHP-TRUST-008). A consuming invariant maps a
+    non-empty result to unknown/conflict rather than fabricating certainty by choosing a side. Only
+    active assertions are considered (superseded/revoked already dropped, CHP-SEM-008); the projection
+    PRESERVES conflict, never merges it (CHP-SEM-007). Returns one entry per conflicted
+    subject+claim_type: ``{subject, claim_type, values, assertions}``."""
+    import json as _json
+    from collections import defaultdict
+    groups: dict[tuple[str, str], list[Assertion]] = defaultdict(list)
+    for a in active_assertions(assertions):
+        groups[(str((a.subject or {}).get("id")), a.claim_type)].append(a)
+    conflicts: list[JSON] = []
+    for (_sid, claim_type), items in groups.items():
+        distinct = {_json.dumps(a.value, sort_keys=True, default=str) for a in items}
+        if len(distinct) > 1:
+            conflicts.append({
+                "subject": items[0].subject,
+                "claim_type": claim_type,
+                "values": [a.value for a in items],
+                "assertions": [a.id for a in items],
+            })
+    return conflicts
+
+
 def independent_sources(items: Iterable[Any], *, key: Callable[[Any], object]) -> int:
     """Count INDEPENDENT corroborating sources (CHP-TRUST-006): dedupe by source identity BEFORE
     counting, so multiple projections of ONE underlying source corroborate ONCE, not N times. This

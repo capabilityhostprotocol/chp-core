@@ -95,11 +95,13 @@ from .assertions import (
     ClaimType,
     VerificationResult,
     active_assertions,
+    conflicting_assertions,
     derive_edges,
     independent_sources,
     validate_assertion_value,
 )
 from .entities import EntitySubject
+from .assurance import AssuranceVector, assurance_from
 from .evidence_subject import EvidenceSubject
 from .readiness import ReadinessAssessment, VerificationPlan, plan_item
 from .temporal import (
@@ -313,6 +315,9 @@ __all__ = [
     "active_assertions",
     "derive_edges",
     "independent_sources",
+    "conflicting_assertions",
+    "AssuranceVector",
+    "assurance_from",
     "evidence_fit",
     "validate_assertion_value",
     "CapabilityDescriptor",
