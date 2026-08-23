@@ -49,6 +49,10 @@ class ResolvedCandidate:
     definition: CapabilityDefinition | None = None  # supplied when computed fit is used
     evidence_contract: object | None = None  # candidate's EvidenceContract, for evidence fit (CHP-RES-005)
     source_market: JSON | None = None  # {id, ...} — the market/registry this candidate came from (CHP-FED-003)
+    # The assertions/verification-results backing this candidate's claims, carried WITH it across a
+    # market boundary so a RECEIVING market can re-verify locally rather than inherit the source's
+    # verdict (CHP-FED-004). Optional — a self-market candidate needs none.
+    evidence: list[JSON] | None = None
 
 
 @dataclass(slots=True)

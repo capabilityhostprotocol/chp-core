@@ -10,6 +10,7 @@ relying policy, not here — there is no global trusted:true fact.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from typing import Any, ClassVar
 
@@ -190,3 +191,24 @@ def derive_edges(assertions: list[Assertion]) -> list[JSON]:
             "inferred": a.is_inferred(),
         })
     return edges
+
+
+def independent_sources(items: Iterable[Any], *, key: Callable[[Any], object]) -> int:
+    """Count INDEPENDENT corroborating sources (CHP-TRUST-006): dedupe by source identity BEFORE
+    counting, so multiple projections of ONE underlying source corroborate ONCE, not N times. This
+    is the guard against inflating confidence by re-projecting a single source — the same
+    ``derived_from`` assertion, the same ``host_id`` / issuer / ``source_market`` counted repeatedly.
+    ``key`` extracts the source identity from an item; an item whose key is None is UNATTRIBUTED and
+    counts as its own source (it is never silently merged into a known one — we don't invent
+    derivation we can't see, and we don't over-collapse). Generalizes ``distinct_hosts`` to any
+    shared source key."""
+    seen: set = set()
+    count = 0
+    for it in items:
+        k = key(it)
+        if k is None:
+            count += 1
+        elif k not in seen:
+            seen.add(k)
+            count += 1
+    return count
