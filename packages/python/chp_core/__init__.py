@@ -121,7 +121,7 @@ from .discovery import host_capabilities_txt, project_capabilities_txt
 from .effect import EffectEvidence
 from .federation import MarketDescriptor, federable, source_priority_key
 from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
-from .commerce import Order, Payment, Quote, dispute_bundle, scoped_metrics
+from .trust import TrustAnchor, anchored_issuer_trusted
 from .composition import (
     Composition,
     CompositionEdge,
@@ -263,11 +263,6 @@ __all__ = [
     "validate_output",
     "ClaimType",
     "EffectEvidence",
-    "Order",
-    "Payment",
-    "Quote",
-    "dispute_bundle",
-    "scoped_metrics",
     "Composition",
     "CompositionEdge",
     "CompositionNode",
@@ -277,6 +272,8 @@ __all__ = [
     "MarketDescriptor",
     "federable",
     "source_priority_key",
+    "TrustAnchor",
+    "anchored_issuer_trusted",
     "EntitySubject",
     "EvidenceContract",
     "ProviderProfile",
