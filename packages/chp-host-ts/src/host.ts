@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { buildAttestation, buildBundle, buildCompleteness, signBundle, verifyMandate, verifyApprovalGrant, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, bestSatisfying, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
+import { buildAttestation, buildBundle, buildCompleteness, signBundle, verifyMandate, verifyApprovalGrant, scopeAllows, mandateRootPrincipal, EVENT_HASH_V2, payloadCommitment, chunkSeqDigest, PROTOCOL_VERSION, versionsUpto, bestSatisfying, actionDigest, invocationDigest, bindingDigest, type EvidenceEvent, type HostKey } from '@capabilityhostprotocol/sdk';
 import { InMemoryEvidenceStore } from './store.js';
 import { RuleBasedSafetyEvaluator } from './safety.js';
 import { StreamResult } from './types.js';
@@ -173,7 +173,7 @@ export class LocalCapabilityHost {
     env: InvocationEnvelope,
     payload: JsonValue,
     outcome: string | null = null,
-    extra: { denial?: DenialReason; error?: JsonValue } = {},
+    extra: { denial?: DenialReason; error?: JsonValue; digests?: { action_digest: string; invocation_digest: string } } = {},
   ): EvidenceEvent {
     // Selective disclosure (§14): new events are born under chp-event-hash-v2 —
     // the content_hash commits to sha256(payload), so this payload can later be
@@ -193,12 +193,48 @@ export class LocalCapabilityHost {
       payload_commitment: payloadCommitment(finalPayload),
       ...(extra.denial ? { denial: extra.denial as unknown as JsonValue } : {}),
       ...(extra.error ? { error: extra.error } : {}),
+      // Execution-truth dual digests (proposal 0043): the host stamps the semantic action_digest +
+      // the governed-attempt invocation_digest, computed via the SDK — the economy keystone, emitted
+      // by the second-implementation host itself, not just its standalone functions.
+      ...(extra.digests
+        ? { action_digest: extra.digests.action_digest, invocation_digest: extra.digests.invocation_digest }
+        : {}),
       subject: env.subject ?? { id: 'local', type: 'user' },
       // First-class actor recorded alongside the subject; omit-when-absent so
       // pre-0034 events are byte-identical (proposal 0034).
       ...(env.actor ? { actor: env.actor } : {}),
     };
     return this.store.append(ev);
+  }
+
+  /**
+   * The execution-truth dual digests for an invocation (proposal 0043): the semantic action_digest
+   * (capability + principal + input, routing-independent) and the governed-attempt invocation_digest
+   * (bound to the resolved binding, or a self-hosted binding synthesized with provider == host per
+   * CHP-CORE-021 when none is presented). Computed via the SDK — the host reimplements nothing.
+   */
+  private executionDigests(
+    env: InvocationEnvelope,
+    d: { id: string; version: string },
+  ): { action_digest: string; invocation_digest: string } {
+    const capability = { id: d.id, version: d.version };
+    // principal MUST match the subject the evidence records (emit's default), so the stamped digest
+    // is reproducible from the recorded event.
+    const principal = (env.subject ?? { id: 'local', type: 'user' }) as JsonValue;
+    const action = actionDigest({ capability, principal, actionInput: (env.payload ?? {}) as JsonValue });
+    const presented = env.binding as { id?: string; provider?: JsonValue } | undefined;
+    const binding = presented ?? {
+      id: bindingDigest({ capability, provider: { id: this.hostId }, host: { id: this.hostId } }),
+      provider: { id: this.hostId },
+    };
+    const provider = (binding.provider ?? { id: this.hostId }) as JsonValue;
+    return {
+      action_digest: action,
+      invocation_digest: invocationDigest({
+        invocationId: env.invocation_id!, actionDigest: action, actor: (env.actor ?? {}) as JsonValue,
+        principal, binding: binding as JsonValue, provider, host: { id: this.hostId },
+      }),
+    };
   }
 
   private result(env: InvocationEnvelope, o: Partial<InvocationResult>): InvocationResult {
@@ -464,8 +500,9 @@ export class LocalCapabilityHost {
     if (early) return this.recordResult(early);
     const d = entry!.descriptor;
 
-    // Gate 11: execute
-    const started = this.emit('execution_started', env, { capability_uri: `${d.id}:${d.version}` }, null);
+    // Gate 11: execute — the started event carries the execution-truth dual digests (proposal 0043).
+    const started = this.emit('execution_started', env, { capability_uri: `${d.id}:${d.version}` }, null,
+      { digests: this.executionDigests(env, d) });
     const ctx = this.executionContext(env);
     try {
       // Declared execution timeout (proposal 0038): exceed it → a TimeoutError

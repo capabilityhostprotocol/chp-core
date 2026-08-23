@@ -70,6 +70,10 @@ export interface InvocationEnvelope {
    * chp-approval-grant-v1 authorizing this invocation to resume past an
    * approval_required gate. Absent = today's behavior. */
   approval_ref?: Record<string, JsonValue> | null;
+  /** OPTIONAL resolved CapabilityBinding (proposal 0043): the exact provider+host topology this
+   * attempt targets. When present the host binds invocation_digest to it; absent, a self-hosted
+   * binding is synthesized (provider == host). Omit-when-absent → byte-identical. */
+  binding?: { id?: string; provider?: JsonValue } | null;
   /** OPTIONAL output-shape requirement (chp-v0.2.md §1.1, proposal 0029): when
    * true, a result violating the capability's output_schema is DENIED
    * (output_schema_validation_failed) instead of the default validate-and-warn. */
