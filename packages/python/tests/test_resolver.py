@@ -115,3 +115,36 @@ def test_resolution_pins_the_exact_offer_version():
     assert cand.offer == {"id": offer.id, "version": "3"}
     res = resolve(CapabilityRequirement(capability={"id": "c"}), [cand])
     assert res.candidates[0]["offer"] == {"id": offer.id, "version": "3"}
+
+
+def test_soft_fit_ranks_eligible_but_never_waives_hard():
+    # CHP-RES-006: operational/commercial soft fit ranks AMONG the eligible — but a soft-superior
+    # candidate that fails a hard constraint is still excluded (CHP-RES-002 dominant).
+    from chp_core import soft_fit
+    req = CapabilityRequirement(capability={"id": "c"}, hard=["licence"],
+                                preferences=["fast", "cheap", "local"])
+    poor = ResolvedCandidate(binding={"id": "poor", "meets": ["fast"]}, satisfied_hard=["licence"], score=0)
+    rich = ResolvedCandidate(binding={"id": "rich", "meets": ["fast", "cheap", "local"]},
+                             satisfied_hard=["licence"], score=0)
+    assert soft_fit(req, rich) == 3 and soft_fit(req, poor) == 1
+    res = resolve(req, [poor, rich], rank_bonus=lambda c: soft_fit(req, c))
+    assert res.selected["id"] == "rich"  # better soft fit wins among eligible
+    # a soft-perfect but UNLICENSED candidate is still excluded — soft fit never waives the hard gate
+    unlicensed = ResolvedCandidate(binding={"id": "x", "meets": ["fast", "cheap", "local"]},
+                                   satisfied_hard=[], score=0)
+    res2 = resolve(req, [poor, unlicensed], rank_bonus=lambda c: soft_fit(req, c))
+    assert res2.selected["id"] == "poor"
+
+
+def test_history_rank_is_signal_only_never_waives_evidence():
+    # CHP-RES-014: execution history is a ranking signal, but MUST NOT waive a hard constraint or
+    # required evidence — a high-history candidate that fails eligibility is still excluded.
+    from chp_core import history_rank
+    hist = [{"outcome": "success"}] * 5
+    assert history_rank(hist) == 5 and history_rank([{"outcome": "failure"}]) == 0
+    req = CapabilityRequirement(capability={"id": "c"}, hard=["licence"])
+    veteran = ResolvedCandidate(binding={"id": "veteran"}, satisfied_hard=[], score=0)   # great history, UNLICENSED
+    rookie = ResolvedCandidate(binding={"id": "rookie"}, satisfied_hard=["licence"], score=0)
+    res = resolve(req, [veteran, rookie],
+                  rank_bonus=lambda c: history_rank(hist if c.binding["id"] == "veteran" else []))
+    assert res.selected["id"] == "rookie"  # the licensed rookie wins; history never waived the hard gate

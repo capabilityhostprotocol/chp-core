@@ -156,3 +156,17 @@ def test_catches_promotion_without_full_implementation(sandbox):
 def test_live_registries_pass_promotion_gate():
     # No live component is at a promoted tier with un-implemented domain requirements.
     assert _findings(rv.BASE)["promotion_gate"].ok
+
+
+def test_catches_line_numbered_source_ref(sandbox):
+    # CHP-RQC-007: a normative source ref with a line-number suffix is flagged — source refs must be
+    # stable path/anchor identifiers so a source edit can't silently change traceability meaning.
+    rows = _load_csv(sandbox)
+    rows[0]["source_refs"] = "01_core/01_chp_core_normative_skeleton.md:142"  # line-numbered → unstable
+    _write_csv(sandbox, rows)
+    f = _findings(sandbox)["stable_source_anchors"]
+    assert not f.ok and rows[0]["id"] in f.detail
+
+
+def test_live_source_refs_are_stable():
+    assert _findings(rv.BASE)["stable_source_anchors"].ok

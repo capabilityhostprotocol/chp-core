@@ -118,8 +118,10 @@ from .resolver import (
     CapabilityRequirement,
     CapabilityResolution,
     ResolvedCandidate,
+    history_rank,
     offer_to_candidate,
     resolve,
+    soft_fit,
 )
 from .contract import (
     ContractCheck,
@@ -141,7 +143,7 @@ from .supply import (
     provenance_of,
     provenanced,
 )
-from .trust import TrustAnchor, anchored_issuer_trusted
+from .trust import TrustAnchor, anchored_issuer_trusted, verified_supply
 from .composition import (
     Composition,
     CompositionEdge,
@@ -272,6 +274,8 @@ __all__ = [
     "CapabilityResolution",
     "ResolvedCandidate",
     "offer_to_candidate",
+    "soft_fit",
+    "history_rank",
     "project_capabilities_txt",
     "host_capabilities_txt",
     "resolve",
@@ -294,6 +298,7 @@ __all__ = [
     "source_priority_key",
     "TrustAnchor",
     "anchored_issuer_trusted",
+    "verified_supply",
     "EntitySubject",
     "EvidenceContract",
     "ProviderProfile",

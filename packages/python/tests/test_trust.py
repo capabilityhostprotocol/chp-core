@@ -41,3 +41,22 @@ def test_anchor_rejects_empty_scope():
         TrustAnchor(issuer="x", claim_types=[])
     with pytest.raises(ValueError):
         TrustAnchor(issuer="", claim_types=["*"])
+
+
+def test_verified_supply_distinguishes_anchored_from_sybil():
+    # CHP-SEC-003: verified supply (entities vouched by a trusted issuer) is distinguishable from a
+    # raw entity count, and independent_verified dedupes a sybil flood from one captured issuer.
+    from chp_core import EntitySubject, verified_supply
+    trusted = frozenset({"issuer-good"})
+    real = EntitySubject(id="e1", kind="org",
+                         identifiers=[{"kind": "domain", "value": "acme.com", "issuer": "issuer-good"}])
+    sybil1 = EntitySubject(id="s1", kind="org", identifiers=[{"kind": "email", "value": "a@x"}])
+    sybil2 = EntitySubject(id="s2", kind="org", identifiers=[{"kind": "email", "value": "b@x"}])
+    s = verified_supply([real, sybil1, sybil2], trusted_issuers=trusted)
+    assert s == {"total": 3, "verified": 1, "unverified": 2, "independent_verified": 1}
+    # a flood all vouched by ONE captured issuer inflates 'verified' but not 'independent_verified'
+    flood = [EntitySubject(id=f"f{i}", kind="org",
+                           identifiers=[{"kind": "x", "value": str(i), "issuer": "issuer-good"}])
+             for i in range(5)]
+    f = verified_supply(flood, trusted_issuers=trusted)
+    assert f["verified"] == 5 and f["independent_verified"] == 1
