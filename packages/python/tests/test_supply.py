@@ -12,7 +12,14 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from chp_core import CapabilityOffer, EvidenceContract, ProviderProfile
+from chp_core import (
+    PROVENANCE,
+    CapabilityOffer,
+    EvidenceContract,
+    ProviderProfile,
+    provenanced,
+    provenance_of,
+)
 
 _SCHEMAS = Path(__file__).resolve().parents[3] / "schemas"
 
@@ -41,6 +48,37 @@ def test_provider_profile_is_descriptive_and_rejects_conclusions():
     for bad in ("qualified", "authorized", "approved", "trusted"):
         with pytest.raises(ValueError):
             ProviderProfile(entity={"id": "e"}, service_metadata={bad: True})
+
+
+def test_provenance_preserved_and_verified_claims_need_evidence():
+    # CHP-SUP-012: a property preserves whether it is self-asserted / externally verified / inferred
+    # / execution-derived, and a verification claim cannot be made without citing the backing evidence.
+    assert PROVENANCE == {"self_asserted", "externally_verified", "inferred", "execution_derived"}
+    self_claim = provenanced("bar member P-1", "self_asserted")
+    verified = provenanced("bar member P-1", "externally_verified", evidence=["vres_1"])
+    assert provenance_of(self_claim) == "self_asserted"          # honest about being unbacked
+    assert provenance_of(verified) == "externally_verified" and verified["evidence"] == ["vres_1"]
+    assert provenance_of("plain-value") is None                  # untagged property → no provenance
+    for prov in ("externally_verified", "execution_derived"):
+        with pytest.raises(ValueError):
+            provenanced("x", prov)                               # a truth claim with no evidence → refused
+    with pytest.raises(ValueError):
+        provenanced("x", "guessed")                              # unknown provenance kind
+
+
+def test_provider_profile_validates_property_provenance():
+    # A well-formed provenance tag on a property is accepted and serializes under schema...
+    p = ProviderProfile(entity={"id": "urn:chp:entity:jane"},
+                        capability_declarations=[{"capability": {"id": "legal.review"},
+                                                  "bar": provenanced("P-1", "externally_verified",
+                                                                     evidence=["vres_bar"])}],
+                        discovery_metadata={"reputation": provenanced(0.9, "inferred")})
+    jsonschema.validate(p.to_dict(), _schema("provider-profile.schema.json"))
+    # ...but a metadata value CLAIMING external verification with no evidence is refused at the record
+    # boundary — a self-assertion can't masquerade as verified (CHP-SUP-012).
+    with pytest.raises(ValueError):
+        ProviderProfile(entity={"id": "e"},
+                        service_metadata={"licence": {"value": "P-1", "provenance": "externally_verified"}})
 
 
 def test_capability_offer_is_not_admission():

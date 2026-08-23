@@ -20,6 +20,45 @@ from .types import JSON, new_id
 # contextual and derived at admission, not properties of a provider.
 _FORBIDDEN_CONCLUSIONS = frozenset({"qualified", "authorized", "approved", "trusted", "admitted"})
 
+# Provenance of a supply-record property (CHP-SUP-012): a supply record MUST preserve HOW each
+# provider/capability property came to be known, so a self-assertion can never be read as verified.
+PROVENANCE = frozenset({"self_asserted", "externally_verified", "inferred", "execution_derived"})
+# The two provenances that make a truth claim about the world MUST cite the evidence backing them —
+# claiming external verification or execution-derivation without evidence is exactly the masquerade
+# provenance exists to prevent. self_asserted (the provider's own word) and inferred (a discovery
+# signal, CHP-SUP-004) are honest about being unbacked and need no evidence.
+_PROVENANCE_NEEDS_EVIDENCE = frozenset({"externally_verified", "execution_derived"})
+
+
+def provenanced(value: object, provenance: str, *, evidence: list[str] | None = None) -> JSON:
+    """Tag a provider/capability property VALUE with its provenance (CHP-SUP-012): whether it is
+    self-asserted, externally verified, inferred, or execution-derived. ``externally_verified`` and
+    ``execution_derived`` MUST cite the evidence (assertion / verification-result / effect ids) that
+    backs them — an unbacked verification claim is refused."""
+    if provenance not in PROVENANCE:
+        raise ValueError(f"provenance must be one of {sorted(PROVENANCE)}")
+    if provenance in _PROVENANCE_NEEDS_EVIDENCE and not evidence:
+        raise ValueError(f"{provenance} property MUST cite the evidence that backs it (CHP-SUP-012)")
+    tag: JSON = {"value": value, "provenance": provenance}
+    if evidence:
+        tag["evidence"] = list(evidence)
+    return tag
+
+
+def provenance_of(tag: object) -> str | None:
+    """The provenance kind of a tagged property, or None if the value carries no provenance tag."""
+    return tag.get("provenance") if isinstance(tag, dict) else None
+
+
+def validate_provenance(tag: JSON) -> None:
+    """Raise if a provenance-tagged property is malformed (unknown kind, or a verified/derived claim
+    with no evidence). A value that is not a provenance tag is left alone — provenance is opt-in per
+    property, but any tag that IS present must be well-formed."""
+    prov = tag.get("provenance")
+    if prov is None:
+        return
+    provenanced(tag.get("value"), prov, evidence=tag.get("evidence"))
+
 
 @dataclass(slots=True)
 class EvidenceContract:
@@ -57,6 +96,13 @@ class ProviderProfile:
                 raise ValueError(
                     f"ProviderProfile must not encode permanent conclusions: {sorted(bad)}"
                 )
+        # CHP-SUP-012: any property carrying a provenance tag must be well-formed, so a
+        # self-assertion can't be dressed up as externally verified without citing evidence.
+        tagged = [v for meta in (self.discovery_metadata, self.service_metadata) for v in meta.values()]
+        tagged += [v for d in self.capability_declarations if isinstance(d, dict) for v in d.values()]
+        for v in tagged:
+            if isinstance(v, dict):
+                validate_provenance(v)
 
     def to_dict(self) -> JSON:
         data = asdict(self)

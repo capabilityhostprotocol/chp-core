@@ -129,7 +129,14 @@ from .contract import (
 from .discovery import host_capabilities_txt, project_capabilities_txt
 from .effect import EffectEvidence
 from .federation import MarketDescriptor, federable, source_priority_key
-from .supply import CapabilityOffer, EvidenceContract, ProviderProfile
+from .supply import (
+    PROVENANCE,
+    CapabilityOffer,
+    EvidenceContract,
+    ProviderProfile,
+    provenance_of,
+    provenanced,
+)
 from .trust import TrustAnchor, anchored_issuer_trusted
 from .composition import (
     Composition,
@@ -286,6 +293,9 @@ __all__ = [
     "EntitySubject",
     "EvidenceContract",
     "ProviderProfile",
+    "PROVENANCE",
+    "provenanced",
+    "provenance_of",
     "ReadinessAssessment",
     "VerificationPlan",
     "plan_item",
