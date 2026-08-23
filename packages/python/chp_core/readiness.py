@@ -20,6 +20,47 @@ from typing import ClassVar
 
 from .types import JSON, new_id, utc_now
 
+# ONB-006: remediation metadata that is not yet known is EXPLICITLY "unknown", never silently 0 or
+# absent — so a surface distinguishes "free / instant / always-available" from "not yet known".
+UNKNOWN = "unknown"
+
+
+def plan_item(
+    requirement_id: str,
+    claim_type: str,
+    acceptable_evidence: list[str],
+    *,
+    completion: str = "outstanding",
+    verifier: JSON | None = None,
+    disclosed_fields: list[str] | None = None,
+    cost: str = UNKNOWN,
+    latency: str = UNKNOWN,
+    availability: str = UNKNOWN,
+) -> JSON:
+    """Build one outstanding VerificationPlan item (proposal 0044; CHP-ONB-003/004/005/006).
+
+    acceptable_evidence names what would satisfy the item (ONB-003, MUST name >=1). Remediation
+    metadata (cost/latency/availability) is ALWAYS present and defaults to the explicit UNKNOWN
+    sentinel (ONB-006) — never silently 0 — so "not yet known" is representable and distinct from a
+    real value. verifier (ONB-004, MAY) names an evidence-producing capability; disclosed_fields
+    (ONB-005, SHOULD) names the fields a disclosure item would reveal."""
+    if not acceptable_evidence:
+        raise ValueError("a VerificationPlan item MUST name >=1 acceptable evidence (CHP-ONB-003)")
+    item: JSON = {
+        "requirement_id": requirement_id,
+        "claim_type": claim_type,
+        "acceptable_evidence": list(acceptable_evidence),
+        "completion": completion,
+        "cost": cost,
+        "latency": latency,
+        "availability": availability,
+    }
+    if verifier is not None:
+        item["verifier"] = verifier
+    if disclosed_fields:
+        item["disclosed_fields"] = list(disclosed_fields)
+    return item
+
 
 @dataclass(slots=True, frozen=True)
 class ReadinessAssessment:
@@ -84,17 +125,24 @@ class VerificationPlan:
     target: JSON  # what this plan is for, e.g. {entity, capability}
     profile: JSON  # {id, version}
     outstanding: list[JSON]  # [{requirement_id, claim_type, acceptable_evidence[], completion}]
+    # ONB-007: the assessment this plan remediates, so an unsatisfied readiness traces to its plan.
+    assessment_id: str | None = None
     id: str = field(default_factory=lambda: new_id("vplan"))
     generated_at: str = field(default_factory=utc_now)
 
     def to_dict(self) -> JSON:
-        return asdict(self)
+        data = asdict(self)
+        if self.assessment_id is None:
+            data.pop("assessment_id", None)
+        return data
 
     @classmethod
     def from_assessment(cls, assessment: ReadinessAssessment, unmet: list[JSON]) -> "VerificationPlan":
-        """Build the plan for the not-yet-satisfied requirements of an incomplete assessment."""
+        """Build the plan for the not-yet-satisfied requirements of an incomplete assessment. The
+        plan back-references the assessment id (CHP-ONB-007) so remediation is traceable to it."""
         return cls(
             target=assessment.subject,
             profile=assessment.profile,
             outstanding=list(unmet),
+            assessment_id=assessment.id,
         )
