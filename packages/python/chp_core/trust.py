@@ -49,3 +49,28 @@ def anchored_issuer_trusted(anchors: list[TrustAnchor], issuer: str, claim_type:
     for another unless an anchor names it. Integrity verification is separate (CHP-VER-011) — this
     answers trust policy only, never whether the assertion is authentic or true."""
     return any(a.trusts(issuer, claim_type) for a in anchors)
+
+
+def verified_supply(entities: list, *, trusted_issuers: frozenset) -> JSON:
+    """Distinguish INDEPENDENTLY VERIFIED supply from a raw entity count (CHP-SEC-003).
+
+    An entity counts as VERIFIED iff at least one of its identifiers is vouched for by an issuer the
+    relying policy trusts (an ``issuer`` in ``trusted_issuers``). Returns {total, verified, unverified,
+    independent_verified} where ``independent_verified`` dedupes by vouching issuer — so a flood of
+    unverified sybil entities inflates ``total`` (and, from one captured issuer, ``verified``) but NOT
+    ``independent_verified``. A public-market profile weights/thresholds on the verified counts rather
+    than raw registrations, making mass unverified creation distinguishable from real verified supply.
+    """
+    total = verified = 0
+    issuers: set = set()
+    for e in entities:
+        total += 1
+        ids = getattr(e, "identifiers", None)
+        if ids is None and isinstance(e, dict):
+            ids = e.get("identifiers")
+        vouchers = {i.get("issuer") for i in (ids or []) if i.get("issuer") in trusted_issuers}
+        if vouchers:
+            verified += 1
+            issuers |= vouchers
+    return {"total": total, "verified": verified, "unverified": total - verified,
+            "independent_verified": len(issuers)}

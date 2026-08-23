@@ -1821,6 +1821,22 @@ def scope_allows(scope: list, capability_id: str) -> bool:
     )
 
 
+def disclose_allows(scope: list, data_class: str) -> bool:
+    """Authority to DISCLOSE data of ``data_class`` (CHP-AUTH-012) — a DISTINCT authority from the
+    authority to REQUEST a capability. It is granted only by an explicit ``disclose:<data_class>``
+    entry in the mandate scope (same grammar as scope_allows). A mandate scoped only to invoke a
+    capability therefore carries NO disclosure authority: requesting and disclosing are separate."""
+    return scope_allows(scope, f"disclose:{data_class}")
+
+
+def commit_allows(scope: list, commitment: str) -> bool:
+    """Authority to COMMIT funds / accept contractual terms (CHP-AUTH-013) — a DISTINCT authority from
+    the authority to SELECT or REQUEST a provider. Granted only by an explicit ``commit:<commitment>``
+    entry in the mandate scope (e.g. ``commit:funds``). Selecting a provider (resolution) confers no
+    commit authority (CHP-RES-008); the two are separated at the scope level."""
+    return scope_allows(scope, f"commit:{commitment}")
+
+
 def _attenuates(child: dict, parent: dict) -> dict[str, bool]:
     """Sub-delegation attenuation checks (§10, proposal 0009): a child may only
     NARROW scope and SHORTEN the window relative to its parent, and its link

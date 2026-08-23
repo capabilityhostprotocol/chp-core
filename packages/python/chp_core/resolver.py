@@ -10,6 +10,7 @@ The resolution record is immutable and deterministic, and preserves provenance (
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
 
@@ -96,12 +97,35 @@ def offer_to_candidate(offer: object, *, satisfied_hard: list[str], score: int =
                              offer=offer_ref)
 
 
+_HISTORY_RANK_CAP = 10
+
+
+def soft_fit(requirement: CapabilityRequirement, candidate: ResolvedCandidate) -> int:
+    """Score a candidate on the requirement's SOFT operational/commercial preferences — deadline,
+    geography, availability, max_price, etc. (CHP-RES-006). A candidate's binding declares which soft
+    constraints it ``meets``; the score is how many of the requested preferences it satisfies. This is
+    a RANKING signal ONLY — it is added to a candidate's rank score, NEVER to eligibility, so a
+    soft-superior candidate that fails a hard constraint is still excluded (CHP-RES-002)."""
+    meets = set((candidate.binding or {}).get("meets") or [])
+    return sum(1 for p in requirement.preferences if p in meets)
+
+
+def history_rank(history: list[JSON] | None) -> int:
+    """A capped RANKING signal from a candidate's capability-scoped execution/effect history
+    (CHP-RES-014): more prior successes rank a candidate higher, bounded so history can never
+    dominate. MUST NOT waive current mandatory evidence or admission invariants — this feeds the rank
+    score only; the hard filter (and required-evidence fit) stay dominant and history never touches
+    eligibility."""
+    return min(sum(1 for h in (history or []) if h.get("outcome") == "success"), _HISTORY_RANK_CAP)
+
+
 def resolve(
     requirement: CapabilityRequirement,
     candidates: list[ResolvedCandidate],
     *,
     provenance: JSON | None = None,
     require_fit: CapabilityDefinition | None = None,
+    rank_bonus: Callable[[ResolvedCandidate], int] | None = None,
 ) -> CapabilityResolution:
     """Filter candidates to the ELIGIBLE (those satisfying EVERY hard constraint — CHP-RES-002,
     no score compensates), rank the eligible by score descending, and select the top. The
@@ -132,7 +156,13 @@ def resolve(
         (c, fits) for c, fits in scored
         if required <= set(c.satisfied_hard) and all(v == SATISFIED for v in fits.values())
     ]
-    ranked = sorted(eligible, key=lambda cf: (-cf[0].score, str(cf[0].binding.get("id", ""))))
+    # Ranking (CHP-RES-006/014): among the ELIGIBLE only, add any soft operational/commercial or
+    # history signal to the score. rank_bonus is applied AFTER the hard filter, so it can reorder
+    # eligible candidates but can never make an ineligible one selectable.
+    def _rank_score(c: ResolvedCandidate) -> int:
+        return c.score + (rank_bonus(c) if rank_bonus is not None else 0)
+
+    ranked = sorted(eligible, key=lambda cf: (-_rank_score(cf[0]), str(cf[0].binding.get("id", ""))))
     selected = ranked[0][0].binding if ranked else None
 
     def record(c: ResolvedCandidate, fits: dict[str, str]) -> JSON:
