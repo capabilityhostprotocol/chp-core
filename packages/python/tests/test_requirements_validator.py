@@ -90,6 +90,20 @@ def test_catches_dangling_ref(sandbox):
     assert not _findings(sandbox)["dangling_ref"].ok
 
 
+def test_catches_malformed_requirement_id(sandbox):
+    # CONF-008: a requirement id that doesn't match CHP-<DOMAIN>-NNN is flagged (deterministic ids).
+    rows = _load_csv(sandbox)
+    rows[0]["id"] = "CHP-core-1"  # lowercase + short number → malformed
+    _write_csv(sandbox, rows)
+    f = _findings(sandbox)["requirement_id_format"]
+    assert not f.ok and "CHP-core-1" in f.detail
+
+
+def test_live_schemas_are_strict():
+    # CONF-001: every shipped protocol schema rejects unknown properties (or is a pure $ref/combinator).
+    assert _findings(rv.BASE)["strict_schemas"].ok
+
+
 def test_catches_uncovered_sec_threat(sandbox):
     # SEC-016: a SEC MUST threat left baseline (untested) is flagged as a coverage hole.
     rows = _load_csv(sandbox)
