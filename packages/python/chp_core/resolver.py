@@ -53,6 +53,10 @@ class ResolvedCandidate:
     # market boundary so a RECEIVING market can re-verify locally rather than inherit the source's
     # verdict (CHP-FED-004). Optional — a self-market candidate needs none.
     evidence: list[JSON] | None = None
+    # The exact offer {id, version} this candidate came from (CHP-SUP-006): preserved into the
+    # resolution chain so a governance-relevant offer change (a bumped version) is pinned + auditable
+    # and a mutable offer can't be swapped after selection. Optional — a non-offer candidate has none.
+    offer: JSON | None = None
 
 
 @dataclass(slots=True)
@@ -83,7 +87,13 @@ def offer_to_candidate(offer: object, *, satisfied_hard: list[str], score: int =
     the offer's EvidenceContract + verified assertions), NEVER a conclusion baked into the offer
     (CHP-SUP-002/007). No score compensates for a missing hard constraint at resolve() time."""
     binding = offer.binding if hasattr(offer, "binding") else offer["binding"]  # type: ignore[index]
-    return ResolvedCandidate(binding=binding, satisfied_hard=list(satisfied_hard), score=score)
+    # Pin the exact offer id+version into the candidate (CHP-SUP-006) so the resolution chain records
+    # WHICH offer version was selected — a bumped-version offer is a distinct, auditable selection.
+    oid = getattr(offer, "id", None) if not isinstance(offer, dict) else offer.get("id")
+    over = getattr(offer, "version", None) if not isinstance(offer, dict) else offer.get("version")
+    offer_ref = {"id": oid, "version": over} if oid is not None else None
+    return ResolvedCandidate(binding=binding, satisfied_hard=list(satisfied_hard), score=score,
+                             offer=offer_ref)
 
 
 def resolve(
@@ -130,6 +140,8 @@ def resolve(
         rec.update(fits)
         if c.source_market is not None:  # preserve federated source provenance (CHP-FED-003)
             rec["source_market"] = c.source_market
+        if c.offer is not None:  # pin the exact offer version selected (CHP-SUP-006)
+            rec["offer"] = c.offer
         return rec
 
     return CapabilityResolution(

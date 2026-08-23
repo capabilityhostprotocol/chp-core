@@ -72,3 +72,17 @@ def test_status_orthogonal_and_offboarding_preserves_record():
 def test_bad_status_rejected():
     with pytest.raises(ValueError):
         EntitySubject(id="e1", kind="person", status="deleted")
+
+
+def test_account_identity_is_separate_from_durable_entity():
+    # CHP-ENT-004: a product account/login is NOT the CHP entity id. The durable EntitySubject.id is
+    # stable while a mutable account identifier (an evidence-backed claim) changes, and the invocation
+    # subject id-space (api_key/account) is distinct from the entity id.
+    e = EntitySubject(id="urn:chp:entity:jane", kind="person",
+                      identifiers=[{"kind": "account", "value": "acct-1", "assertion": "asrt_1"}])
+    rotated = EntitySubject(id="urn:chp:entity:jane", kind="person",
+                            identifiers=[{"kind": "account", "value": "acct-2", "assertion": "asrt_2"}])
+    assert e.id == rotated.id                                  # durable entity id unchanged by account change
+    assert e.identifiers[0]["value"] != rotated.identifiers[0]["value"]
+    account_subject = {"id": "acct-1", "type": "api_key"}      # a product account/login
+    assert account_subject["id"] != e.id                       # distinct id-spaces

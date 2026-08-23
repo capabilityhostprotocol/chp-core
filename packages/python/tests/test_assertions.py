@@ -96,3 +96,24 @@ def test_independent_sources_collapses_projections_of_one_source():
     # an unattributed item is its own source — never silently merged into a known one
     mixed = [{"derived_from": "asrt_1"}, {"derived_from": None}, {"derived_from": None}]
     assert independent_sources(mixed, key=lambda e: e.get("derived_from")) == 3
+
+
+def test_extension_claim_type_requires_namespace_authority():
+    # CHP-SEM-003: a claim type OUTSIDE the core "chp." namespace MUST declare its owning authority,
+    # so an extension can't masquerade as unowned/core. Core "chp.*" needs none.
+    ClaimType(id="chp.identity.role", version="1", value_schema={}, description="core")  # ok, no authority
+    with pytest.raises(ValueError):
+        ClaimType(id="x.vendor.custom", version="1", value_schema={}, description="ext")  # extension, no authority
+    ClaimType(id="x.vendor.custom", version="1", value_schema={}, description="ext",
+              namespace_authority={"id": "vendor-x"})  # ok once owned
+
+
+def test_relationship_assertion_grants_nothing():
+    # CHP-ENT-009: a relationship (employment/ownership/membership) is an evidence-backed Assertion
+    # projected as a DERIVED edge — it confers no capability/authority/admission.
+    from chp_core import derive_edges
+    empl = Assertion(claim_type="chp.rel.employment", issuer={"id": "hr"},
+                     subject={"kind": "person", "id": "jane"}, value={"employer": "acme"})
+    edges = derive_edges([empl])
+    assert edges[0]["kind"] == "derived"                       # a projection, not ground truth
+    assert not ({"capability", "authority", "admission", "qualified", "trusted"} & set(edges[0]))
