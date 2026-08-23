@@ -394,6 +394,14 @@ v0.2 adds these checks to the runner (gated by declared tier):
 `retention preserves chain`. A host declaring a tier MUST pass the checks for
 that tier and below.
 
+**Reference-implementation precedence (normative, CHP-IOP-004):** this specification is
+authoritative. The reference implementations — `chp_core` (Python) and `spec/test-vectors/verify.mjs`
+(independent stdlib) — exist to *demonstrate and cross-verify* the normative behavior; where a
+reference implementation disagrees with this spec, the **spec governs** and the implementation is the
+defect. Accordingly the conformance runner separates `NORMATIVE` from `REFERENCE` checks: a
+`REFERENCE` check reflects a reference implementation's own quality and MUST NOT flip a `NORMATIVE`
+conformance verdict.
+
 ## 7. Cross-host ordering — `chp-causal-order-v1`
 
 A task's evidence may span multiple hosts sharing one `correlation_id` (the

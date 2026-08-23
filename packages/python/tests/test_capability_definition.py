@@ -66,3 +66,12 @@ def test_transitivity_and_similarity_are_not_equivalence():
     assert R.is_symmetric("subtype_of") is False
     # similarity is NOT a relationship type — it can never grant substitution (CHP-CAP-009/015)
     assert R.may_substitute("similar", policy_accepts_authority=True) is False
+
+
+def test_capability_definition_is_transport_free():
+    # CHP-CAP-007: a CapabilityDefinition is a provider-independent SEMANTIC capability — it carries
+    # NO transport/endpoint/commercial fields (those live on bindings/offers, not the definition).
+    d = CapabilityDefinition(id="legal.review", version="1", description="review a doc",
+                             namespace={"id": "chp"})
+    assert not (set(d.to_dict()) & {"transport", "endpoint", "host", "url", "address",
+                                    "price", "availability", "provider"})

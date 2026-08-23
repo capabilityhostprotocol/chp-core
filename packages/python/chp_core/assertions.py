@@ -32,6 +32,14 @@ class ClaimType:
     subject_kinds: list[str] = field(default_factory=list)
     namespace_authority: JSON | None = None
 
+    def __post_init__(self) -> None:
+        # CHP-SEM-003: an EXTENSION claim type (outside the core "chp." namespace) MUST declare its
+        # namespace_authority — WHO owns the definition — so an extension cannot masquerade as
+        # unowned/core. Core "chp.*" claim types are authored by the protocol and need none.
+        if not self.id.startswith("chp.") and self.namespace_authority is None:
+            raise ValueError(
+                f"extension claim type {self.id!r} MUST declare a namespace_authority (CHP-SEM-003)")
+
     def to_dict(self) -> JSON:
         data = asdict(self)
         if self.namespace_authority is None:

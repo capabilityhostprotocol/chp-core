@@ -67,3 +67,17 @@ def test_unknown_claim_type_preserved():
     a = Assertion(claim_type="x.vendor.custom_unknown", issuer=ISS, subject=SUBJ, value={"k": 1})
     assert a.to_dict()["claim_type"] == "x.vendor.custom_unknown"
     assert derive_edges([a])[0]["predicate"] == "x.vendor.custom_unknown"
+
+
+def test_no_silent_claim_reinterpretation():
+    # CHP-SEM-005 (MUST NOT): an assertion is NEVER validated against a DIFFERENT claim type — a
+    # foreign/unknown claim can't be silently reinterpreted as something it isn't.
+    import pytest
+    from chp_core import ClaimType
+    from chp_core.assertions import validate_assertion_value
+    a = Assertion(claim_type="x.vendor.a", issuer={"id": "i"}, subject={"kind": "p", "id": "s"},
+                  value={"v": 1})
+    other = ClaimType(id="x.vendor.b", version="1", value_schema={"type": "object"}, description="b",
+                      namespace_authority={"id": "vendor"})
+    with pytest.raises(ValueError):
+        validate_assertion_value(a, other)                     # mismatch → refused, never coerced
