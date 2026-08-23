@@ -22,6 +22,15 @@ export {
   assessFreshness, grantOutlivesBound, clampGrantValidity, concurrent,
   FRESH, STALE, UNKNOWN, type ClockReading,
 } from './temporal.js';
+export {
+  activeAssertions, independentSources, conflictingAssertions,
+  type AssertionLike, type Conflict,
+} from './assertions.js';
+export { resolve, type CandidateLike, type RequirementLike, type Resolution } from './resolver.js';
+export {
+  isEvidenceSubject, isEffectEvidence, EVIDENCE_SUBJECT_KINDS, EFFECT_DETERMINATIONS,
+  type EvidenceSubject, type EvidenceSubjectKind, type EffectEvidence, type EffectDetermination,
+} from './economy-types.js';
 export { verifyChain, type ChainResult } from './chain.js';
 export { orderEvents } from './ordering.js';
 export {
