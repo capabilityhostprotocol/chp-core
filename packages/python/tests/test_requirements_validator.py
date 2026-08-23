@@ -35,7 +35,7 @@ def test_live_registries_pass():
 def sandbox(tmp_path):
     """A writable copy of the three registries the validator reads."""
     for name in ("traceability_matrix.csv", "master_requirements.json", "requirement_graph.json",
-                 "release_evidence.template.json"):
+                 "release_evidence.template.json", "components.json"):
         shutil.copy(rv.BASE / name, tmp_path / name)
     return tmp_path
 
@@ -138,3 +138,21 @@ def test_emit_release_evidence_projects_the_crosswalk():
     assert ev["release"] == "0.60.0"
     assert ev["requirements"] and all("requirement_id" in r and "evidence" in r for r in ev["requirements"])
     assert ev["gates"] and all({"gate", "implemented", "total"} <= set(g) for g in ev["gates"])
+
+
+def test_catches_promotion_without_full_implementation(sandbox):
+    # CHP-CONF-010: a concept promoted to a STABLE/NORMATIVE maturity while a requirement in its
+    # domain is still baseline is caught — semantic closure/conformance MUST precede promotion.
+    rows = _load_csv(sandbox)
+    dom = next(r["domain"] for r in rows if r["status"] == "baseline")  # a domain with a baseline req
+    comps = json.loads((sandbox / "components.json").read_text())
+    clist = comps.get("components") if isinstance(comps, dict) else comps
+    clist.append({"id": "premature", "version": "1", "maturity": "CORE-NORMATIVE", "domains": [dom]})
+    (sandbox / "components.json").write_text(json.dumps(comps))
+    f = _findings(sandbox)["promotion_gate"]
+    assert not f.ok and "premature" in f.detail
+
+
+def test_live_registries_pass_promotion_gate():
+    # No live component is at a promoted tier with un-implemented domain requirements.
+    assert _findings(rv.BASE)["promotion_gate"].ok

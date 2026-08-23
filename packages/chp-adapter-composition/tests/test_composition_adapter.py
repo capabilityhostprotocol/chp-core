@@ -546,3 +546,69 @@ class TestInjectableStore:
         })
         # Original dict should be unchanged
         assert "added" not in shared_store
+
+
+# --------------------------------------------------------------------------
+# Multi-node governance (CHP-COMP-002/004/005/014) — each step is a SEPARATE
+# governed host invocation; authority, trust, and evidence-strength never flow
+# implicitly between nodes.
+# --------------------------------------------------------------------------
+
+class TestMultiNodeGovernance:
+    def _governed_host(self):
+        from chp_core.policy import PolicyConfig
+        from chp_core.types import CapabilityDescriptor
+        host = LocalCapabilityHost(store=SQLiteEvidenceStore(":memory:"),
+                                   policy=PolicyConfig(block_capability_ids=["svc.step2"]))
+        register_adapter(host, CompositionAdapter())
+        self.ran = {"step1": 0, "step2": 0}
+
+        async def s1(_ctx, _p):
+            self.ran["step1"] += 1
+            return {"ok": 1}
+
+        async def s2(_ctx, _p):
+            self.ran["step2"] += 1
+            return {"ok": 2}
+
+        host.register(CapabilityDescriptor(id="svc.step1", version="1.0.0", description="."), s1)
+        host.register(CapabilityDescriptor(id="svc.step2", version="1.0.0", description="."), s2)
+        return host
+
+    def _run(self, host):
+        from chp_core.types import CorrelationContext
+        host.invoke("chp.adapters.composition.define", {"name": "wf", "steps": [
+            {"capability_id": "svc.step1"}, {"capability_id": "svc.step2"}]})
+        host.invoke("chp.adapters.composition.run", {"name": "wf"},
+                    correlation=CorrelationContext(correlation_id="wfc"))
+        return host.replay("wfc")
+
+    def test_node_local_governance_and_authority_does_not_flow(self):
+        # CHP-COMP-002 + CHP-COMP-004: step2 is blocked by the host's OWN policy and is DENIED even
+        # though step1 succeeded — the composition carries NO authority from step1 to step2; each node
+        # is independently re-admitted through the full host pipeline.
+        host = self._governed_host()
+        events = self._run(host)
+        assert self.ran["step1"] == 1          # step1 admitted + ran on its own
+        assert self.ran["step2"] == 0          # step2 DENIED by its own gate — no inherited authority
+        types = [e["event_type"] for e in events]
+        assert "execution_completed" in types  # step1 governed to completion (node-local)
+        assert "execution_denied" in types     # step2 independently re-admitted → denied
+        denied = [e for e in events if e["event_type"] == "execution_denied"]
+        assert any((e.get("payload") or {}).get("reason") == "policy_blocked"
+                   or (e.get("denial") or {}).get("code") == "policy_blocked" for e in denied)
+
+    def test_trust_non_transitive_and_nested_evidence_keeps_own_strength(self):
+        # CHP-COMP-005: no trust carrier flows between nodes — each step is a fresh governed
+        # invocation. CHP-COMP-014: the workflow's wrapping event is DISTINCT from the inner step's
+        # own execution evidence; wrapping does not replace/strengthen the inner evidence.
+        host = self._governed_host()
+        events = self._run(host)
+        # the inner step1 evidence (execution_completed) AND the workflow wrapper (workflow_step_*)
+        # both exist as SEPARATE records — the wrapper never stands in for / strengthens the inner one.
+        assert any(e["event_type"] == "execution_completed" for e in events)   # inner, own strength
+        assert any(e["event_type"].startswith("workflow_step") for e in events)  # outer wrapper, distinct
+        # two SEPARATE governed step invocations (distinct invocation_ids) — no shared trust token
+        inv_ids = {e.get("invocation_id") for e in events
+                   if e["event_type"] in ("execution_completed", "execution_denied")}
+        assert len(inv_ids) >= 2
