@@ -4,7 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { contentHash, payloadCommitment, chunkSeqDigest, EVENT_HASH_V2, type EvidenceEvent } from '../src/hash.js';
 import { verifyBundle, verifyApprovalGrant } from '../src/verify.js';
 import { withholdPayloads } from '../src/signing.js';
+import { documentDigest } from '../src/digests.js';
+import { assessFreshness, grantOutlivesBound, concurrent, STALE } from '../src/temporal.js';
 import type { JsonValue } from '../src/canon.js';
+
+type Doc = Record<string, JsonValue>;
 
 const dir = fileURLToPath(new URL('../../../spec/test-vectors/', import.meta.url));
 const load = (f: string) => JSON.parse(readFileSync(dir + f, 'utf8'));
@@ -14,6 +18,46 @@ describe('published test vectors', () => {
     const expected = load('expected.json');
     const ev = load('event.json').event as EvidenceEvent;
     expect(contentHash(ev, null)).toBe(expected.event_content_hash);
+  });
+
+  // Capability Economy parity (proposal 0043): the second implementation reproduces the shipped
+  // execution-truth digests byte-for-byte over chp-jcs-v1 — the keystone dual-digest model is a
+  // PROTOCOL, not a Python library.
+  it('reproduces the execution-truth digests (CHP-CORE-024)', () => {
+    const v = load('digests.json');
+    expect(documentDigest(v.action_document as Doc)).toBe(v.action_digest);
+    expect(documentDigest(v.invocation_document as Doc)).toBe(v.invocation_digest);
+    // the invocation BINDS the action digest (CHP-CORE-005)
+    expect((v.invocation_document as Doc).action_digest).toBe(v.action_digest);
+  });
+
+  it('provider substitution keeps action_digest, changes invocation_digest (CHP-CORE-004/006)', () => {
+    const v = load('provider-substitution.json');
+    const a = v.invocation_a as Doc, b = v.invocation_b as Doc;
+    // the SDK reproduces each stated invocation_digest from its document
+    expect(documentDigest(a.invocation_document as Doc)).toBe(a.invocation_digest);
+    expect(documentDigest(b.invocation_document as Doc)).toBe(b.invocation_digest);
+    // both carry the SAME semantic action_digest (routing is not semantic) — stable across providers
+    expect((a.invocation_document as Doc).action_digest).toBe(v.action_digest);
+    expect((b.invocation_document as Doc).action_digest).toBe(v.action_digest);
+    // but the governed-attempt digests DIFFER (provider changed → new admission required)
+    expect(a.invocation_digest).not.toBe(b.invocation_digest);
+  });
+
+  // Temporal-truth parity (CHP-TEMP-006): the second implementation reproduces the shipped temporal
+  // NEGATIVE vectors — a stale evidence, a grant overrun, and overlapping clock uncertainty.
+  it('reproduces the temporal negative vectors (CHP-TEMP-002/003/004)', () => {
+    const vecs: Record<string, Doc> = {};
+    for (const v of (load('temporal-negative.json').vectors as Doc[])) vecs[v.id as string] = v;
+
+    const s = vecs['stale-evidence'];
+    expect(assessFreshness(s.issued_at as string, s.at_time as string, s.max_age_seconds as number)).toBe(STALE);
+
+    const g = vecs['grant-overrun'];
+    expect(grantOutlivesBound(g.grant_valid_until as string, g.depended_bounds as string[])).not.toBeNull();
+
+    const c = vecs['overlapping-clock-uncertainty'];
+    expect(concurrent(c.a as { time: string; uncertainty_s: number }, c.b as { time: string; uncertainty_s: number })).toBe(true);
   });
 
   it('verifies the Python-signed echo bundle', () => {

@@ -14,6 +14,14 @@ export {
   CANONICALIZATION_JCS, type JsonValue,
 } from './canon.js';
 export { contentHash, rootHash, payloadCommitment, chunkSeqDigest, EVENT_HASH_V2, type EvidenceEvent } from './hash.js';
+export {
+  documentDigest, actionDocument, actionDigest, invocationDocument, invocationDigest,
+  bindingDocument, bindingDigest,
+} from './digests.js';
+export {
+  assessFreshness, grantOutlivesBound, clampGrantValidity, concurrent,
+  FRESH, STALE, UNKNOWN, type ClockReading,
+} from './temporal.js';
 export { verifyChain, type ChainResult } from './chain.js';
 export { orderEvents } from './ordering.js';
 export {
