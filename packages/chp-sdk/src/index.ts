@@ -15,7 +15,7 @@ export {
 } from './canon.js';
 export { contentHash, rootHash, payloadCommitment, chunkSeqDigest, EVENT_HASH_V2, type EvidenceEvent } from './hash.js';
 export {
-  documentDigest, actionDocument, actionDigest, invocationDocument, invocationDigest,
+  documentDigest, actionDocument, actionDigest, invocationDocument, invocationDigest, dualDigestConsistent,
   bindingDocument, bindingDigest,
 } from './digests.js';
 export {
@@ -23,9 +23,13 @@ export {
   FRESH, STALE, UNKNOWN, type ClockReading,
 } from './temporal.js';
 export {
-  activeAssertions, independentSources, conflictingAssertions,
+  activeAssertions, independentSources, conflictingAssertions, isInferred,
   type AssertionLike, type Conflict,
 } from './assertions.js';
+export {
+  EntitySubject, ClaimType, TrustAnchor, anchoredIssuerTrusted, assuranceFrom, ASSURANCE_DIMENSIONS,
+  type EntitySubjectInit, type ClaimTypeInit, type AssuranceVector, type FourState, type EntityStatus,
+} from './kernel.js';
 export { resolve, type CandidateLike, type RequirementLike, type Resolution } from './resolver.js';
 export { deriveReadiness, type ReadinessResult } from './readiness.js';
 export {

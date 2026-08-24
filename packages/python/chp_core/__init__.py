@@ -138,7 +138,7 @@ from .discovery import (
     parse_capabilities_txt,
     project_capabilities_txt,
 )
-from .enforcement import EnforcementControl, assess_enforcement
+from .enforcement import EnforcementControl, assess_enforcement, host_enforcement
 from .effect import EffectEvidence
 from .federation import MarketDescriptor, federable, source_priority_key
 from .supply import (
@@ -288,6 +288,7 @@ __all__ = [
     "parse_capabilities_txt",
     "EnforcementControl",
     "assess_enforcement",
+    "host_enforcement",
     "resolve",
     "ContractCheck",
     "check_contract",

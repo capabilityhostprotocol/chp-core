@@ -105,3 +105,47 @@ def binding_document(
 def binding_digest(**kwargs: Any) -> str:
     """sha256: content-addressed identity of a CapabilityBinding."""
     return _digest(binding_document(**kwargs))
+
+
+def _is_sha256(value: object) -> bool:
+    """A ``sha256:`` + 64-hex digest string (the machine-contract digest shape)."""
+    if not isinstance(value, str) or not value.startswith("sha256:"):
+        return False
+    hexpart = value[len("sha256:"):]
+    return len(hexpart) == 64 and all(c in "0123456789abcdef" for c in hexpart)
+
+
+def dual_digest_consistent(
+    action_digest: object, invocation_digest: object, *, document: JSON | None = None
+) -> bool:
+    """Verify the 0043 dual-digest INVARIANT on a received pair (CHP-CORE-026) — the machine-contract
+    teeth a JSON Schema cannot express.
+
+    A JSON Schema can only assert each digest is a sha256 string; it cannot assert the two RELATE
+    correctly. A genuine ``invocation_digest`` is the digest of an invocation document that CONTAINS
+    ``action_digest`` plus routing, so it can never equal ``action_digest`` — a collapsed pair
+    (``action_digest == invocation_digest``) is a forgery that defeats the whole action/invocation
+    separation yet passes the shape schema. This checks, in order:
+
+    - both are well-formed sha256 digests;
+    - they are DISTINCT (a collapsed pair is rejected);
+    - when the full canonical invocation ``document`` is supplied, it carries exactly the claimed
+      ``action_digest`` AND its recomputed digest equals the claimed ``invocation_digest`` (so the pair
+      is not merely distinct but actually derived — a swapped-routing tamper is caught, CHP-CORE-006).
+
+    Returns ``False`` rather than raising, so a relying validator treats an inconsistent pair as a
+    rejection on its normal path, never an exception. Reuses ``_digest``/``_canon_jcs`` — no new
+    canonicalization, so a second implementation agrees byte-for-byte (CHP-CORE-024)."""
+    if not (_is_sha256(action_digest) and _is_sha256(invocation_digest)):
+        return False
+    if action_digest == invocation_digest:
+        return False  # collapsed pair — never a genuine 0043 derivation
+    if document is not None:
+        if document.get("action_digest") != action_digest:
+            return False  # the document does not carry the claimed action_digest
+        try:
+            if _digest(document) != invocation_digest:
+                return False  # invocation_digest does not recompute from the document (tampered routing)
+        except (ValueError, TypeError):
+            return False
+    return True

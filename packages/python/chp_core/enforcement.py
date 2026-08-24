@@ -73,3 +73,27 @@ def assess_enforcement(control: EnforcementControl | JSON | None) -> str:
     # a boundary is present but not demonstrably non-bypassable (unverified, or a bypass exists) → observed,
     # never enforced (CHP-CORE-018 forbids an enforced claim over a bypassable path).
     return OBSERVED
+
+
+def host_enforcement(host: object) -> str:
+    """Derive a running host's honest enforcement level from its ACTUAL controls (CHP-CORE-018).
+
+    A CHP-ENFORCED claim must be a FACT about the host, not a self-declared badge. The governed host IS the
+    boundary: every invocation is evidence-wrapped and policy-checked before any handler runs, and no public
+    invoke path reaches a handler past a denial (proven in test_core_hardening) — so the boundary is real and
+    the store+policy is its verifier. The one ungoverned bypass a host can carry is AUDIT-ONLY mode: policy
+    decisions are recorded but NOT enforced, so a denied effect still runs — a declared bypass that caps the
+    honest claim at ``observed``. A host with no policy/store wired has no governed boundary → ``discoverable``.
+
+    Reads host attributes duck-typed (getattr), so this leaf primitive never imports the host layer."""
+    policy = getattr(host, "policy", None)
+    store = getattr(host, "store", None)
+    if policy is None or store is None:
+        return DISCOVERABLE  # no governed boundary is wired — the effect is merely reachable
+    control = EnforcementControl(
+        boundary="governed-host",
+        verifier={"id": "chp.evidence-store+policy"},
+        # audit-only logs decisions but does not block → the effect is produced anyway (an ungoverned bypass)
+        bypass_paths=["audit_only"] if getattr(policy, "audit_only", False) else [],
+    )
+    return assess_enforcement(control)

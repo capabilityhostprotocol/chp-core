@@ -102,6 +102,23 @@ def test_core032_tampered_digest_is_detectable():
     assert recomputed != honest  # the claimed (honest) digest no longer matches the tampered document
 
 
+def test_core026_dual_digest_consistency_has_teeth():
+    # CORE-026: the machine contract's TEETH beyond shape — a JSON Schema can only say each digest is a
+    # sha256 string; dual_digest_consistent enforces the 0043 relationship a schema cannot express.
+    from chp_core.digests import _digest, action_digest, dual_digest_consistent, invocation_document
+    ad = action_digest(capability={"id": "svc.x"}, principal={"id": "p"}, action_input={"n": 1})
+    doc = invocation_document(invocation_id="i", action_digest=ad, actor={"id": "a"}, principal={"id": "p"},
+                              binding={"id": "b1"}, provider={"id": "prov"}, host={"id": "h"})
+    idig = _digest(doc)
+    assert dual_digest_consistent(ad, idig, document=doc)          # a genuine derived pair
+    assert dual_digest_consistent(ad, idig)                        # distinct + well-formed (no document)
+    assert not dual_digest_consistent(ad, ad)                      # collapsed pair — a forgery the schema misses
+    tampered = dict(doc, binding={"id": "b2"})                     # swapped routing, same claimed invocation_digest
+    assert not dual_digest_consistent(ad, idig, document=tampered)  # recompute != claimed (CHP-CORE-006)
+    assert not dual_digest_consistent("sha256:" + "c" * 64, idig, document=doc)  # doc carries a different action_digest
+    assert not dual_digest_consistent("not-a-digest", idig)        # shape guard
+
+
 def test_core032_causal_order_beats_wall_clock():
     # CORE-032: an adversarial input where wall-clock disagrees with causation — causal order wins.
     events = [

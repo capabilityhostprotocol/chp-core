@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { activeAssertions, independentSources, conflictingAssertions } from '../src/assertions.js';
 import { resolve } from '../src/resolver.js';
-import { isEvidenceSubject, isEffectEvidence } from '../src/economy-types.js';
+import {
+  isEvidenceSubject, isEffectEvidence, isInvocationEnvelope, isApprovalGrant, isEvidenceEvent,
+} from '../src/economy-types.js';
 import { deriveReadiness } from '../src/readiness.js';
 
 const dir = fileURLToPath(new URL('../../../spec/test-vectors/', import.meta.url));
@@ -58,6 +60,9 @@ describe('economy type-contract parity vs core-schema-vectors.json', () => {
   const guardFor: Record<string, (v: unknown) => boolean> = {
     'evidence-subject.schema.json': isEvidenceSubject,
     'effect-evidence.schema.json': isEffectEvidence,
+    'invocation-envelope.schema.json': isInvocationEnvelope,
+    'chp-approval-grant.schema.json': isApprovalGrant,
+    'evidence-event.schema.json': isEvidenceEvent,
   };
 
   it('accepts every positive vector its guard covers', () => {
