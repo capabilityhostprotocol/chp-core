@@ -139,6 +139,7 @@ from .discovery import (
     project_capabilities_txt,
 )
 from .enforcement import EnforcementControl, assess_enforcement, host_enforcement
+from .mcp_bridge import capabilities_to_mcp_tools, serve_mcp
 from .effect import EffectEvidence
 from .federation import MarketDescriptor, federable, source_priority_key
 from .supply import (
@@ -289,6 +290,8 @@ __all__ = [
     "EnforcementControl",
     "assess_enforcement",
     "host_enforcement",
+    "capabilities_to_mcp_tools",
+    "serve_mcp",
     "resolve",
     "ContractCheck",
     "check_contract",
