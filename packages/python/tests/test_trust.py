@@ -7,6 +7,7 @@ policy is separate from integrity verification (CHP-VER-011).
 
 import pytest
 
+from chp_core.assertions import Assertion, conflicting_assertions, independent_sources
 from chp_core.trust import TrustAnchor, anchored_issuer_trusted
 
 
@@ -60,3 +61,34 @@ def test_verified_supply_distinguishes_anchored_from_sybil():
              for i in range(5)]
     f = verified_supply(flood, trusted_issuers=trusted)
     assert f["verified"] == 5 and f["independent_verified"] == 1
+
+
+def _asrt(claim_type, issuer, value):
+    return Assertion(claim_type=claim_type, issuer={"id": issuer}, subject={"kind": "org", "id": "lex"}, value=value)
+
+
+def test_rggov_conflicts_preserved_via_the_assertions_primitive():
+    # RG-GOV "conflicts": the trust profile reuses chp_core.assertions.conflicting_assertions (CHP-TRUST-008) —
+    # two distinct issuers disagreeing on a claim is PRESERVED, never adjudicated to a winner.
+    conflicts = conflicting_assertions([
+        _asrt("disciplinary_status", "urn:law-society", "clear"),
+        _asrt("disciplinary_status", "urn:complaints-board", "under_review"),
+        _asrt("good_standing", "urn:law-society", "good")])
+    assert len(conflicts) == 1
+    assert set(conflicts[0]["values"]) == {"clear", "under_review"}   # both kept, not collapsed
+
+
+def test_rggov_independent_corroboration_via_the_assertions_primitive():
+    # RG-GOV "local trust"/source-independence: independent_sources (CHP-TRUST-006) dedupes by issuer, so the
+    # same source twice corroborates once — inflation by re-projection is prevented.
+    items = [{"issuer": "urn:law-society"}, {"issuer": "urn:court-registry"}, {"issuer": "urn:law-society"}]
+    assert independent_sources(items, key=lambda i: i["issuer"]) == 2
+
+
+def test_no_evidence_laundering_trust_keys_on_original_issuer():
+    # CHP-TRUST-005: a relaying/re-signing party cannot launder foreign evidence into trust — the trust
+    # decision keys on the ORIGINAL issuer's anchor, not whoever relayed it. Trusting a relay for its own
+    # attestations does NOT extend trust to a foreign issuer's claim the relay merely forwards.
+    anchors = [TrustAnchor(issuer="urn:trusted-relay", claim_types=["*"])]
+    assert anchored_issuer_trusted(anchors, "urn:trusted-relay", "chp.identity.licence")   # the relay itself
+    assert not anchored_issuer_trusted(anchors, "urn:foreign-issuer", "chp.identity.licence")  # not laundered

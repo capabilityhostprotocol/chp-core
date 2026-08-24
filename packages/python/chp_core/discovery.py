@@ -64,6 +64,44 @@ def host_capabilities_txt(descriptor: JSON, *, chp_version: str = "0.1",
         chp_version=chp_version, base_href=base_href)
 
 
+def parse_capabilities_json(doc: Any) -> list[JSON]:
+    """Parse a capabilities.json document (or a bare capabilities list) into normalized capability entries
+    — the INBOUND direction of the discovery projection (CHP-SUP-009/010/011). Keeps each entry's
+    id/version/description + any benign fields, but STRIPS forbidden conclusion fields (admitted/authorized/
+    …): a consumed discovery feed advertises capabilities, never admission — honoring such a field would let
+    a foreign feed launder authorization (CHP-SUP-009). Entries without an ``id`` are dropped."""
+    caps = doc.get("capabilities", doc) if isinstance(doc, dict) else doc
+    out: list[JSON] = []
+    for c in caps or []:
+        if not isinstance(c, dict) or not c.get("id"):
+            continue
+        out.append({k: v for k, v in c.items() if k not in _FORBIDDEN})
+    return out
+
+
+def parse_capabilities_txt(text: str) -> list[JSON]:
+    """Parse a capabilities.txt document (the text sibling of capabilities.json) into capability entries.
+    Reads the ``- <id> (v<version>) — <description> …`` list lines; the description is the segment before the
+    first ``·`` separator. Discovery-only: like parse_capabilities_json, it advertises nothing beyond
+    id/version/description (no admission is expressible in the line grammar)."""
+    import re
+
+    line_re = re.compile(r"^-\s+(?P<id>[^\s(]+)\s*(?:\(v(?P<version>[^)]+)\))?\s*(?:[—-]\s*(?P<desc>.*))?$")
+    out: list[JSON] = []
+    for raw in text.splitlines():
+        m = line_re.match(raw.strip())
+        if not m or not m.group("id"):
+            continue
+        desc = (m.group("desc") or "").split("·")[0].strip()
+        entry: JSON = {"id": m.group("id")}
+        if m.group("version"):
+            entry["version"] = m.group("version")
+        if desc:
+            entry["description"] = desc
+        out.append(entry)
+    return out
+
+
 def _assert_discovery_only(doc: JSON) -> None:
     def scan(obj: Any) -> None:
         if isinstance(obj, dict):
