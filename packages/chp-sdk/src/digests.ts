@@ -24,6 +24,29 @@ export function documentDigest(doc: Doc): string {
   return 'sha256:' + sha256hex(canonJcs(doc));
 }
 
+const SHA256 = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * Verify the 0043 dual-digest INVARIANT on a received pair (CHP-CORE-026) — the machine-contract teeth a
+ * JSON Schema cannot express. A genuine invocationDigest is over a document that CONTAINS actionDigest plus
+ * routing, so it can never equal actionDigest — a collapsed pair (action === invocation) is a forgery the
+ * shape schema misses. Checks: both are well-formed sha256; they are DISTINCT; and when the full canonical
+ * invocation `document` is supplied, it carries exactly the claimed actionDigest AND its recomputed digest
+ * equals the claimed invocationDigest (a swapped-routing tamper is caught, CHP-CORE-006). Returns false
+ * rather than throwing. Twin of chp_core.digests.dual_digest_consistent — same canonicalization, so the two
+ * implementations agree byte-for-byte (CHP-CORE-024).
+ */
+export function dualDigestConsistent(actionDigest: unknown, invocationDigest: unknown, document?: Doc): boolean {
+  if (typeof actionDigest !== 'string' || typeof invocationDigest !== 'string') return false;
+  if (!SHA256.test(actionDigest) || !SHA256.test(invocationDigest)) return false;
+  if (actionDigest === invocationDigest) return false; // collapsed pair — never a genuine 0043 derivation
+  if (document !== undefined) {
+    if (document.action_digest !== actionDigest) return false; // doc does not carry the claimed action_digest
+    if (documentDigest(document) !== invocationDigest) return false; // does not recompute (tampered routing)
+  }
+  return true;
+}
+
 export function actionDocument(a: {
   capability: JsonValue;
   principal: JsonValue;

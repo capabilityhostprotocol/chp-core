@@ -302,6 +302,10 @@ export function mandateHeader(mandate: Record<string, JsonValue>): JsonValue {
   // Use-count cap (§10, proposal 0026): signed only when present, so an uncapped
   // mandate's header is byte-identical to pre-0026.
   if (mandate.max_invocations != null) h.max_invocations = mandate.max_invocations;
+  // Redelegation opt-in (CHP-AUTH-004): signed only when granted, so a non-delegable mandate's header is
+  // byte-identical to pre-0004. Because it is SIGNED, the permission cannot be forged onto a mandate after
+  // the fact — and this MUST match Python's mandate_header for cross-implementation verification (IOP-002).
+  if (mandate.delegable) h.delegable = mandate.delegable;
   return h;
 }
 
