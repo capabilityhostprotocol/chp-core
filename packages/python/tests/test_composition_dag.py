@@ -1,4 +1,4 @@
-"""Typed composition DAG (composition wave arc 2; CHP-COMP-003/006/007/008/009/010/011/013).
+"""Typed composition DAG (composition wave arc 2; CHP-COMP-001/002/003/004/005/006/007/008/009/010/011/013).
 
 Proves the typed-DAG semantics that the linear composition adapter could not express: typed edges,
 data-edge artifact continuity, an evidence edge that schedules but never admits, indeterminate
@@ -100,3 +100,34 @@ def test_compensation_is_a_new_node_not_a_rollback():
     comp = compensation_node(a, capability={"id": "cap.undo_a"})
     assert comp.id != a.id and comp.id.startswith("cnode_")
     assert comp.capability == {"id": "cap.undo_a"}   # a fresh invocation, not an undo of a
+
+
+# ---- COMP-001/002: a composition is a DAG of node-local governance points, not a super-invocation ----
+
+def test_composition_is_not_a_super_invocation():
+    # CHP-COMP-001/002: a composition does NOT collapse its nodes into one super-invocation — it is a set of
+    # nodes, each naming its OWN capability (its own resolution/invocation/admission/grant/evidence chain).
+    c = Composition(nodes=[_n("a"), _n("b")], edges=[CompositionEdge("a", "b", "control")])
+    assert len(c.nodes) == 2                                    # multiple distinct governance points, not one
+    assert {n.capability["id"] for n in c.nodes} == {"cap.a", "cap.b"}   # each node governs its own capability
+    # the composition carries NO graph-wide invocation/grant/admission field that would collapse governance
+    assert not ({"invocation", "grant", "admission", "authority"} & set(Composition.__dataclass_fields__))
+
+
+# ---- COMP-004/005: authority and trust do NOT flow implicitly along edges ----
+
+def test_edges_carry_no_authority_or_trust_to_propagate():
+    # CHP-COMP-004/005: an edge is purely structural — {src, dst, type} — with NO authority/grant/trust field,
+    # so one node making another ELIGIBLE cannot propagate authority, and trust cannot transit the edge.
+    assert set(CompositionEdge.__dataclass_fields__) == {"src", "dst", "type", "TYPES"}
+    assert CompositionEdge.TYPES == frozenset({"control", "data", "evidence"})   # no "authority" edge exists
+
+
+def test_becoming_eligible_schedules_but_carries_no_authority():
+    # CHP-COMP-004: ready_nodes/classify SCHEDULE (they yield a state, e.g. 'ready'), they never emit a grant
+    # or authority — a downstream node's eligibility is not the upstream's authority flowing to it.
+    c = Composition(nodes=[_n("a"), _n("b")], edges=[CompositionEdge("a", "b", "control")])
+    state = classify(c, {"a": "completed"})
+    assert state["b"] == "ready"                               # eligible to be admitted at ITS node…
+    assert "b" in ready_nodes(c, {"a": "completed"})
+    assert isinstance(state["b"], str)                         # …a scheduling STATE, never a grant/authority object
