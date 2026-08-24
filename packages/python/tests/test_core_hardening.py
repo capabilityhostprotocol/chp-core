@@ -15,7 +15,7 @@ from chp_core import (
     LocalCapabilityHost,
     SQLiteEvidenceStore,
 )
-from chp_core.digests import invocation_digest
+from chp_core.digests import invocation_digest, invocation_document
 from chp_core.policy import PolicyConfig
 from chp_core.types import InvocationEnvelope
 
@@ -31,13 +31,30 @@ def _routing(**over):
 
 def test_invocation_immutable_identity_governance_change_rekeys():
     # CHP-CORE-003: an Invocation is immutable once created — its identity (invocation_digest) is a
-    # deterministic function of its governed fields, and a governance-relevant change produces a NEW
+    # deterministic function of its governed fields, and ANY governance-relevant change produces a NEW
     # identity (so an in-place rewrite could never pass unnoticed as the same invocation).
     d1 = invocation_digest(**_routing())
     assert d1 == invocation_digest(**_routing())                       # deterministic / stable
-    assert d1 != invocation_digest(**_routing(binding={"id": "b2"}))   # routing change → new identity
+    # every governance-relevant field rekeys the identity
+    assert d1 != invocation_digest(**_routing(actor={"id": "act2"}))
+    assert d1 != invocation_digest(**_routing(principal={"id": "p2"}))
+    assert d1 != invocation_digest(**_routing(action_digest="sha256:" + "b" * 64))
+    assert d1 != invocation_digest(**_routing(binding={"id": "b2"}))
     assert d1 != invocation_digest(**_routing(provider={"id": "other"}))
     assert d1 != invocation_digest(**_routing(host={"id": "h2"}))
+    assert d1 != invocation_digest(**_routing(governance_context={"policy": "x"}))
+
+
+def test_invocation_identity_is_content_addressed_not_time_or_nonce():
+    # CHP-CORE-003 (the immutability half): the identity is a PURE function of the governance document —
+    # it carries NO wall-clock, nonce, or ordering field, so re-deriving the SAME governed fields at a
+    # different time yields the SAME identity. Immutability is structural: there is nothing volatile to
+    # rewrite, and the digest is over exactly the governed fields (plus the protocol tag) and nothing else.
+    doc = invocation_document(**_routing())
+    assert set(doc) == {"invocation_id", "action_digest", "actor", "principal", "binding",
+                        "provider", "host", "governance_context", "protocol"}
+    volatile = [k for k in doc if any(w in k.lower() for w in ("time", "_at", "nonce", "random", "created", "seq"))]
+    assert volatile == []                                             # nothing time/nonce-derived in the identity
 
 
 async def _collect_stream(host, env):

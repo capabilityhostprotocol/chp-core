@@ -132,7 +132,13 @@ from .contract import (
     validate_input,
     validate_output,
 )
-from .discovery import host_capabilities_txt, project_capabilities_txt
+from .discovery import (
+    host_capabilities_txt,
+    parse_capabilities_json,
+    parse_capabilities_txt,
+    project_capabilities_txt,
+)
+from .enforcement import EnforcementControl, assess_enforcement
 from .effect import EffectEvidence
 from .federation import MarketDescriptor, federable, source_priority_key
 from .supply import (
@@ -278,6 +284,10 @@ __all__ = [
     "history_rank",
     "project_capabilities_txt",
     "host_capabilities_txt",
+    "parse_capabilities_json",
+    "parse_capabilities_txt",
+    "EnforcementControl",
+    "assess_enforcement",
     "resolve",
     "ContractCheck",
     "check_contract",

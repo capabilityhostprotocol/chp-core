@@ -16,14 +16,32 @@ import pytest
 from chp_core import EvidenceSubject
 from chp_core.digests import invocation_digest, invocation_document
 from chp_core.ordering import order_events
+from referencing import Registry, Resource
 
 _ROOT = Path(__file__).resolve().parents[3]
 _SCHEMAS = _ROOT / "schemas"
 _VECTORS = json.loads((_ROOT / "spec/test-vectors/core-schema-vectors.json").read_text())
 
+# a $ref registry over every local schema (keyed by $id) so cross-schema refs (correlation-context, …) resolve
+_REGISTRY = Registry().with_resources([
+    (d["$id"], Resource.from_contents(d))
+    for f in _SCHEMAS.glob("*.schema.json")
+    for d in [json.loads(f.read_text())] if "$id" in d
+])
+
+# the CORE-CANDIDATE machine-contract schemas that CORE-032 requires pos+neg vectors for before promotion
+_CORE_CANDIDATE_SCHEMAS = {
+    "evidence-subject.schema.json", "evidence-record.schema.json", "effect-evidence.schema.json",
+    "invocation-envelope.schema.json", "chp-approval-grant.schema.json", "evidence-event.schema.json",
+}
+
 
 def _schema(name: str) -> dict:
     return json.loads((_SCHEMAS / name).read_text())
+
+
+def _validate(instance: object, schema_name: str) -> None:
+    jsonschema.Draft202012Validator(_schema(schema_name), registry=_REGISTRY).validate(instance)
 
 
 def test_evidence_subject_kinds_and_grants_nothing():
@@ -52,13 +70,23 @@ def test_invocation_schema_carries_both_digests_as_distinct_fields():
 
 def test_core032_positive_vectors_accepted():
     for v in _VECTORS["positive"]:
-        jsonschema.validate(v["instance"], _schema(v["schema"]))    # MUST accept
+        _validate(v["instance"], v["schema"])    # MUST accept
 
 
 def test_core032_negative_vectors_rejected():
     for v in _VECTORS["negative"]:
         with pytest.raises(jsonschema.ValidationError):
-            jsonschema.validate(v["instance"], _schema(v["schema"]))  # MUST reject (CORE-032)
+            _validate(v["instance"], v["schema"])  # MUST reject (CORE-032)
+
+
+def test_core032_covers_every_core_candidate_schema():
+    # CORE-032: EVERY core candidate schema MUST have BOTH a positive and a negative vector before promotion.
+    pos = {v["schema"] for v in _VECTORS["positive"]}
+    neg = {v["schema"] for v in _VECTORS["negative"]}
+    missing_pos = _CORE_CANDIDATE_SCHEMAS - pos
+    missing_neg = _CORE_CANDIDATE_SCHEMAS - neg
+    assert not missing_pos, f"core candidate schemas without a positive vector: {sorted(missing_pos)}"
+    assert not missing_neg, f"core candidate schemas without a negative vector: {sorted(missing_neg)}"
 
 
 def test_core032_tampered_digest_is_detectable():
