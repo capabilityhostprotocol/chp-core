@@ -12,7 +12,10 @@ Evidence policy:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -21,10 +24,57 @@ from chp_core import BaseAdapter, capability
 
 from ._backends import HFBackend, make_backend
 
+
+def _run_dir() -> str:
+    d = os.path.join(os.path.expanduser("~"), ".chp", "run")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _read_pid(path: str) -> int | None:
+    try:
+        with open(path) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _write_pid(path: str, pid: int) -> None:
+    with open(path, "w") as f:
+        f.write(str(pid))
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _dir_size(path: str) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            with contextlib.suppress(OSError):
+                total += os.path.getsize(os.path.join(root, name))
+    return total
+
+
+def _tail_log(path: str, lines: int = 8, cap: int = 1000) -> str:
+    """Last few lines of a detached-pull log. A module helper (not a capability) — the governed I/O rule
+    targets capability bodies; pidfile/log bookkeeping for a detached job is local state, like _read_pid."""
+    try:
+        with open(path) as f:  # noqa: PTH123 — local job log, not governed content
+            return "".join(f.readlines()[-lines:])[-cap:]
+    except OSError:
+        return ""
+
 _EMITS = [
     "hf_pull_started",
     "hf_pull_completed",
     "hf_pull_failed",
+    "hf_pull_status",
     "hf_pipeline_started",
     "hf_pipeline_completed",
     "hf_pipeline_failed",
@@ -175,6 +225,11 @@ class HuggingFaceAdapter(BaseAdapter):
                     "items": {"type": "string"},
                     "description": "Glob patterns to limit which files are downloaded, e.g. ['*.safetensors', '*.json']",
                 },
+                "background": {
+                    "type": "boolean",
+                    "description": "Detached, RESUMABLE download for large models (10-40GB) that exceed the "
+                                   "governed invoke window. Returns immediately {state:pulling}; poll pull_status.",
+                },
             },
             "required": ["repo_id"],
             "additionalProperties": False,
@@ -191,6 +246,10 @@ class HuggingFaceAdapter(BaseAdapter):
 
         if not self._config.allow_remote_downloads:
             raise RuntimeError(f"Remote downloads disabled (allow_remote_downloads=False). Pre-cache {repo_id} first.")
+
+        if payload.get("background"):
+            return self._pull_background(ctx, repo_id, repo_type, revision, allow_patterns,
+                                         await self._get_token(ctx))
 
         ctx.emit("hf_pull_started", {
             "repo_id": repo_id,
@@ -234,6 +293,74 @@ class HuggingFaceAdapter(BaseAdapter):
             "size_bytes": result["size_bytes"],
             "latency_ms": latency_ms,
         }
+
+    def _pull_background(self, ctx: Any, repo_id: str, repo_type: str, revision: str | None,
+                        allow_patterns: list[str] | None, token: str | None) -> dict:
+        """Spawn a detached, RESUMABLE snapshot_download into the HF cache (so the cache_path matches a normal
+        pull and a serving container that mounts the cache finds the model). Returns immediately {state:pulling};
+        poll pull_status. A separate process is the only way a multi-GB download doesn't hold the invoke open."""
+        cache_dir = self._config.resolved_cache_dir()
+        tag = repo_id.replace("/", "__")
+        pidfile = os.path.join(_run_dir(), f"hf-pull-{tag}.pid")
+        log = os.path.join(_run_dir(), f"hf-pull-{tag}.log")
+        prior = _read_pid(pidfile)
+        if prior and _alive(prior):
+            return {"state": "pulling", "repo_id": repo_id, "pid": prior, "log": log, "note": "already running"}
+        code = ("import os\n"
+                "from huggingface_hub import snapshot_download\n"
+                "p = snapshot_download(repo_id=%r, repo_type=%r, cache_dir=%r, resume_download=True%s%s)\n"
+                "print('CACHE_PATH', p)\n"
+                % (repo_id, repo_type, cache_dir,
+                   (", revision=%r" % revision) if revision else "",
+                   (", allow_patterns=%r" % allow_patterns) if allow_patterns else ""))
+        env = dict(os.environ)
+        if token:
+            env["HF_TOKEN"] = token
+        logfd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            proc = subprocess.Popen([sys.executable, "-c", code], stdout=logfd, stderr=logfd,
+                                    start_new_session=True, env=env)
+        finally:
+            os.close(logfd)
+        _write_pid(pidfile, proc.pid)
+        ctx.emit("hf_pull_started", {"repo_id": repo_id, "repo_type": repo_type, "pid": proc.pid,
+                                     "background": True}, redacted=False)
+        return {"state": "pulling", "repo_id": repo_id, "pid": proc.pid, "log": log,
+                "note": "detached resumable download; poll chp.adapters.huggingface.pull_status"}
+
+    @capability(
+        id="chp.adapters.huggingface.pull_status",
+        version="1.0.0",
+        description="Poll a background hf.pull: whether the detached download for a repo is still running, how "
+                    "much has landed on disk, and a tail of its log. Low-risk introspection.",
+        category="ai",
+        risk="low",
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "repo_id": {"type": "string", "description": "The repo passed to hf.pull(background=true)."},
+            },
+            "required": ["repo_id"],
+            "additionalProperties": False,
+        },
+    )
+    async def pull_status(self, ctx: Any, payload: dict) -> dict:
+        repo_id = payload["repo_id"]
+        tag = repo_id.replace("/", "__")
+        pidfile = os.path.join(_run_dir(), f"hf-pull-{tag}.pid")
+        log = os.path.join(_run_dir(), f"hf-pull-{tag}.log")
+        pid = _read_pid(pidfile)
+        running = bool(pid and _alive(pid))
+        cache_dir = self._config.resolved_cache_dir()
+        model_dir = os.path.join(cache_dir, f"models--{tag}")
+        size_bytes = _dir_size(model_dir) if os.path.isdir(model_dir) else 0
+        tail = _tail_log(log)
+        # complete when the process finished AND wrote a resolved CACHE_PATH line; else stopped/unknown/pulling
+        state = "pulling" if running else ("complete" if "CACHE_PATH" in tail else ("stopped" if pid else "unknown"))
+        ctx.emit("hf_pull_status", {"repo_id": repo_id, "state": state, "size_bytes": size_bytes}, redacted=False)
+        return {"repo_id": repo_id, "state": state, "running": running, "pid": pid,
+                "size_bytes": size_bytes, "size_gb": round(size_bytes / 1e9, 2), "log_tail": tail}
 
     # ------------------------------------------------------------------
     # run_pipeline
