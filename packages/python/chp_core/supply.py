@@ -112,6 +112,37 @@ class ProviderProfile:
         return data
 
 
+def offer_validity_state(offer: object, at: str | None = None) -> str:
+    """The validity state of an offer at time *at* (ISO-8601 Z; default now):
+    ``current`` | ``expired`` | ``not_yet_valid`` | ``unbounded``.
+
+    Reads the offer's ``validity`` {valid_from?, valid_until?}. An offer with no
+    validity bounds is ``unbounded`` — honest about carrying no lease claim.
+    Lexicographic comparison is exact for ISO-8601 UTC timestamps."""
+    from .types import utc_now
+    if hasattr(offer, "validity"):
+        validity = offer.validity or {}
+    elif isinstance(offer, dict):
+        validity = offer.get("validity") or {}
+    else:
+        validity = {}
+    if not validity.get("valid_from") and not validity.get("valid_until"):
+        return "unbounded"
+    now = at or utc_now()
+    if validity.get("valid_from") and now < validity["valid_from"]:
+        return "not_yet_valid"
+    if validity.get("valid_until") and now >= validity["valid_until"]:
+        return "expired"
+    return "current"
+
+
+def current_offers(offers: list, at: str | None = None) -> list:
+    """Filter offers to those resolvable NOW: expired or not-yet-valid supply
+    MUST NOT be resolved as current supply — staleness is an eligibility fact,
+    never a ranking signal."""
+    return [o for o in offers if offer_validity_state(o, at) in ("current", "unbounded")]
+
+
 @dataclass(slots=True)
 class CapabilityOffer:
     """Packages a CapabilityBinding into a selectable offer (proposal 0048; CHP-SUP-005). Offers

@@ -50,9 +50,9 @@ def _cap_events(store):
 # --------------------------------------------------------------------------
 
 class TestShaping:
-    def test_one_capability(self):
+    def test_capabilities(self):
         ids = {c.descriptor.id for c in HttpAdapter().capabilities()}
-        assert ids == {"chp.adapters.http.request"}
+        assert ids == {"chp.adapters.http.request", "chp.adapters.http.stream"}
 
     def test_medium_risk(self):
         caps = {c.descriptor.id: c.descriptor for c in HttpAdapter().capabilities()}
@@ -392,3 +392,60 @@ class TestTokenAccounting:
         p = http_responses[0]["payload"]
         assert p["model"] == "req-body-model"
         assert p["prompt_tokens"] == 8
+
+
+# --------------------------------------------------------------------------
+# Streaming (chp.adapters.http.stream)
+# --------------------------------------------------------------------------
+
+def _sse_transport(body: str, status: int = 200):
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, content=body.encode(),
+                              headers={"content-type": "text/event-stream"})
+    return httpx.MockTransport(handler)
+
+
+_SSE = (
+    'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'
+    'data: {"choices":[{"delta":{"content":" world"}}]}\n\n'
+    'data: [DONE]\n\n'
+)
+
+
+def test_stream_sse_collects_and_aggregates():
+    host = _make_host(HttpConfig(transport=_sse_transport(_SSE)))
+    r = host.invoke("chp.adapters.http.stream", {"url": "https://api.x/v1/chat/completions", "json_body": {"stream": True}})
+    assert r.outcome == "success"
+    assert r.data["event_count"] == 2            # [DONE] ends the stream, not counted
+    assert r.data["text"] == "Hello world"        # aggregated across delta.content
+    assert r.data["status_code"] == 200
+
+
+def test_stream_anthropic_shape_aggregates():
+    body = ('data: {"type":"content_block_delta","delta":{"text":"claude "}}\n\n'
+            'data: {"type":"content_block_delta","delta":{"text":"here"}}\n\n'
+            'data: [DONE]\n\n')
+    host = _make_host(HttpConfig(transport=_sse_transport(body)))
+    r = host.invoke("chp.adapters.http.stream", {"url": "https://api.x/v1/messages", "json_body": {"stream": True}})
+    assert r.outcome == "success" and r.data["text"] == "claude here"
+
+
+def test_stream_lines_mode_returns_raw_lines():
+    host = _make_host(HttpConfig(transport=_sse_transport("a\nb\nc\n")))
+    r = host.invoke("chp.adapters.http.stream", {"url": "https://api.x/feed", "mode": "lines"})
+    assert r.outcome == "success" and r.data["events"] == ["a", "b", "c"]
+
+
+def test_stream_respects_url_allowlist():
+    host = _make_host(HttpConfig(allowed_origins=["https://ok.x"], transport=_sse_transport(_SSE)))
+    r = host.invoke("chp.adapters.http.stream", {"url": "https://evil.x/v1/chat/completions"})
+    assert r.outcome != "success"                 # origin not allowed → refused before any request
+
+
+def test_stream_does_not_record_event_content_in_evidence():
+    store = SQLiteEvidenceStore(":memory:")
+    host = LocalCapabilityHost(store=store)
+    register_adapter(host, HttpAdapter(HttpConfig(transport=_sse_transport(_SSE))))
+    host.invoke("chp.adapters.http.stream", {"url": "https://api.x/v1/chat/completions"})
+    blob = json.dumps([e["payload"] for e in store.all()])
+    assert "Hello world" not in blob and "Hello" not in blob   # only counts in evidence, never content

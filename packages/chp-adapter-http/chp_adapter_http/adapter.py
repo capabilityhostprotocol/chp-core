@@ -38,9 +38,34 @@ _METADATA_HOSTS = frozenset({
     "metadata",
 })
 
-_EMITS = ["http_request", "http_response", "http_error", "http_circuit_open"]
+_EMITS = ["http_request", "http_response", "http_error", "http_circuit_open", "http_stream", "http_stream_done"]
 
 _ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
+
+def _aggregate_stream_text(events: list[Any]) -> str:
+    """Best-effort assemble streamed text from parsed SSE events across the common wire shapes: OpenAI chat
+    (``choices[].delta.content``), OpenAI completions (``choices[].text``), and Anthropic
+    (``content_block_delta.delta.text``). Unknown shapes contribute nothing — the caller still has ``events``."""
+    parts: list[str] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        # Anthropic streaming
+        if ev.get("type") == "content_block_delta":
+            t = (ev.get("delta") or {}).get("text")
+            if t:
+                parts.append(t)
+            continue
+        for choice in ev.get("choices") or []:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or {}
+            if isinstance(delta, dict) and delta.get("content"):
+                parts.append(delta["content"])
+            elif choice.get("text"):
+                parts.append(choice["text"])
+    return "".join(parts)
 
 
 @dataclass
@@ -328,3 +353,112 @@ class HttpAdapter(BaseAdapter):
             "url": str(resp.url),
             "duration_ms": duration_ms,
         }
+
+    @capability(
+        id="chp.adapters.http.stream",
+        version="1.0.0",
+        description=(
+            "Stream an HTTP response (Server-Sent Events or chunked) and COLLECT it: the server streams "
+            "(e.g. OpenAI/Anthropic stream:true) and this returns the parsed events + a best-effort aggregated "
+            "text once complete. Governed single-response — enables streaming inference through the mesh "
+            "without a raw socket. Same safety as `request`: URL allowlist, circuit breaker, and neither header "
+            "values nor event content are recorded in evidence (only counts)."
+        ),
+        category="execution",
+        risk="medium",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "method": {"type": "string", "enum": list(_ALLOWED_METHODS), "description": "HTTP method (default POST)."},
+                "url": {"type": "string", "description": "Full URL to request."},
+                "headers": {"type": "object", "additionalProperties": {"type": "string"},
+                            "description": "Additional request headers."},
+                "body": {"type": "string", "description": "Plain-text request body."},
+                "json_body": {"description": "JSON request body (serialized as application/json)."},
+                "params": {"type": "object", "additionalProperties": {"type": "string"}, "description": "URL query parameters."},
+                "timeout": {"type": "number", "minimum": 0.1, "description": "Per-request timeout override (seconds)."},
+                "verify": {"type": "boolean", "description": "Verify TLS certs (default true)."},
+                "mode": {"type": "string", "enum": ["sse", "lines"], "default": "sse",
+                         "description": "'sse' parses `data:` lines as JSON (stops on [DONE]); 'lines' returns raw lines."},
+                "max_events": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 100000,
+                               "description": "Cap on collected events (guards against an unbounded stream)."},
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["http", "client", "stream"],
+    )
+    async def stream(self, ctx: Any, payload: dict) -> dict:
+        method = (payload.get("method") or "POST").upper()
+        url = payload["url"]
+        mode = payload.get("mode") or "sse"
+        max_events = int(payload.get("max_events") or 100000)
+        body = payload.get("body")
+        json_body = payload.get("json_body")
+        params = payload.get("params") or {}
+        timeout = float(payload.get("timeout") or self._config.timeout)
+        verify = payload.get("verify", True)
+
+        try:
+            self._config._check_url(url)
+        except PermissionError as exc:
+            ctx.emit("http_error", {"reason": "url_not_allowed", "url": url, "error": str(exc)}, redacted=False)
+            raise
+
+        merged_headers = {**self._config.default_headers, **(payload.get("headers") or {})}
+        origin = self._origin(url)
+        ctx.emit("http_stream", {"method": method, "url": url, "mode": mode,
+                                 "header_keys": sorted(merged_headers.keys()),
+                                 "has_body": body is not None or json_body is not None}, redacted=False)
+        if self._circuit_is_open(origin):
+            ctx.emit("http_circuit_open", {"method": method, "url": url, "origin": origin}, redacted=False)
+            raise RuntimeError(f"circuit open for {origin!r} — failing fast (recent transport failures)")
+
+        events: list[Any] = []
+        raw_lines: list[str] = []
+        status_code = None
+        truncated = False
+        total_bytes = 0
+        t0 = _time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=timeout, transport=self._config.transport, verify=verify) as client:
+                async with client.stream(method, url, headers=merged_headers or None,
+                                         content=body.encode() if body else None,
+                                         json=json_body, params=params or None) as resp:
+                    status_code = resp.status_code
+                    async for line in resp.aiter_lines():
+                        total_bytes += len(line)
+                        if total_bytes > self._config.max_response_bytes or len(events) >= max_events:
+                            truncated = True
+                            break
+                        if mode == "lines":
+                            if line:
+                                raw_lines.append(line)
+                            continue
+                        # SSE: only `data:` frames carry content; [DONE] ends the stream.
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            import json as _json
+                            events.append(_json.loads(data))
+                        except Exception:  # noqa: BLE001 — a non-JSON data frame is kept as raw text
+                            events.append(data)
+            self._circuit_record(origin, success=True)
+        except httpx.HTTPError as exc:
+            self._circuit_record(origin, success=False)
+            ctx.emit("http_error", {"method": method, "url": url, "reason": type(exc).__name__,
+                                    "error": str(exc)[:200]}, redacted=False)
+            raise
+
+        collected = raw_lines if mode == "lines" else events
+        text = _aggregate_stream_text(events) if mode == "sse" else "".join(raw_lines)
+        duration_ms = int((_time.monotonic() - t0) * 1000)
+        ctx.emit("http_stream_done", {"method": method, "url": url, "status_code": status_code,
+                                      "event_count": len(collected), "truncated": truncated,
+                                      "duration_ms": duration_ms}, redacted=False)
+        return {"status_code": status_code, "events": collected, "event_count": len(collected),
+                "text": text, "truncated": truncated, "duration_ms": duration_ms}

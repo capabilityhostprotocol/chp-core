@@ -366,6 +366,36 @@ class LocalCapabilityHost:
             )
         return descriptor
 
+    def _matching_uris(self, capability_id: str) -> list[str]:
+        # Same addressing as _resolve: a full "id:version" URI targets one
+        # registration; a bare id targets every registered version.
+        if capability_id in self._capabilities:
+            return [capability_id]
+        return [uri for uri in self._capabilities if uri.startswith(f"{capability_id}:")]
+
+    def set_enabled(self, capability_id: str, enabled: bool) -> int:
+        """Enable/disable registration(s) — supply withdrawal without deleting the
+        definition. A disabled capability is denied at Gate 3 (capability_disabled);
+        admitted/in-flight work, recorded results, and evidence are untouched.
+        Accepts a bare id (all versions) or a full capability_uri. Returns the
+        number of registrations changed (0 = unknown capability)."""
+        with self._registry_lock:
+            uris = self._matching_uris(capability_id)
+            for uri in uris:
+                self._capabilities[uri].enabled = enabled
+            return len(uris)
+
+    def unregister(self, capability_id: str) -> int:
+        """Remove registration(s) entirely — retirement. Future invocations deny
+        capability_not_found; the evidence chain and replay of past invocations
+        remain intact (retirement never rewrites execution truth). Accepts a bare
+        id or full capability_uri. Returns the number of registrations removed."""
+        with self._registry_lock:
+            uris = self._matching_uris(capability_id)
+            for uri in uris:
+                del self._capabilities[uri]
+            return len(uris)
+
     def descriptor(self) -> HostDescriptor:
         with self._registry_lock:
             return HostDescriptor(

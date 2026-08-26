@@ -30,20 +30,50 @@ class AdapterBuildResult:
         return "\n".join(lines)
 
 
+def _import(ref: str):
+    """Import a ``module:attr`` (or ``module.attr``) reference to a class/callable."""
+    mod, _, attr = ref.partition(":")
+    if not attr:
+        mod, _, attr = ref.rpartition(".")
+    import importlib
+    return getattr(importlib.import_module(mod), attr)
+
+
+def _instantiate(adapter_cls, cfg: dict | None):
+    """No-arg by default; config-driven when *cfg* names a ``config_class``.
+
+    ``cfg`` = ``{"config_class": "mod:Cls", "config": {...}}`` — the generic core
+    of chp-home's provisioning: build ``config_class(**config)`` and pass it to
+    the adapter. Per-node resolution (``{scope}`` substitution, secret-refs) is a
+    product concern that resolves ``config`` BEFORE handing it here.
+    """
+    if not cfg or "config_class" not in cfg:
+        return adapter_cls()
+    config_cls = _import(cfg["config_class"])
+    return adapter_cls(config_cls(**(cfg.get("config") or {})))
+
+
 def build_adapter_host(
     adapters: list[str],
     *,
     host_id: str = "chp-host",
     store_path: str | Path = ".chp/host.sqlite",
     metadata: dict | None = None,
+    configs: dict[str, dict] | None = None,
 ) -> tuple[LocalCapabilityHost, AdapterBuildResult]:
     """Build a ``LocalCapabilityHost`` serving the named installed adapters.
 
     *adapters* are entry-point names from the ``chp.adapters`` group. Unknown
     names and adapters that fail to instantiate are recorded in the result's
     ``skipped`` map rather than raising, so the host always comes up.
+
+    *configs* (optional) provisions CONFIGURED adapters — ``{name: {"config_class":
+    "mod:Cls", "config": {...}}}`` — so a host can serve hardware/backend-specific
+    adapters (filesystem roots, inference endpoints, ...) exactly as chp-home does;
+    adapters without a config entry are instantiated no-arg (unchanged).
     """
     installed = discover_adapters()
+    configs = configs or {}
     host = LocalCapabilityHost(
         host_id,
         store=SQLiteEvidenceStore(str(store_path)),
@@ -61,7 +91,7 @@ def build_adapter_host(
             )
             continue
         try:
-            register_adapter(host, adapter_cls())
+            register_adapter(host, _instantiate(adapter_cls, configs.get(name)))
             result.registered.append(name)
         except Exception as exc:  # one broken adapter must not break the host
             result.skipped[name] = f"error: {exc}"

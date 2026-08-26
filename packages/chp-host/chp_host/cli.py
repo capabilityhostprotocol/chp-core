@@ -151,7 +151,7 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
         from .mcp_server import run_mcp_server
     except ImportError as exc:
         print(f"ERROR: MCP support requires 'mcp' package: {exc}", file=sys.stderr)
-        print("Install it with: pip install 'mcp>=1.0'", file=sys.stderr)
+        print("Install it with: pip install 'chp-host[mcp]'", file=sys.stderr)
         return 1
 
     # Environment mode — route through MultiHostRouter over HTTP transports.

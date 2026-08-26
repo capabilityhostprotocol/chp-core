@@ -499,6 +499,14 @@
       "publisher_key_id": "d20d8b42b94c3375"
     },
     {
+      "id": "chp-adapter-freetoken",
+      "pypi": "chp-adapter-freetoken",
+      "category": "ai",
+      "description": "FreeToken edge-native MoE serving engine (OpenAI-compatible) as governed capabilities",
+      "status": "experimental",
+      "tier": 2
+    },
+    {
       "id": "chp-adapter-nats",
       "pypi": "chp-adapter-nats",
       "category": "network",
