@@ -63,15 +63,14 @@ _HTTP_CAP = "chp.adapters.http.request"
 
 def _service_safe_env() -> dict[str, str]:
     """Child env safe under launchd/systemd: ensure HOME (HF cache + logs) and a
-    full PATH. Mirrors the host adapter's helper."""
-    import pwd
+    full PATH. Mirrors the host adapter's helper. Cross-platform: expanduser
+    resolves ~ via HOME/USERPROFILE — no `pwd` (absent on Windows)."""
     env = dict(os.environ)
     if not env.get("HOME"):
-        try:
-            env["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
-        except Exception:
-            env["HOME"] = "/tmp"
-    env["PATH"] = (env.get("PATH", "") + ":/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin:/opt/homebrew/bin").strip(":")
+        home = os.path.expanduser("~")
+        env["HOME"] = home if home and home != "~" else (env.get("USERPROFILE") or os.getcwd())
+    if os.name != "nt":
+        env["PATH"] = (env.get("PATH", "") + ":/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin:/opt/homebrew/bin").strip(":")
     return env
 
 

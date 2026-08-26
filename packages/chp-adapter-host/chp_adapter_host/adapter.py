@@ -48,18 +48,16 @@ def _service_safe_env() -> dict[str, str]:
 
     Ensures HOME (the service env often lacks it, which breaks pip's cache and
     the ~/.chp log path) and a full PATH including /usr/sbin (where ioreg/sysctl
-    and other tools live)."""
-    import pwd
+    and other tools live). Cross-platform: os.path.expanduser resolves ~ via HOME
+    on POSIX and USERPROFILE on Windows — no `pwd` (Unix-only, absent on Windows,
+    which broke adapter provisioning to Windows nodes)."""
     env = dict(os.environ)
-    home = env.get("HOME")
-    if not home:
-        try:
-            home = pwd.getpwuid(os.getuid()).pw_dir
-        except Exception:
-            home = "/tmp"
-        env["HOME"] = home
-    extra = "/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin:/opt/homebrew/bin"
-    env["PATH"] = (env.get("PATH", "") + ":" + extra).strip(":")
+    if not env.get("HOME"):
+        home = os.path.expanduser("~")
+        env["HOME"] = home if home and home != "~" else (env.get("USERPROFILE") or os.getcwd())
+    if os.name != "nt":   # the extra Unix tool dirs (and ':' separator) are meaningless on Windows
+        extra = "/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/bin:/opt/homebrew/bin"
+        env["PATH"] = (env.get("PATH", "") + ":" + extra).strip(":")
     return env
 
 
