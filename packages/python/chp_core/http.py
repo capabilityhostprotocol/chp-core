@@ -114,8 +114,12 @@ class CapabilityHostHTTPServer(ThreadingHTTPServer):
     request_queue_size = 128
 
     def __init__(self, server_address: tuple[str, int], host: Any,
-                 tls: dict | None = None) -> None:
-        super().__init__(server_address, CapabilityHostRequestHandler)
+                 tls: dict | None = None,
+                 handler_class: type | None = None) -> None:
+        # handler_class (DEC-SRV-002): a server distribution (chp-server) may extend
+        # the endpoint surface by subclassing CapabilityHostRequestHandler; the
+        # protocol surface itself stays owned here.
+        super().__init__(server_address, handler_class or CapabilityHostRequestHandler)
         self.chp_host = host
         # TLS / mutual-TLS (§5, proposal 0031). When a server cert is configured,
         # wrap the LISTENING socket so every accepted connection is TLS; a `cafile`
@@ -470,6 +474,9 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
             return
         if not self._check_auth():
             return
+        if path.startswith("/artifacts/"):
+            self._get_artifact(unquote(path.removeprefix("/artifacts/")))
+            return
         if path == "/host":
             # Authorized discovery (proposal 0035): filter the catalog to what the
             # verified caller may invoke. _check_auth (above) set self._caller.
@@ -744,6 +751,10 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if not self._rate_ok():
             return
         path = urlparse(self.path).path
+        if path == "/artifacts":
+            # Data plane: raw bytes, never JSON — branch before the JSON parse.
+            self._post_artifact()
+            return
         try:
             body = self._read_json()
             # Trust boundary (proposal 0040): every POST route expects a JSON object.
@@ -1201,6 +1212,90 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
+    def _caller_in_audience(self, audience: list[str]) -> bool:
+        # The verified caller (or any entry of its scope) must match an audience
+        # pattern (exact or trailing-*). No verified caller against a bounded
+        # audience fails closed — an audience was explicitly asked for.
+        caller = getattr(self, "_caller", None)
+        if caller is not None and _scope_allows(audience, caller):
+            return True
+        scope = getattr(self, "_caller_scope", None) or []
+        return any(_scope_allows(audience, s.rstrip("*")) or s in audience for s in scope)
+
+    def _artifact_store(self):
+        # Feature truth: the data plane exists only when the served host carries
+        # an artifact store (host.artifacts). Absent -> unsupported, never a no-op.
+        return getattr(self.server.chp_host, "artifacts", None)
+
+    def _get_artifact(self, artifact_id: str) -> None:
+        store = self._artifact_store()
+        if store is None:
+            self._write_error(HTTPStatus.NOT_FOUND, "artifact_plane_unsupported",
+                              "this host has no artifact store attached")
+            return
+        from .artifacts import ArtifactIntegrityError
+        # DATA-003: access is authorized independently from possessing the id.
+        # An artifact may declare an audience (caller-id patterns); the verified
+        # caller must match it. Absent audience = open to any authorized caller
+        # (this route already passed _check_auth). Checked BEFORE the bytes are
+        # read/served. ponytail: 403≠404 leaks existence to an authed-but-out-of-
+        # -audience caller; a deployment needing existence-hiding maps both at a
+        # proxy — the protocol default is the clearer access signal.
+        try:
+            audience = store.access_of(artifact_id)
+        except FileNotFoundError:
+            self._write_error(HTTPStatus.NOT_FOUND, "artifact_not_found",
+                              f"unknown artifact: {artifact_id!r}")
+            return
+        except ValueError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "artifact_id_invalid", str(exc))
+            return
+        if audience and not self._caller_in_audience(audience):
+            self._write_error(HTTPStatus.FORBIDDEN, "artifact_access_denied",
+                              "caller is not in this artifact's audience")
+            return
+        try:
+            data, media_type = store.get(artifact_id)
+        except FileNotFoundError:
+            self._write_error(HTTPStatus.NOT_FOUND, "artifact_not_found",
+                              f"unknown artifact: {artifact_id!r}")
+            return
+        except ValueError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "artifact_id_invalid", str(exc))
+            return
+        except ArtifactIntegrityError as exc:
+            # Integrity failure is a REFUSAL, never wrong bytes (artifact-substitution case).
+            self._write_error(HTTPStatus.CONFLICT, "artifact_integrity_failed", str(exc))
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", media_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _post_artifact(self) -> None:
+        store = self._artifact_store()
+        if store is None:
+            self._write_error(HTTPStatus.NOT_FOUND, "artifact_plane_unsupported",
+                              "this host has no artifact store attached")
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > self._MAX_BODY_BYTES:
+            # ponytail: transfer bounded by the body cap; chunked/streaming
+            # upload is the follow-up when larger artifacts are needed.
+            self._write_error(HTTPStatus.BAD_REQUEST, "artifact_body_invalid",
+                              f"artifact body must be 1..{self._MAX_BODY_BYTES} bytes "
+                              f"(Content-Length={length})")
+            return
+        data = self.rfile.read(length)
+        media_type = self.headers.get("Content-Type") or "application/octet-stream"
+        # Optional access allowlist at upload (DATA-003): comma-separated caller-id
+        # patterns. Absent header = open to any authorized caller.
+        aud_hdr = self.headers.get("X-CHP-Artifact-Audience")
+        audience = [a.strip() for a in aud_hdr.split(",") if a.strip()] if aud_hdr else None
+        ref = store.put(data, media_type=media_type, audience=audience)
+        self._write_json(ref.to_dict(), status=HTTPStatus.CREATED)
+
     def _read_json(self) -> JSON:
         length = int(self.headers.get("Content-Length", "0"))
         if length == 0:
@@ -1270,6 +1365,7 @@ def create_http_server(
     certfile: str | None = None,
     keyfile: str | None = None,
     cafile: str | None = None,
+    handler_class: type | None = None,
 ) -> CapabilityHostHTTPServer:
     """Create, but do not start, a CHP HTTP server.
 
@@ -1298,7 +1394,8 @@ def create_http_server(
 
     tls = ({"certfile": certfile, "keyfile": keyfile, "cafile": cafile}
            if certfile else None)
-    server = CapabilityHostHTTPServer((bind, port), host, tls=tls)
+    server = CapabilityHostHTTPServer((bind, port), host, tls=tls,
+                                      handler_class=handler_class)
     _LIVE_SERVERS.append(server)
     return server
 

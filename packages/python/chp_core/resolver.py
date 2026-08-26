@@ -87,6 +87,14 @@ def offer_to_candidate(offer: object, *, satisfied_hard: list[str], score: int =
     is DESCRIPTIVE: which hard constraints the offer supports is the CALLER's evaluation (against
     the offer's EvidenceContract + verified assertions), NEVER a conclusion baked into the offer
     (CHP-SUP-002/007). No score compensates for a missing hard constraint at resolve() time."""
+    # Validity is an ELIGIBILITY fact (same law as the hard filter): expired or
+    # not-yet-valid supply MUST NOT be resolved as current supply, so it never
+    # becomes a candidate at all — refusal, not down-ranking.
+    from .supply import offer_validity_state
+    state = offer_validity_state(offer)
+    if state in ("expired", "not_yet_valid"):
+        oid = getattr(offer, "id", None) if not isinstance(offer, dict) else offer.get("id")
+        raise ValueError(f"offer {oid!r} is {state} and cannot be resolved as current supply")
     binding = offer.binding if hasattr(offer, "binding") else offer["binding"]  # type: ignore[index]
     # Pin the exact offer id+version into the candidate (CHP-SUP-006) so the resolution chain records
     # WHICH offer version was selected — a bumped-version offer is a distinct, auditable selection.

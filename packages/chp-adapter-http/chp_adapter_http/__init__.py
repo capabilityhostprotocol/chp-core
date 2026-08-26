@@ -1,9 +1,12 @@
 """chp-adapter-http — governed HTTP client as a CHP capability.
 
-One capability:
+Capabilities:
 
 * ``request`` — make an HTTP request with optional URL origin allowlist.
   Request header values and response body absent from evidence.
+* ``stream`` — stream an SSE/chunked response and collect it (server streams,
+  the cap returns the parsed events + aggregated text). Same safety invariants;
+  event content absent from evidence.
 
 Usage::
 

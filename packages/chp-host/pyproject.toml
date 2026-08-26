@@ -25,7 +25,19 @@ classifiers = [
 ]
 # chp-host tracks chp-core's protocol surface (the router signs task bundles and
 # resolves per-host keys — APIs introduced in 0.10.0). Bumped in lockstep.
-dependencies = ["chp-core>=0.10.0", "mcp>=1.0"]
+# mcp is an extra (DEC-SRV-005): imported only by `chp-host mcp` (mcp_server.py),
+# so a mandatory dep would force MCP onto every attachment consumer (PKG-009).
+dependencies = ["chp-core>=0.10.0"]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+
+# chp-server attachment provider (docs 35/42): loaded only when a chp-server
+# config lists it — installed code is not enabled authority.
+[project.entry-points."chp_server.ports"]
+adapter_host = "chp_host.server_port:AdapterHostPort"
+router_gateway = "chp_host.server_port:RouterPort"
+mcp_export = "chp_host.server_port:McpExportPort"
 
 [project.urls]
 Homepage = "https://github.com/capabilityhostprotocol/chp-core"

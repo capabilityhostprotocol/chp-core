@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/artifact-ref.schema.json",
+  "title": "ArtifactRef",
+  "description": "Control-plane reference to data-plane content. Identity IS the content digest: a substituted or corrupted artifact does not match its ref, and stores MUST re-verify the digest on read. Large data flows through the /artifacts data-plane endpoints, never inline through the control plane.",
+  "type": "object",
+  "required": ["artifact_id"],
+  "additionalProperties": false,
+  "properties": {
+    "artifact_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "media_type": {"type": "string", "minLength": 1},
+    "size_bytes": {"type": "integer", "minimum": 0},
+    "created_at": {"type": "string"}
+  }
+}

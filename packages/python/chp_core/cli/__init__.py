@@ -45,6 +45,7 @@ from ._core import (
 )
 from ._host import (
     cmd_host_verify,
+    cmd_serve,
     cmd_serve_http,
 )
 from ._hooks import (
@@ -171,9 +172,15 @@ docs: https://docs.capabilityhostprotocol.com
 def main(argv: list[str] | None = None) -> int:
     import sys
     parser = build_parser()
-    if not (argv if argv is not None else sys.argv[1:]):
+    argv = argv if argv is not None else sys.argv[1:]
+    if not argv:
         parser.print_help()
         return 0
+    if argv[0] == "serve":
+        # Forward before argparse: REMAINDER cannot capture leading option
+        # tokens (`chp serve --port N`), and these flags belong to chp-server.
+        from ._host import forward_serve
+        return forward_serve(argv[1:])
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
 
@@ -196,6 +203,12 @@ def build_parser() -> argparse.ArgumentParser:
     host_verify.add_argument("--store-dir", default=None, metavar="DIR",
                              help="If provided, also verify a real SQLite store in this directory.")
     host_verify.set_defaults(func=cmd_host_verify)
+
+    serve_p = subcommands.add_parser(
+        "serve", help="Run the CHP server distribution (requires: pip install chp-server).")
+    serve_p.add_argument("server_args", nargs=argparse.REMAINDER,
+                         help="Arguments forwarded to chp-server.")
+    serve_p.set_defaults(func=cmd_serve)
 
     serve_http_p = subcommands.add_parser("serve-http", help="Serve a host loaded from an application module.")
     serve_http_p.add_argument("--module", required=True, metavar="MODULE:FACTORY",

@@ -109,3 +109,22 @@ def cmd_serve_http(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("\nStopped CHP host.")
     return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    return forward_serve(list(getattr(args, "server_args", []) or []))
+
+
+def forward_serve(server_args: list[str]) -> int:
+    # `chp serve` belongs to the server distribution (DEC-SRV-003): core only
+    # forwards, so the dependency direction stays chp-server -> chp-core.
+    try:
+        from chp_server.cli import main as server_main
+    except ImportError:
+        print(
+            "ERROR: `chp serve` requires the chp-server package.\n"
+            "       Install it with:  pip install chp-server",
+            file=sys.stderr,
+        )
+        return 2
+    return server_main(["serve", *server_args])

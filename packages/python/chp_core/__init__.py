@@ -86,6 +86,14 @@ from .agent_interface import (
     capability_to_openai_tool,
     is_render_capability,
 )
+from .agent import (
+    DEFAULT_ROLE_RULES,
+    ModelCard,
+    ModelCatalog,
+    Skill,
+    rank_by_cosine,
+    resolve_model,
+)
 from .safety import RuleBasedSafetyEvaluator, register_safety_capability
 from .compliance import SQLiteComplianceManager, register_compliance_capability
 from .incident import InMemoryIncidentManager, SQLiteIncidentManager, register_incident_capability
@@ -142,11 +150,14 @@ from .enforcement import EnforcementControl, assess_enforcement, host_enforcemen
 from .mcp_bridge import capabilities_to_mcp_tools, serve_mcp
 from .effect import EffectEvidence
 from .federation import MarketDescriptor, federable, source_priority_key
+from .artifacts import ArtifactIntegrityError, ArtifactRef, ArtifactStore, artifact_id_for
 from .supply import (
     PROVENANCE,
     CapabilityOffer,
     EvidenceContract,
     ProviderProfile,
+    current_offers,
+    offer_validity_state,
     provenance_of,
     provenanced,
 )
@@ -273,6 +284,10 @@ __all__ = [
     "CapabilityStatus",
     "AdmissionDecision",
     "Assertion",
+    "ArtifactIntegrityError",
+    "ArtifactRef",
+    "ArtifactStore",
+    "artifact_id_for",
     "CapabilityBinding",
     "CapabilityDefinition",
     "CapabilityOffer",
@@ -319,6 +334,8 @@ __all__ = [
     "PROVENANCE",
     "provenanced",
     "provenance_of",
+    "current_offers",
+    "offer_validity_state",
     "ReadinessAssessment",
     "VerificationPlan",
     "plan_item",
@@ -484,6 +501,12 @@ __all__ = [
     "capability_to_component",
     "capabilities_to_component_list",
     "is_render_capability",
+    "ModelCard",
+    "ModelCatalog",
+    "resolve_model",
+    "DEFAULT_ROLE_RULES",
+    "Skill",
+    "rank_by_cosine",
     "wrap_tool_call",
     "RuleBasedSafetyEvaluator",
     "register_safety_capability",

@@ -200,12 +200,18 @@ def _format_result(
     data: Any,
     error: Any,
     evidence_ids: list[str] | None = None,
+    denial: Any = None,
 ) -> str:
     payload: dict[str, Any] = {"outcome": outcome}
     if data is not None:
         payload["data"] = data
     if error:
         payload["error"] = error
+    if denial is not None:
+        # Semantic-loss guard (CHP-SRV-MCP-003/006): a governed denial's code,
+        # message, and retryability are CHP's core semantics — the MCP client
+        # must see the inspectable cause, never a bare {"outcome": "denied"}.
+        payload["denial"] = denial.to_dict() if hasattr(denial, "to_dict") else denial
     if evidence_ids:
         payload["_evidence_ids"] = evidence_ids
     text = json.dumps(payload, indent=2, default=str)
@@ -319,6 +325,7 @@ async def run_mcp_server(
             result.data,
             getattr(result, "error", None),
             evidence_ids,
+            denial=getattr(result, "denial", None),
         )
         is_err = result.outcome in ("failure", "denied")
         return CallToolResult(
