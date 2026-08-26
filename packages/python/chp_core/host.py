@@ -300,6 +300,7 @@ class LocalCapabilityHost:
         policy: PolicyConfig | None = None,
         safety_evaluator: Any = None,
         strict_output_schema: bool = False,
+        clock: Callable[[], str] | None = None,
     ) -> None:
         self.host_id = host_id
         # When True, a result violating a capability's output_schema is DENIED
@@ -319,6 +320,16 @@ class LocalCapabilityHost:
         # is assessed (assessment events emitted as evidence) and its guardrails
         # enforced. None (default) = no safety gate — opt-in, like policy.
         self.safety_evaluator = safety_evaluator
+        # AGY-008 (explicit clock): time-dependent DECISIONS — mandate-validity and
+        # approval-grant-validity windows — consult this decision clock rather than the
+        # wall clock directly, so those decisions are testable and can use an explicit
+        # time context. None = wall-clock (utc_now). Recording timestamps (when something
+        # actually happened) intentionally stay wall-clock.
+        self._clock = clock
+
+    def _decision_now(self) -> str:
+        """The explicit decision clock (RFC 3339) for time-dependent decisions (AGY-008); wall-clock by default."""
+        return self._clock() if self._clock is not None else utc_now()
 
     def register(
         self,
@@ -769,7 +780,7 @@ class LocalCapabilityHost:
             subj = envelope.subject if isinstance(envelope.subject, dict) else {}
             verified_caller = subj.get("id") if subj.get("verified") else None
             mv = verify_mandate(
-                envelope.mandate, at_time=utc_now(),
+                envelope.mandate, at_time=self._decision_now(),
                 delegate_id=verified_caller,
                 revocations=load_mandate_revocations())
             if not mv.valid:
@@ -1678,7 +1689,7 @@ class LocalCapabilityHost:
         approvers = {k.strip() for k in pinned.split(",") if k.strip()} if pinned else None
         if approvers is not None and grant.get("approver") not in approvers:
             return False
-        v = verify_approval_grant(grant, at_time=utc_now())
+        v = verify_approval_grant(grant, at_time=self._decision_now())
         if not v.valid or grant.get("decision") != "granted":
             return False
         if grant.get("invocation_id") != envelope.invocation_id:
