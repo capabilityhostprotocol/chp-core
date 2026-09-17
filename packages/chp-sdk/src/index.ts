@@ -95,6 +95,8 @@ export {
 export {
   verifyBundle,
   verifyBundleResolved,
+  verifyHostIdentity,
+  type HostIdentityVerification,
   resolveHostIdentity,
   domainAnchor,
   didAnchor,

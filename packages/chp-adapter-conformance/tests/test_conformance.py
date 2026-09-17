@@ -352,6 +352,55 @@ class TestConformanceCapabilities:
             elif session.exists():
                 session.unlink()
 
+    def test_check_staged_exempts_examples(self, tmp_path):
+        """A script under examples/ is a standalone client, not capability code:
+        its stdlib urllib/raw I/O is not a violation (same exemption as tests/)."""
+        import json
+        from pathlib import Path
+        examples = tmp_path / "examples"
+        examples.mkdir()
+        demo = examples / "demo.py"
+        demo.write_text(textwrap.dedent("""
+            import urllib.request
+
+            def main():
+                with urllib.request.urlopen("http://127.0.0.1:8080/health") as r:
+                    return r.read()
+        """))
+        session = Path.home() / ".chp" / "active-session.json"
+        existed = session.exists()
+        backup = session.read_text() if existed else None
+        session.parent.mkdir(parents=True, exist_ok=True)
+        session.write_text(json.dumps({
+            "issue_id": "test0001",
+            "baseline": {"adapters": [], "adapter_count": 0, "total_violations": 0},
+        }))
+        try:
+            host = _make_host()
+            r = _invoke(host, "chp.adapters.conformance.check_staged", {
+                "staged_files": [str(demo)],
+            })
+            assert r.success
+            assert r.data["ok"] is True
+            assert r.data["new_violations"] == []
+            # the exempt file is skipped entirely, not merely violation-free
+            assert str(demo) not in r.data.get("files_checked", [str(demo)])
+        finally:
+            if backup is not None:
+                session.write_text(backup)
+            elif session.exists():
+                session.unlink()
+
+
+def test_is_example_file_predicate():
+    """_is_example_file matches any path with an 'examples' segment."""
+    from pathlib import Path
+    from chp_adapter_conformance import adapter as A
+    assert A._is_example_file(Path("packages/chp-server/examples/demo.py"))
+    assert A._is_example_file(Path("/abs/examples/sub/thing.py"))
+    assert not A._is_example_file(Path("packages/chp-server/chp_server/http.py"))
+    assert not A._is_example_file(Path("examplesish/demo.py"))  # substring, not a segment
+
 
 def test_session_file_keying():
     """repo_path-keyed sessions: global default, deterministic + distinct keyed files."""
@@ -375,3 +424,42 @@ def test_repo_path_never_resolves_to_the_global_session():
     assert A._session_file("/no/such/worktree/xyzzy").parent == A._SESSION_DIR
     # Only a caller with no repo_path at all gets the global file.
     assert A._session_file(None) == A._SESSION_FILE
+
+
+def test_session_conflict_guardrail(tmp_path):
+    """A second, DIFFERENT active session in the same worktree is refused (not silently clobbered);
+    same-issue re-open and stale sessions are allowed. This is what stops two workers in one
+    worktree from racing the shared session file (rad:d580e8b)."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from chp_adapter_conformance import adapter as A
+
+    sf = tmp_path / "s.json"
+
+    # No existing session → allowed.
+    assert A._session_conflict(sf, ["aaaaaaa"]) is None
+
+    def write(ids, hours_ago=0.0, title="t"):
+        sf.write_text(json.dumps({
+            "issue_ids": ids, "issue_title": title,
+            "started_at": (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat(),
+        }))
+
+    # A fresh DIFFERENT session → refused, with actionable guidance.
+    write(["bbbbbbb"])
+    msg = A._session_conflict(sf, ["aaaaaaa"])
+    assert msg and "session_conflict" in msg
+    assert "git worktree add" in msg and "issue_ids" in msg
+    assert "bbbbbbb" in msg
+
+    # Idempotent re-open of the SAME issue set → allowed (order-independent).
+    write(["bbbbbbb", "ccccccc"])
+    assert A._session_conflict(sf, ["ccccccc", "bbbbbbb"]) is None
+
+    # A stale different session (past the reaper window) → takeover-able.
+    write(["bbbbbbb"], hours_ago=A._SESSION_STALE_HOURS + 1)
+    assert A._session_conflict(sf, ["aaaaaaa"]) is None
+
+    # An unreadable file must not block (a fresh write is the recovery).
+    sf.write_text("{ not json")
+    assert A._session_conflict(sf, ["aaaaaaa"]) is None

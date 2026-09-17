@@ -255,6 +255,8 @@ class LocalLLMAdapter(BaseAdapter):
                             "description": "context window; defaults to a safe floor to avoid Metal OOM"},
                 "keep_alive": {"type": ["string", "integer"],
                                "description": "how long to keep the model resident, e.g. '5m' or 0 to unload"},
+                "format": {"type": ["object", "string"],
+                           "description": "structured output: a JSON schema (constrained decode) or the string 'json'"},
             },
             "required": ["prompt"],
             "additionalProperties": False,
@@ -264,6 +266,8 @@ class LocalLLMAdapter(BaseAdapter):
         model = self._allowed_model(payload.get("model") or self._config.default_model)
         prompt: str = payload["prompt"]
         opts = self._gen_params(payload)
+        if payload.get("format") is not None:  # constrained decode (ollama top-level / OpenAI response_format)
+            opts["format"] = payload["format"]
         backend, backend_name = await self._backend(ctx)
         ctx.emit("llm_request", {"op": "generate", "backend": backend_name, "model": model}, redacted=False)
         try:
@@ -324,6 +328,8 @@ class LocalLLMAdapter(BaseAdapter):
                           "description": "OpenAI-style function schemas; model returns tool_calls"},
                 "think": {"type": "boolean",
                           "description": "toggle a thinking model's CoT (defaults off when tools are present)"},
+                "format": {"type": ["object", "string"],
+                           "description": "structured output: a JSON schema (constrained decode) or the string 'json'"},
             },
             "required": ["messages"],
             "additionalProperties": False,
@@ -333,6 +339,8 @@ class LocalLLMAdapter(BaseAdapter):
         model = self._allowed_model(payload.get("model") or self._config.default_model)
         messages: list[dict] = payload["messages"]
         opts = self._gen_params(payload)
+        if payload.get("format") is not None:  # constrained decode (ollama top-level / OpenAI response_format)
+            opts["format"] = payload["format"]
         # tool-calling: `tools` is a top-level /api/chat param; the model returns structured
         # tool_calls the caller executes. Thinking defaults OFF when tools are present — with
         # thinking on, qwen3+Ollama emit empty output and drop tool_calls (ollama#10976).

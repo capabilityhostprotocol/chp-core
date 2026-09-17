@@ -86,7 +86,10 @@ class JobStore:
                     "completed" if success else "failed",
                     1 if success else 0,
                     json.dumps(result, default=str) if success else None,
-                    error,
+                    # error may be a structured (dict) InvocationResult.error — SQLite
+                    # can only bind str/num/None, so coerce. Without this a dict error
+                    # raises a binding error that masks the real failure.
+                    None if error is None else str(error),
                     time.time(),
                     job_id,
                 ),

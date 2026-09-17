@@ -78,12 +78,28 @@ class RouterPort:
     source = "remote"
 
     def __init__(self, remotes: list[str] | None = None, selection: str = "first",
-                 host_id: str = "chp-gateway", transports: list | None = None) -> None:
+                 host_id: str = "chp-gateway", transports: list | None = None,
+                 api_key: str | None = None, api_key_env: str | None = None) -> None:
         self._remotes = list(remotes or [])
         self._selection = selection
         self._host_id = host_id
         self._transports = transports  # programmatic (tests / embedding)
+        # Auth for the URL-based remotes path: a mesh-auth-gated node rejects an
+        # unauthenticated gateway. Prefer an explicit key (programmatic); else resolve
+        # it from a named env var so the secret is never a plaintext literal in config
+        # (the deploy sources it, e.g. CHP_MESH_HTTP_KEY). Programmatic `transports`
+        # carry their own api_key and ignore this.
+        self._api_key = api_key
+        self._api_key_env = api_key_env
         self.host = None  # the router; chp_core.http duck-types it
+
+    def _resolved_api_key(self) -> str | None:
+        if self._api_key:
+            return self._api_key
+        if self._api_key_env:
+            import os
+            return os.environ.get(self._api_key_env)
+        return None
 
     def validate(self) -> None:
         if not self._remotes and not self._transports:
@@ -93,7 +109,8 @@ class RouterPort:
         import asyncio
         from chp_core.transport import HttpTransport
         from .router import MultiHostRouter
-        ts = self._transports or [HttpTransport(url) for url in self._remotes]
+        key = self._resolved_api_key()
+        ts = self._transports or [HttpTransport(url, api_key=key) for url in self._remotes]
         self.host = MultiHostRouter(ts, selection=self._selection, host_id=self._host_id)
         asyncio.run(self.host.connect())
         self._health_cache = (0.0, "ready")

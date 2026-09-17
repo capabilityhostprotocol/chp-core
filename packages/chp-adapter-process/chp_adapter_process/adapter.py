@@ -57,6 +57,13 @@ class ProcessConfig:
     working_dir: str | None = None
     max_timeout: float = 60.0
     max_output_bytes: int = 64 * 1024
+    # Candidate isolation (rad:f9adc17): when inherit_env is False the child does NOT
+    # inherit the harness environment — its env is built from {} plus the env_passthrough
+    # allowlist (default ["PATH"] so commands still resolve) plus env_additions. So an
+    # untrusted candidate can't read harness secrets that live in os.environ. Default
+    # True preserves prior behavior; a payload field overrides per-call.
+    inherit_env: bool = True
+    env_passthrough: list[str] | None = None
 
 
 class ProcessAdapter(BaseAdapter):
@@ -107,6 +114,17 @@ class ProcessAdapter(BaseAdapter):
                     "type": "object",
                     "description": "Additional environment variables (keys in evidence, values not).",
                     "additionalProperties": {"type": "string"},
+                },
+                "inherit_env": {
+                    "type": "boolean",
+                    "description": "If false, the child does NOT inherit the harness env; only "
+                                   "env_passthrough names + env_additions are set (rad:f9adc17).",
+                },
+                "env_passthrough": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Env var NAMES to copy from the host when inherit_env is false "
+                                   "(default ['PATH'] so the command still resolves).",
                 },
             },
             "required": ["command"],
@@ -160,8 +178,19 @@ class ProcessAdapter(BaseAdapter):
                     )
             cwd = str(resolved_cwd)
 
-        # --- environment ---
-        env = dict(os.environ)
+        # --- environment (candidate isolation, rad:f9adc17) ---
+        inherit_env = payload.get("inherit_env")
+        if inherit_env is None:
+            inherit_env = cfg.inherit_env
+        if inherit_env:
+            env = dict(os.environ)
+        else:
+            passthrough = payload.get("env_passthrough")
+            if passthrough is None:
+                passthrough = cfg.env_passthrough if cfg.env_passthrough is not None else ["PATH"]
+            # from {} plus ONLY the allowlisted names — the harness env (secrets, tokens)
+            # never crosses into an untrusted candidate.
+            env = {name: os.environ[name] for name in passthrough if name in os.environ}
         if env_additions:
             env.update(env_additions)
 
@@ -170,6 +199,7 @@ class ProcessAdapter(BaseAdapter):
             "args": args,
             "cwd": cwd,
             "timeout": timeout,
+            "inherit_env": bool(inherit_env),
             "env_additions_keys": sorted(env_additions.keys()),
             # env_additions values intentionally not recorded
         }, redacted=False)

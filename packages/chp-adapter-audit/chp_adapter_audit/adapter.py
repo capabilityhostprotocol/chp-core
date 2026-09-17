@@ -1,6 +1,6 @@
 """AuditAdapter — queryable governance audit log over the CHP evidence store.
 
-Three capabilities:
+Capabilities:
 
 * ``query_invocations`` — filter by capability_id, outcome, time window, limit;
   returns per-invocation summaries (never raw event payloads).
@@ -8,6 +8,10 @@ Three capabilities:
   metadata (event_type, timestamp, outcome) to avoid leaking sensitive payloads
   that may have been stored by other adapters.
 * ``stats`` — aggregate counts by outcome and by capability over a time window.
+* ``inclusion_proof`` — a verifiable Merkle store-head inclusion proof
+  (chp-store-head-v2, RFC 6962) that a correlation's evidence is committed under
+  the host's current evidence store head. A self-contained, third-party-verifiable
+  artifact (verify with chp-sdk ``verifyStoreHeadInclusion``); metadata only.
 
 Evidence hygiene: only counts, IDs, event_types, and timestamps are stored or
 returned. The stored event payloads (which may carry PII, tokens, or secrets
@@ -69,6 +73,7 @@ class AuditAdapter(BaseAdapter):
             "type": "object",
             "properties": {
                 "capability_id": {"type": "string", "description": "Filter by exact capability ID."},
+                "correlation_id": {"type": "string", "description": "Filter to one run/correlation (indexed — the reliable way to fetch a run's steps)."},
                 "outcome": {
                     "type": "string",
                     "enum": ["success", "failure", "denied", "skipped"],
@@ -90,6 +95,7 @@ class AuditAdapter(BaseAdapter):
 
         limit = min(payload.get("limit") or 100, self._config.max_results)
         cap_id = payload.get("capability_id")
+        correlation_id = payload.get("correlation_id")
         outcome = payload.get("outcome")
         since = payload.get("since")
         until = payload.get("until")
@@ -97,13 +103,15 @@ class AuditAdapter(BaseAdapter):
         ctx.emit("audit_query", {
             "op": "query_invocations",
             "filters": {k: v for k, v in {
-                "capability_id": cap_id, "outcome": outcome, "since": since, "until": until,
+                "capability_id": cap_id, "correlation_id": correlation_id,
+                "outcome": outcome, "since": since, "until": until,
             }.items() if v is not None},
             "limit": limit,
         }, redacted=False)
 
         events = self._store.query(
             capability_id=cap_id,
+            correlation_id=correlation_id,
             outcome=outcome,
             since=since,
             until=until,
@@ -122,6 +130,168 @@ class AuditAdapter(BaseAdapter):
         }, redacted=False)
 
         return {"invocations": invocations, "total": len(invocations)}
+
+    # ------------------------------------------------------------------
+    # inclusion_proof — verifiable Merkle store-head inclusion (the "provable" dimension)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.audit.inclusion_proof",
+        version="1.0.0",
+        description="A verifiable Merkle store-head inclusion proof (chp-store-head-v2, RFC 6962) that a "
+                    "given correlation's evidence is committed under the host's CURRENT evidence store head. "
+                    "Returns the store-head root, the inclusion proof, and a metadata-only event summary — a "
+                    "self-contained, third-party-verifiable artifact (verify with chp-sdk "
+                    "verifyStoreHeadInclusion). This is the governed twin of the /head/inclusion HTTP endpoint "
+                    "(no auth wall), so a host can publish proof that a real governed action is committed. "
+                    "Metadata only: ids, hashes, outcomes, timestamps — never event payloads.",
+        category="governance",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "correlation_id": {"type": "string",
+                                   "description": "The run/correlation to prove is committed in the store head."},
+            },
+            "required": ["correlation_id"],
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["audit", "governance", "evidence", "provable"],
+    )
+    async def inclusion_proof(self, ctx: Any, payload: dict) -> dict:
+        if self._store is None:
+            ctx.emit("audit_error", {"reason": "store_not_bound"}, redacted=False)
+            raise RuntimeError("AuditAdapter: store not bound — register with a host first")
+        if not hasattr(self._store, "get_store_head"):
+            ctx.emit("audit_error", {"reason": "store_head_unsupported"}, redacted=False)
+            raise RuntimeError("AuditAdapter: evidence store does not support Merkle store heads")
+
+        from chp_core.merkle import CHP_STORE_HEAD_V2, store_head_inclusion_proof
+
+        corr = str(payload["correlation_id"]).strip()
+        ctx.emit("audit_query", {"op": "inclusion_proof", "correlation_id": corr}, redacted=False)
+
+        head = self._store.get_store_head(fresh=True, scheme=CHP_STORE_HEAD_V2)
+        if corr not in head["leaves"]:
+            ctx.emit("audit_error", {"reason": "correlation_not_committed", "correlation_id": corr}, redacted=False)
+            raise RuntimeError(f"correlation {corr!r} is not committed in the current store head")
+
+        proof = store_head_inclusion_proof(head["leaves"], corr)
+
+        # Metadata-only summary of the proven correlation (ids/caps/outcomes/counts — never payloads).
+        events = self._store.query(correlation_id=corr, limit=self._config.max_results)
+        cap_ids = sorted({e.get("capability_id") for e in events if e.get("capability_id")})
+        outcomes = sorted({e.get("outcome") for e in events if e.get("outcome")})
+        host_id = getattr(self._host, "host_id", getattr(self._host, "_host_id", "unknown"))
+
+        # v2 authenticity: self-sign the head with the host's ed25519 identity key when it holds one,
+        # binding the PUBLISHED head to the host (non-repudiable) — so a verifier checks authenticity, not
+        # just inclusion. Graceful: a host at the hash-chain tier (no key) omits head_signature and the proof
+        # stays inclusion-verifiable. Signed bytes = store_head_anchor_message canonical form (json sort_keys).
+        head_signature = None
+        try:
+            import base64 as _b64mod
+
+            from chp_core import signing
+            from chp_core.types import utc_now
+            host_key = signing.load_host_key(signing.resolve_key_dir(host_id))
+            if host_key is not None and host_key.can_sign:
+                anchored_at = utc_now()
+                message = signing.store_head_anchor_message(
+                    host_id, head["sequence"], head["store_head"], anchored_at)
+                head_signature = {
+                    "algorithm": "ed25519",
+                    "message_scheme": "store-head-anchor",
+                    "anchored_at": anchored_at,
+                    "public_key_b64": host_key.public_key_b64,
+                    "key_id": host_key.key_id,
+                    "signature_b64": _b64mod.b64encode(host_key._private.sign(message)).decode(),
+                }
+        except Exception as exc:  # signing is best-effort; never fail the proof over it
+            ctx.emit("audit_error", {"reason": "head_sign_skipped", "detail": type(exc).__name__}, redacted=False)
+
+        ctx.emit("audit_result", {"op": "inclusion_proof", "correlation_id": corr,
+                                  "sequence": head["sequence"], "tree_size": proof["tree_size"],
+                                  "signed": head_signature is not None}, redacted=False)
+        return {
+            "scheme": CHP_STORE_HEAD_V2,
+            "host_id": host_id,
+            "sequence": head["sequence"],
+            "store_head": head["store_head"],
+            "inclusion": proof,
+            "event_summary": {
+                "correlation_id": corr,
+                "capability_ids": cap_ids,
+                "outcomes": outcomes,
+                "event_count": len(events),
+            },
+            **({"head_signature": head_signature} if head_signature else {}),
+            "verify_with": "chp-sdk verifyStoreHeadInclusion + ed25519 over store_head_anchor_message(host_id, sequence, store_head, head_signature.anchored_at)",
+        }
+
+    # ------------------------------------------------------------------
+    # countersign_head — external witness (provable v3 independence)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.audit.countersign_head",
+        version="1.0.0",
+        description="WITNESS another host's store head: sign {host_id, sequence, store_head} with THIS host's "
+                    "ed25519 identity key (an independent countersignature over store_head_anchor_message). Run "
+                    "on a DIFFERENT node than the head's own host to attest, independently, that it saw that "
+                    "head — the external-independence tier of provable evidence, so a verifier need not trust "
+                    "the head's own host. Returns a witness statement; omitted if this host holds no signing key.",
+        category="governance",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "host_id": {"type": "string", "minLength": 1, "description": "the head's own host id"},
+                "sequence": {"type": "integer", "minimum": 0},
+                "store_head": {"type": "string", "minLength": 1, "description": "the merkle store-head root (hex)"},
+                "anchored_at": {"type": "string", "description": "ISO-8601 timestamp; defaults to now"},
+            },
+            "required": ["host_id", "sequence", "store_head"],
+            "additionalProperties": False,
+        },
+        emits=["audit_head_countersigned"],
+        tags=["audit", "governance", "evidence", "provable", "witness"],
+    )
+    async def countersign_head(self, ctx: Any, payload: dict) -> dict:
+        import base64 as _b64mod
+
+        from chp_core import signing
+        from chp_core.types import utc_now
+
+        host_id = str(payload["host_id"]).strip()
+        sequence = int(payload["sequence"])
+        store_head = str(payload["store_head"]).strip()
+        anchored_at = str(payload.get("anchored_at") or utc_now())
+
+        # THIS (the witness) host's own key — resolve by the witness's host id so the per-host key dir
+        # (~/.chp/keys/<host_id>) is found, not only $CHP_KEY_DIR (matches inclusion_proof).
+        witness_host = getattr(self._host, "host_id", getattr(self._host, "_host_id", "unknown"))
+        host_key = signing.load_host_key(signing.resolve_key_dir(witness_host))
+        if host_key is None or not host_key.can_sign:
+            ctx.emit("audit_head_countersigned", {"host_id": host_id, "sequence": sequence, "witnessed": False},
+                     redacted=False)
+            return {"witnessed": False, "reason": "no-signing-key"}
+
+        message = signing.store_head_anchor_message(host_id, sequence, store_head, anchored_at)
+        witness = {
+            "witness_host_id": witness_host,
+            "algorithm": "ed25519",
+            "anchored_at": anchored_at,
+            "public_key_b64": host_key.public_key_b64,
+            "key_id": host_key.key_id,
+            "signature_b64": _b64mod.b64encode(host_key._private.sign(message)).decode(),
+            "head": {"host_id": host_id, "sequence": sequence, "store_head": store_head},
+        }
+        ctx.emit("audit_head_countersigned",
+                 {"host_id": host_id, "sequence": sequence, "witness_key_id": host_key.key_id, "witnessed": True},
+                 redacted=False)
+        return {"witnessed": True, "witness": witness}
 
     # ------------------------------------------------------------------
     # get_invocation

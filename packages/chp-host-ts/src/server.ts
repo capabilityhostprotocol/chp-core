@@ -8,12 +8,35 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import type { TLSSocket } from 'node:tls';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { verifyChainWitness, verifyStoreHeadAnchor, verifyMandateRevocation, computeRevocationHead, PROTOCOL_VERSION, CHP_STORE_HEAD_V2, storeHeadInclusionProof, storeHeadConsistencyProof } from '@capabilityhostprotocol/sdk';
 import type { LocalCapabilityHost } from './host.js';
 import type { InvocationEnvelope, JsonValue } from './types.js';
+import { ArtifactStore, ArtifactIntegrityError, ArtifactNotFoundError, ArtifactIdInvalidError } from './artifacts.js';
 
 const HOST_VERSION = '0.1.0-alpha.0';
+
+// The chp-server surface (/ready + /server) for a single-host, host-profile server.
+// The TS conformance host IS exactly that: one local governed host fulfilling
+// HostPort+AdmissionPort+ExecutionPort+EvidencePort. This is the SAME feature truth
+// the Python chp-server projects for a host-profile server (chp_server FEATURE_ROLES) —
+// discovery/invocation/evidence ready; resolve/remote/federation/mcp/artifact absent —
+// so /server describe matches across implementations (the provably-a-protocol discipline).
+const HOST_PROFILE_FEATURES: ReadonlyArray<{ feature: string; state: string; source: string }> = [
+  { feature: 'capability.discovery', state: 'ready', source: 'local' },
+  { feature: 'capability.resolve', state: 'unsupported', source: 'local' },
+  { feature: 'invocation.submit', state: 'ready', source: 'local' },
+  { feature: 'invocation.local', state: 'ready', source: 'local' },
+  { feature: 'invocation.observe', state: 'ready', source: 'local' },
+  { feature: 'invocation.streaming', state: 'ready', source: 'local' },
+  { feature: 'invocation.remote', state: 'unsupported', source: 'local' },
+  { feature: 'evidence.query', state: 'ready', source: 'local' },
+  { feature: 'evidence.verify', state: 'ready', source: 'local' },
+  { feature: 'artifact.transfer', state: 'unsupported', source: 'local' },
+  { feature: 'federation', state: 'unsupported', source: 'local' },
+  { feature: 'mcp.import', state: 'unsupported', source: 'local' },
+  { feature: 'mcp.export', state: 'unsupported', source: 'local' },
+];
 
 function sendJson(res: ServerResponse, status: number, body: JsonValue): void {
   // sorted-key JSON output (chp-http-binding §3)
@@ -43,16 +66,69 @@ function constantTimeEqual(a: string, b: string): boolean {
 }
 
 async function readBody(req: IncomingMessage): Promise<string> {
+  return (await readBodyBuffer(req)).toString('utf8');
+}
+
+async function readBodyBuffer(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
+}
+
+// Artifact bodies are bounded by the same control-body cap as invocations; chunked/streaming
+// upload past this is the follow-up (mirrors chp_core _MAX_BODY_BYTES).
+const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
+
+// DATA-003 audience match: an allowlist pattern is an exact caller-id or a trailing-`*` prefix.
+// A null caller (no verified principal) is in no bounded audience.
+function callerInAudience(caller: string | null, audience: string[]): boolean {
+  if (!caller) return false;
+  return audience.some((p) => p === caller || (p.endsWith('*') && caller.startsWith(p.slice(0, -1))));
 }
 
 export function createHostServer(
   host: LocalCapabilityHost,
-  opts: { apiKey?: string; namedKeys?: string; tls?: { cert: string | Buffer; key: string | Buffer; ca?: string | Buffer } } = {},
+  opts: { apiKey?: string; namedKeys?: string; artifactsRoot?: string; tls?: { cert: string | Buffer; key: string | Buffer; ca?: string | Buffer } } = {},
 ): Server {
   const { apiKey } = opts;
+  // Artifact data plane (chp-server ArtifactPort peer): opt-in via artifactsRoot. Absent =
+  // no store attached = /artifacts is artifact_plane_unsupported and artifact.transfer stays
+  // unsupported — exactly the Python "no ArtifactPort" truth.
+  const artifacts = opts.artifactsRoot ? new ArtifactStore(opts.artifactsRoot) : null;
+  // Server instance identity (chp-server §7): stable for this process lifetime, so
+  // /server.instance is consistent across describe calls (like the Python identity).
+  const instanceId = randomUUID();
+  const startedAt = new Date().toISOString();
+  const environment = process.env.CHP_ENVIRONMENT ?? 'dev';
+  // Server.Describe — the one feature-truth projection for this host-profile server.
+  const describe = (caller: string | null): Record<string, JsonValue> => {
+    const d = host.discover(caller);
+    // artifact.transfer follows the attached store; every other feature is fixed host-profile truth.
+    const features = HOST_PROFILE_FEATURES.map((f) =>
+      f.feature === 'artifact.transfer' && artifacts ? { ...f, state: 'ready' } : f);
+    return {
+      server: 'chp-host-ts',
+      distribution_version: HOST_VERSION,
+      core_version: HOST_VERSION,
+      protocol_version: String(d.protocol_version ?? PROTOCOL_VERSION),
+      supported_versions: (d.supported_versions as JsonValue) ?? [PROTOCOL_VERSION],
+      instance: { id: instanceId, started_at: startedAt },
+      lifecycle_state: 'ready',
+      profile: 'host',
+      profiles_available: ['host'],
+      environment,
+      config_generation: 1,
+      features: features as unknown as JsonValue,
+      attachments: [{
+        roles: ['HostPort', 'AdmissionPort', 'ExecutionPort', 'EvidencePort'],
+        source: 'local', provider: 'chp-host-ts.LocalCapabilityHost', state: 'ready',
+      }],
+      config: {
+        profile: 'host', environment, host_id: String(d.id),
+        store: null, tls_certfile: null, tls_keyfile: null, tls_cafile: null, attachments: {},
+      },
+    };
+  };
   // Received chain-witness statements (§12) — in-memory for the conformance host.
   const receivedWitnesses: Record<string, JsonValue>[] = [];
   const receivedAnchors: Record<string, JsonValue>[] = [];  // §12 External anchoring (0013)
@@ -144,6 +220,15 @@ export function createHostServer(
         version: String(d.protocol_version ?? PROTOCOL_VERSION), host_version: HOST_VERSION,
       });
     }
+    // Public: profile-aware readiness (chp-server /ready) — a load balancer must see
+    // draining truth without credentials; no capability data is disclosed. /health stays
+    // pure liveness. A running conformance host is a ready host-profile server. 200 when
+    // ready, 503 otherwise (this host has no unready state, so always 200 here).
+    if (method === 'GET' && path === '/ready') {
+      return sendJson(res, 200, {
+        ready: true, state: 'ready', profile: 'host', missing_required_roles: [],
+      });
+    }
     // Public: the identity document — a never-met verifier resolves the key
     // without credentials (spec §3 Anchors); capabilities stay behind auth.
     if (method === 'GET' && path === '/.well-known/chp-identity') {
@@ -158,6 +243,41 @@ export function createHostServer(
     const caller = auth.caller?.name ?? null;
     if (method === 'GET' && path === '/host') {
       return sendJson(res, 200, { ...host.discover(caller), host_version: HOST_VERSION });
+    }
+    // Server.Describe (chp-server /server): authed like /host, version-negotiated above.
+    // The one feature-truth projection — instance identity, versions, profile, feature states.
+    if (method === 'GET' && path === '/server') {
+      return sendJson(res, 200, describe(caller));
+    }
+    // Artifact data plane GET (chp-server /artifacts/{id}): authed like /host. Access is
+    // authorized INDEPENDENTLY of possessing the id (DATA-003, checked before bytes), and the
+    // digest is re-verified on read — a tampered artifact is a REFUSAL (409), never wrong bytes.
+    if (method === 'GET' && path.startsWith('/artifacts/')) {
+      const artifactId = decodeURIComponent(path.slice('/artifacts/'.length));
+      if (!artifacts) return err(res, 404, 'artifact_plane_unsupported', 'this host has no artifact store attached');
+      let audience: string[] | null;
+      try {
+        audience = artifacts.accessOf(artifactId);
+      } catch (e) {
+        if (e instanceof ArtifactNotFoundError) return err(res, 404, 'artifact_not_found', `unknown artifact: ${artifactId}`);
+        if (e instanceof ArtifactIdInvalidError) return err(res, 400, 'artifact_id_invalid', (e as Error).message);
+        throw e;
+      }
+      if (audience && !callerInAudience(caller, audience)) {
+        return err(res, 403, 'artifact_access_denied', "caller is not in this artifact's audience");
+      }
+      let out: { data: Buffer; mediaType: string };
+      try {
+        out = artifacts.get(artifactId);
+      } catch (e) {
+        if (e instanceof ArtifactIntegrityError) return err(res, 409, 'artifact_integrity_failed', (e as Error).message);
+        if (e instanceof ArtifactNotFoundError) return err(res, 404, 'artifact_not_found', `unknown artifact: ${artifactId}`);
+        if (e instanceof ArtifactIdInvalidError) return err(res, 400, 'artifact_id_invalid', (e as Error).message);
+        throw e;
+      }
+      res.writeHead(200, { 'Content-Type': out.mediaType, 'Content-Length': out.data.length });
+      res.end(out.data);
+      return;
     }
     if (method === 'GET' && path === '/capabilities') {
       return sendJson(res, 200, { capabilities: (host.discover(caller).capabilities as JsonValue) });
@@ -221,6 +341,22 @@ export function createHostServer(
     }
     if (method === 'GET' && path === '/witnesses') {
       return sendJson(res, 200, { witnesses: receivedWitnesses as unknown as JsonValue });
+    }
+    // Artifact data plane PUT (chp-server POST /artifacts): raw bytes, never JSON. Content-addressed
+    // (same bytes -> same sha256 id), so the 201 ref is deterministic. Optional X-CHP-Artifact-Audience
+    // (comma-separated caller-id patterns) is the DATA-003 access allowlist; absent = open to any
+    // authorized caller.
+    if (method === 'POST' && path === '/artifacts') {
+      if (!artifacts) return err(res, 404, 'artifact_plane_unsupported', 'this host has no artifact store attached');
+      const data = await readBodyBuffer(req);
+      if (data.length <= 0 || data.length > MAX_ARTIFACT_BYTES) {
+        return err(res, 400, 'artifact_body_invalid',
+          `artifact body must be 1..${MAX_ARTIFACT_BYTES} bytes (Content-Length=${data.length})`);
+      }
+      const mediaType = (req.headers['content-type'] as string) || 'application/octet-stream';
+      const audHeader = req.headers['x-chp-artifact-audience'] as string | undefined;
+      const audience = audHeader ? audHeader.split(',').map((a) => a.trim()).filter(Boolean) : undefined;
+      return sendJson(res, 201, artifacts.put(data, mediaType, audience) as unknown as JsonValue);
     }
     if (method === 'POST' && path === '/witness') {
       let stmt: Record<string, JsonValue>;

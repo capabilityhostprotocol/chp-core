@@ -164,6 +164,19 @@ class TestPersistence:
         assert r["success"] is True
         assert r["result"] == {"k": "v"}
 
+    def test_dict_error_is_coerced_not_binding_error(self, tmp_path):
+        # regression: a structured (dict) error must not raise a SQLite binding
+        # error that masks the real failure — it is coerced to str and stored.
+        from chp_adapter_jobs._store import JobStore
+        sp = str(tmp_path / "jobs.sqlite")
+        s1 = JobStore(sp)
+        s1.create("job_e", "c")
+        s1.mark_done("job_e", success=False, result=None, error={"code": "boom", "detail": "x"})
+        r = JobStore(sp).get_result("job_e")
+        assert r["status"] == "failed"
+        assert r["success"] is False
+        assert "boom" in r["error"]
+
     def test_adapter_reconciles_on_construction(self, tmp_path):
         from chp_adapter_jobs._store import JobStore
         sp = str(tmp_path / "jobs.sqlite")

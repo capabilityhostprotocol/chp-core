@@ -126,12 +126,33 @@ class SmolagentsAdapter(BaseAdapter):
                 "model_id": {"type": "string", "description": "Override the configured model id"},
                 "model_type": {"type": "string", "enum": ["chp_cap", "openai_server", "mlx", "transformers"],
                                "description": "Override the model backend for this run — e.g. 'openai_server' + api_base to reach a governed cross-node inference gateway (tools run here, inference on a GPU node)"},
+                "model_cap_id": {"type": "string",
+                                 "description": "per-run model chat cap for model_type=chp_cap (e.g. "
+                                                "chp.adapters.freetoken.chat) — overrides the adapter default"},
+                "model_max_tokens": {"type": "integer", "minimum": 256, "maximum": 32768,
+                                     "description": "per-step completion budget for model_type=chp_cap (reasoning "
+                                                    "models need headroom for analysis + tool_calls; defaults to a "
+                                                    "roomy value for freetoken, retried with 2x on an empty length turn)"},
+                "model_reasoning_effort": {"type": "string", "enum": ["minimal", "low", "medium", "high"],
+                                           "description": "reasoning budget for a gpt-oss/harmony chp_cap model; "
+                                                          "defaults to 'low' for freetoken (decisive tool-calling), "
+                                                          "overridable per run (None = server default)"},
                 "api_base": {"type": "string", "description": "OpenAI-compatible base URL for model_type=openai_server (e.g. a chp-home inference gateway on localhost)"},
                 "max_steps": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Override the configured max agent steps"},
                 "agent_type": {"type": "string", "enum": ["code", "tool"],
-                               "description": "code=CodeAgent (Python over tools, needs a capable code model); tool=ToolCallingAgent (JSON tool_calls, reliable with small/local models)"},
+                               "description": "code=CodeAgent (Python over tools, needs a capable code model); tool=ToolCallingAgent (JSON tool_calls, reliable with small/local models — and runs a step's independent tool calls IN PARALLEL)"},
+                "max_tool_threads": {"type": "integer", "minimum": 1, "maximum": 64,
+                                     "description": "agent_type=tool: cap the parallel tool-call thread pool (a step's independent tool calls run concurrently). Default = the library's pool size."},
                 "tool_schemas": {"type": "object",
                                  "description": "optional {cap_id: {input_schema, description}} so each tool gets a typed, scoped signature the model can call (vs an opaque payload object)"},
+                "tool_routes": {"type": "object",
+                                "description": "optional {cap_id: remote_base_url} — CROSS-NODE tools: a "
+                                               "routed cap is invoked on that remote CHP host via "
+                                               "chp.adapters.host.invoke (governed federated invocation), "
+                                               "so the agent's model (here) can drive a capability on "
+                                               "another node. Un-routed caps invoke locally."},
+                "tool_route_api_key": {"type": "string",
+                                       "description": "bearer token for the routed remote host(s), if required"},
                 "managed_agents": {"type": "array", "items": {"type": "object"},
                                    "description": "specialist sub-agents the manager can delegate to: [{name, description, tools:[cap_ids], agent_type?}] — multi-agent orchestrator-workers"},
                 "num_ctx": {"type": "integer", "minimum": 256, "maximum": 262144,
@@ -160,6 +181,7 @@ class SmolagentsAdapter(BaseAdapter):
         if temperature is None:
             temperature = self._config.temperature
         planning_interval = payload.get("planning_interval") or self._config.planning_interval
+        max_tool_threads = payload.get("max_tool_threads")   # agent_type=tool: parallel tool-call pool cap
 
         if not model_id:
             raise ValueError("No model_id specified and none configured (set SMOLAGENTS_MODEL).")
@@ -170,11 +192,32 @@ class SmolagentsAdapter(BaseAdapter):
         loop = asyncio.get_running_loop()
         be = self._be()
 
+        # CROSS-NODE agent capabilities: `tool_routes` maps a cap_id -> the remote CHP host's base_url.
+        # A routed tool call goes through chp.adapters.host.invoke (governed federated HTTP invocation) so
+        # an agent whose MODEL runs on node A can drive a CAPABILITY that lives on node B. Un-routed caps
+        # invoke locally via ctx.ainvoke as before.
+        tool_routes: dict[str, str] = payload.get("tool_routes") or {}
+        route_api_key = payload.get("tool_route_api_key")
+
         def _make_bridge(cap_id: str):
+            base_url = tool_routes.get(cap_id)
+
             def _call(payload_obj: Any) -> Any:
                 import json as _json
                 p = _json.loads(payload_obj) if isinstance(payload_obj, str) else (payload_obj or {})
-                ctx.emit("smolagents_tool_invoked", {"tool": cap_id}, redacted=False)
+                ctx.emit("smolagents_tool_invoked", {"tool": cap_id, "remote": bool(base_url)}, redacted=False)
+                if base_url:   # cross-node: route through the host adapter's federated invoke
+                    hp: dict[str, Any] = {"base_url": base_url, "capability_id": cap_id, "payload": p}
+                    if route_api_key:
+                        hp["api_key"] = route_api_key
+                    fut = asyncio.run_coroutine_threadsafe(ctx.ainvoke("chp.adapters.host.invoke", hp), loop)
+                    res = fut.result(timeout=self._config.tool_timeout)
+                    if not getattr(res, "success", False):
+                        return {"error": getattr(res, "error", "cross-node host.invoke failed")}
+                    d = res.data or {}
+                    if d.get("outcome") != "completed":
+                        return {"error": d.get("error") or f"remote capability {d.get('outcome')}"}
+                    return d.get("data")
                 fut = asyncio.run_coroutine_threadsafe(ctx.ainvoke(cap_id, p), loop)
                 res = fut.result(timeout=self._config.tool_timeout)
                 if not getattr(res, "success", False):
@@ -211,16 +254,46 @@ class SmolagentsAdapter(BaseAdapter):
         try:
             if model_type == "chp_cap":
                 # Model completions served by a governed CHP capability over the mesh, not a raw URL.
+                mcap = payload.get("model_cap_id") or self._config.model_cap_id
+
                 def _model_invoke(model_payload: dict) -> Any:
-                    if num_ctx and isinstance(model_payload, dict):
-                        model_payload.setdefault("num_ctx", num_ctx)   # thread ctx to local_llm.chat
-                    fut = asyncio.run_coroutine_threadsafe(
-                        ctx.ainvoke(self._config.model_cap_id, model_payload), loop)
-                    res = fut.result(timeout=self._config.model_timeout)
-                    if not getattr(res, "success", False):
-                        raise RuntimeError(getattr(res, "error", "model capability failed"))
-                    return res.data
-                model = be.make_chp_model(model_id, _model_invoke, temperature=temperature)
+                    # num_ctx is an ollama concept: ONLY local_llm.chat accepts it. freetoken.chat / mlx.chat
+                    # declare additionalProperties:false, so injecting num_ctx makes them reject the whole
+                    # payload (schema-violation → denied). Thread it only to the cap that takes it.
+                    if num_ctx and "local_llm" in mcap and isinstance(model_payload, dict):
+                        model_payload.setdefault("num_ctx", num_ctx)
+                    last_err = ""
+                    # A sovereign model on the mesh can fail transiently (cold load / brief 503 / concurrent
+                    # queue), which would otherwise kill the whole agent step. Retry the model call ONCE, and
+                    # surface a LEGIBLE reason (status + outcome) instead of a bare RuntimeError(None) when the
+                    # cap returns success=False with no error string.
+                    for attempt in range(2):
+                        fut = asyncio.run_coroutine_threadsafe(ctx.ainvoke(mcap, model_payload), loop)
+                        res = fut.result(timeout=self._config.model_timeout)
+                        if getattr(res, "success", False):
+                            return res.data
+                        _den = getattr(res, "denial", None)
+                        _dcode = getattr(_den, "code", None)
+                        _dmsg = getattr(_den, "message", None)
+                        last_err = (getattr(res, "error", None) or _dmsg
+                                    or (f"{mcap} denied [{_dcode}]" if _dcode else None)
+                                    or f"{mcap} returned {getattr(res, 'outcome', 'failure')!r} (no detail)")
+                    raise RuntimeError(last_err)
+                _mcap = payload.get("model_cap_id") or self._config.model_cap_id
+                _is_ft = "freetoken" in _mcap
+                # ft serve / gpt-oss won't emit tool_calls without tool_choice; freetoken.chat accepts it
+                # (local_llm.chat's schema does not), so only nudge when the cap supports it.
+                _tc = "auto" if _is_ft else None
+                # Reasoning models (gpt-oss) spend the completion budget on analysis before content/tool_calls;
+                # the cap's small default (2048) starves the loop. gpt-oss-20b serves at 32k ctx, so give a
+                # roomy default (per-run overridable) — make_chp_model also retries with 2x headroom on an
+                # empty finish_reason=length turn.
+                _mt = payload.get("model_max_tokens") or (8192 if _is_ft else None)
+                # gpt-oss over-reasons in a tool loop (repeats a tool / burns the budget); 'low' keeps it
+                # decisive. Default low for freetoken agentic runs; per-run overridable (None = server default).
+                _re = payload.get("model_reasoning_effort") or ("low" if _is_ft else None)
+                model = be.make_chp_model(model_id, _model_invoke, temperature=temperature,
+                                          tool_choice=_tc, max_tokens=_mt, reasoning_effort=_re)
             else:
                 model = be.build_model(
                     model_type, model_id,
@@ -235,7 +308,8 @@ class SmolagentsAdapter(BaseAdapter):
                     sub.get("agent_type", "tool"), max_steps,
                     name=sub["name"], description=sub["description"]))
             result = await asyncio.to_thread(be.run_agent, model, tools, task, max_steps,
-                                             agent_type, managed_agents or None, planning_interval)
+                                             agent_type, managed_agents or None, planning_interval,
+                                             max_tool_threads)
         except Exception as exc:
             ctx.emit("smolagents_run_failed", {
                 "model_id": model_id, "error": str(exc)[:500],
@@ -245,9 +319,13 @@ class SmolagentsAdapter(BaseAdapter):
         latency_ms = round((time.monotonic() - t0) * 1000)
         answer = result.get("answer", "")
         steps = result.get("steps", 0)
+        calls = result.get("calls", [])            # tool / sub-agent names the manager actually invoked
+        managed = [sub["name"] for sub in (payload.get("managed_agents") or [])]   # the worker roster
         ctx.emit("smolagents_run_completed", {
             "model_id": model_id,
             "tool_names": tool_ids,
+            "calls": calls,
+            "managed": managed,
             "steps": steps,
             "answer_length": len(answer),
             "latency_ms": latency_ms,
@@ -256,6 +334,8 @@ class SmolagentsAdapter(BaseAdapter):
         return {
             "answer": answer,
             "tool_names": tool_ids,
+            "calls": calls,
+            "managed": managed,
             "steps": steps,
             "model_id": model_id,
             "latency_ms": latency_ms,

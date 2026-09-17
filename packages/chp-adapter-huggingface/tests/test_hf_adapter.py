@@ -183,8 +183,8 @@ class FakeHFBackend:
     def call_space(self, space_id, api_name, inputs, token) -> Any:
         return f"fake_result_from_{space_id}"
 
-    def finetune(self, model, dataset_repo_id, output_dir, task_type, num_epochs, batch_size, learning_rate, max_steps, cache_dir, token, options=None) -> dict:
-        return {
+    def finetune(self, model, dataset_repo_id, output_dir, task_type, num_epochs, batch_size, learning_rate, max_steps, cache_dir, token, options=None, reward_fn=None) -> dict:
+        out = {
             "output_dir": output_dir,
             "model": model,
             "dataset": dataset_repo_id,
@@ -192,6 +192,10 @@ class FakeHFBackend:
             "final_loss": 0.234,
             "steps": max_steps if max_steps is not None else num_epochs * 100,
         }
+        if reward_fn is not None:   # exercise the reward bridge the way GRPOTrainer scores a batch
+            out["rewards"] = reward_fn(["good answer", "bad answer"],
+                                       reference=["good answer", "good answer"])
+        return out
 
     def quantize_to_gguf(self, model_path, output_path, quantization, convert_script, quantize_bin) -> dict:
         return {

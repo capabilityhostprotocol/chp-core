@@ -15,6 +15,19 @@ from typing import Any, Protocol, runtime_checkable
 # Bounded number of warm pipelines/tokenizers kept resident per backend instance.
 _MAX_CACHED_MODELS = 4
 
+# Fallback calibration set for AWQ/GPTQ when the caller passes none — generic prose so the
+# quantizer has something to profile activations on. Real jobs should pass domain-representative text.
+_DEFAULT_CALIB = [
+    "The capability host protocol records every invocation as signed, append-only evidence.",
+    "Quantization reduces model weight precision to shrink memory and speed up inference.",
+    "A governed mesh lets sovereign nodes serve models with verifiable provenance.",
+    "Large language models generate text by predicting the next token from context.",
+    "Retrieval-augmented generation grounds answers in a corpus of source documents.",
+    "Fine-tuning adapts a base model to a task using a small labeled dataset.",
+    "Vision-language models describe images by attending over pixels and a prompt.",
+    "Reinforcement learning from verifiable rewards optimizes toward checkable outcomes.",
+]
+
 
 # ---------------------------------------------------------------------------
 # Protocol — what adapter.py depends on
@@ -191,6 +204,7 @@ class HFBackend(Protocol):
         cache_dir: str,
         token: str,
         options: dict | None = None,
+        reward_fn: Any = None,
     ) -> dict: ...
 
     def quantize_to_gguf(
@@ -200,6 +214,16 @@ class HFBackend(Protocol):
         quantization: str,
         convert_script: str | None,
         quantize_bin: str | None,
+    ) -> dict: ...
+
+    def quantize(
+        self,
+        model_path: str,
+        output_path: str,
+        method: str,
+        bits: int,
+        group_size: int,
+        calibration: list | None,
     ) -> dict: ...
 
     def faiss_index(
@@ -779,7 +803,13 @@ class _RealHFBackend:
         cache_dir: str,
         token: str,
         options: dict | None = None,
+        reward_fn: Any = None,
     ) -> dict:
+        if task_type in ("grpo", "rl"):
+            # GRPO/RLVR: the reward_fn is built in the async adapter (it holds ctx + the host loop) and
+            # marshals each completion into a governed CHP reward cap — the backend just runs the trainer.
+            return self._finetune_grpo(model, dataset_repo_id, output_dir, num_epochs, batch_size,
+                                       learning_rate, max_steps, cache_dir, token, options or {}, reward_fn)
         if task_type == "causal-lm":
             return self._finetune_causal_lm(model, dataset_repo_id, output_dir, num_epochs,
                                             batch_size, learning_rate, max_steps, cache_dir,
@@ -934,6 +964,115 @@ class _RealHFBackend:
             "final_loss": round(train_result.training_loss, 6), "steps": train_result.global_step,
         }
 
+    def _finetune_grpo(
+        self,
+        model: str,
+        dataset_repo_id: str,
+        output_dir: str,
+        num_epochs: int,
+        batch_size: int,
+        learning_rate: float,
+        max_steps: int | None,
+        cache_dir: str,
+        token: str,
+        options: dict,
+        reward_fn: Any,
+    ) -> dict:
+        """GRPO/RLVR (the verifiable-reward RL route): sample `num_generations` completions per prompt,
+        score each with `reward_fn`, optimise the policy toward higher reward — saves a LoRA ADAPTER
+        (feeds hf.merge_adapter → quantize_to_gguf → home.model.import, same as the SFT route).
+        `reward_fn(completions, **cols) -> list[float]` is built in the async adapter and marshals each
+        completion into a governed CHP reward cap — the backend stays pure. Needs trl>=0.15 (GRPO)."""
+        if reward_fn is None:
+            raise ValueError("grpo/rl finetune requires a reward_fn (built in the adapter from reward_cap)")
+        import inspect
+
+        import torch
+        from datasets import Dataset
+        from datasets import load_dataset as hf_load_dataset
+        from peft import LoraConfig, prepare_model_for_kbit_training
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from trl import GRPOConfig, GRPOTrainer
+
+        plan = _qlora_plan(options, torch.cuda.is_available())
+        inline = options.get("dataset")   # inline records; GRPO only needs a prompt column (+ reward cols)
+        train_ds = Dataset.from_list(inline) if inline else hf_load_dataset(
+            dataset_repo_id, token=token or None, cache_dir=cache_dir or None)["train"]
+        feats = train_ds.features
+        prompt_field = options.get("prompt_field") or next(
+            (c for c in ("prompt", "question", "text") if c in feats), list(feats)[0])
+        if prompt_field != "prompt":   # GRPOTrainer keys on a "prompt" column
+            train_ds = train_ds.rename_column(prompt_field, "prompt")
+
+        tokenizer = AutoTokenizer.from_pretrained(model, cache_dir=cache_dir or None, token=token or None)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model_kwargs: dict = {"cache_dir": cache_dir or None, "token": token or None}
+        if plan["load_in_4bit"]:
+            model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.bfloat16)
+            model_kwargs["device_map"] = "auto"
+        model_obj = AutoModelForCausalLM.from_pretrained(model, **model_kwargs)
+        if plan["load_in_4bit"]:
+            model_obj = prepare_model_for_kbit_training(model_obj)
+
+        lora = LoraConfig(r=plan["lora_r"], lora_alpha=plan["lora_alpha"],
+                          lora_dropout=plan["lora_dropout"], bias="none",
+                          task_type="CAUSAL_LM", target_modules="all-linear")
+
+        num_generations = int(options.get("num_generations", 4))
+        # GRPOConfig moves fields between TRL releases, so build the kwargs and keep only what THIS
+        # version's GRPOConfig accepts — version-tolerant (same guard the SFT route uses).
+        _grpo_kwargs = {
+            "output_dir": output_dir, "num_train_epochs": num_epochs,
+            "per_device_train_batch_size": batch_size, "learning_rate": learning_rate,
+            "max_steps": max_steps or -1, "logging_steps": 10, "report_to": "none",
+            "push_to_hub": False, "num_generations": num_generations,
+            "max_prompt_length": plan["max_seq_len"],
+            "max_completion_length": int(options.get("max_completion_length", 256)),
+        }
+        _accepted = set(inspect.signature(GRPOConfig.__init__).parameters)
+        grpo_args = GRPOConfig(**{k: v for k, v in _grpo_kwargs.items() if k in _accepted})
+        trainer = GRPOTrainer(model=model_obj, args=grpo_args, train_dataset=train_ds,
+                              peft_config=lora, reward_funcs=[reward_fn], processing_class=tokenizer)
+
+        train_result = trainer.train()
+        trainer.save_model(output_dir)   # the LoRA adapter — merge_adapter turns it into a full model
+
+        # The measured ARPO signal: TRL logs the mean reward per step in state.log_history. A rising trend
+        # = the policy is learning to produce higher-reward (passing/governed) actions. TRL's key name moves
+        # between releases ('reward' aggregate vs 'rewards/<func>/mean'), so extract robustly.
+        def _reward_of(entry: dict) -> float | None:
+            r = entry.get("reward")
+            if isinstance(r, (int, float)):
+                return float(r)
+            means = [v for k, v in entry.items()
+                     if k.startswith("rewards/") and k.endswith("/mean") and isinstance(v, (int, float))]
+            return sum(means) / len(means) if means else None
+
+        trend: list[float] = []
+        for e in getattr(trainer.state, "log_history", []):
+            if isinstance(e, dict):
+                rv = _reward_of(e)
+                if rv is not None:
+                    trend.append(round(rv, 4))
+
+        out = {
+            "output_dir": output_dir, "model": model, "dataset": dataset_repo_id,
+            "task_type": "grpo", "adapter": True, "load_in_4bit": plan["load_in_4bit"],
+            "lora_r": plan["lora_r"], "prompt_field": prompt_field, "num_generations": num_generations,
+            "final_loss": round(train_result.training_loss, 6), "steps": train_result.global_step,
+        }
+        if trend:
+            out["reward_trend"] = trend
+            out["reward_start"] = trend[0]
+            out["reward_end"] = trend[-1]
+            out["reward_delta"] = round(trend[-1] - trend[0], 4)
+            out["reward_mean"] = round(sum(trend) / len(trend), 4)
+        return out
+
     def quantize_to_gguf(
         self,
         model_path: str,
@@ -986,6 +1125,60 @@ class _RealHFBackend:
         finally:
             if os.path.exists(tmp_gguf):
                 os.unlink(tmp_gguf)
+
+    def quantize(
+        self,
+        model_path: str,
+        output_path: str,
+        method: str,
+        bits: int,
+        group_size: int,
+        calibration: list | None,
+    ) -> dict:
+        """Quantize a local HF model to AWQ or GPTQ (a vLLM-loadable dir) for the GPU-serving tier.
+        Unlike quantize_to_gguf (llama.cpp/CPU), these are the GPU int4 formats vLLM loads natively."""
+        # ponytail: 8 generic calibration samples so it runs unattended; pass domain text via
+        # `calibration` for real quality — quant accuracy tracks how representative the calib set is.
+        calib = calibration or _DEFAULT_CALIB
+        if method == "awq":
+            try:
+                from awq import AutoAWQForCausalLM
+                from transformers import AutoTokenizer
+            except ImportError as e:
+                raise RuntimeError(
+                    "AWQ needs 'autoawq' — install chp-adapter-huggingface[quant] on the GPU node"
+                ) from e
+            tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            model = AutoAWQForCausalLM.from_pretrained(model_path, trust_remote_code=True)
+            model.quantize(
+                tok,
+                quant_config={"w_bit": bits, "q_group_size": group_size,
+                              "zero_point": True, "version": "GEMM"},
+                calib_data=calib,
+            )
+            model.save_quantized(output_path)
+            tok.save_pretrained(output_path)
+        elif method == "gptq":
+            try:
+                from gptqmodel import GPTQModel, QuantizeConfig
+            except ImportError as e:
+                raise RuntimeError(
+                    "GPTQ needs 'gptqmodel' — install chp-adapter-huggingface[quant] on the GPU node"
+                ) from e
+            model = GPTQModel.load(model_path, QuantizeConfig(bits=bits, group_size=group_size))
+            model.quantize(calib)
+            model.save(output_path)
+        else:
+            raise ValueError(f"unknown quantize method {method!r}; use 'awq' or 'gptq'")
+
+        out_size = 0
+        for root, _dirs, files in os.walk(output_path):
+            for f in files:
+                out_size += os.path.getsize(os.path.join(root, f))
+        return {
+            "output_path": output_path, "method": method, "bits": bits,
+            "group_size": group_size, "output_size_bytes": out_size,
+        }
 
     def faiss_index(
         self,

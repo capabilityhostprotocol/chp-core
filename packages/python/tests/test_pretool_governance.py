@@ -234,17 +234,35 @@ def test_selftest_catches_regressed_policy(tmp_path) -> None:
 
 def test_installer_multi_harness_idempotent(tmp_path, monkeypatch) -> None:
     import json as _json
-    from chp_core.cli._hooks import _install_codex_hooks, _install_gemini_hooks, _write_default_policy
+    from chp_core.cli._hooks import (_install_antigravity_hooks, _install_codex_hooks,
+                                     _install_gemini_hooks, _write_default_policy)
     monkeypatch.setenv("HOME", str(tmp_path))
     for _ in range(2):  # idempotent
         _install_gemini_hooks("/x/store.sqlite", "chp")
         _install_codex_hooks("/x/store.sqlite", "chp")
+        _install_antigravity_hooks("/x/store.sqlite", "chp")
         _write_default_policy()
+
+    def _cmds(settings, event):
+        return [h["command"] for e in settings["hooks"].get(event, []) for h in e["hooks"]]
+
+    # Gemini: gate (pre) + evidence (post + stop), each once
     g = _json.loads((tmp_path / ".gemini" / "settings.json").read_text())
-    cmds = [h["command"] for e in g["hooks"]["PreToolUse"] for h in e["hooks"]]
-    assert sum("gemini-pre-tool" in c for c in cmds) == 1
+    assert sum("gemini-pre-tool" in c for c in _cmds(g, "PreToolUse")) == 1
+    assert sum("gemini-post-tool" in c for c in _cmds(g, "PostToolUse")) == 1
+    assert sum("gemini-stop" in c for c in _cmds(g, "Stop")) == 1
+
+    # Antigravity (Gemini successor): same full set, once each
+    a = _json.loads((tmp_path / ".antigravity" / "settings.json").read_text())
+    assert sum("antigravity-pre-tool" in c for c in _cmds(a, "PreToolUse")) == 1
+    assert sum("antigravity-post-tool" in c for c in _cmds(a, "PostToolUse")) == 1
+    assert sum("antigravity-stop" in c for c in _cmds(a, "Stop")) == 1
+
+    # Codex TOML: gate + evidence, each block once
     ctext = (tmp_path / ".codex" / "config.toml").read_text()
     assert ctext.count("codex-pre-tool") == 1
+    assert ctext.count("codex-post-tool") == 1
+    assert ctext.count("codex-stop") == 1
     assert ctext.count("hooks = true") == 1
 
 

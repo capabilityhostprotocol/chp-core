@@ -99,6 +99,22 @@ def test_gemini_post_tool_uses_gemini_capability_id(tmp_path) -> None:
     assert events[0]["capability_id"] == "gemini.run_shell_command"
 
 
+def test_antigravity_post_tool_routes_and_falls_back(tmp_path) -> None:
+    from chp_core.hooks import ANTIGRAVITY_TOOL_CAPABILITY_MAP
+    store_path = str(tmp_path / "antigravity.sqlite")
+    # a mapped tool -> its antigravity cap
+    process_post_tool_use(_post_payload("ag-session", "run_shell_command"), store_path,
+                          tool_map=ANTIGRAVITY_TOOL_CAPABILITY_MAP, agent_prefix="antigravity")
+    # an UNKNOWN tool (names unconfirmed) -> governed via the antigravity.tool.<name> fallback
+    process_post_tool_use(_post_payload("ag-session", "some_future_tool"), store_path,
+                          tool_map=ANTIGRAVITY_TOOL_CAPABILITY_MAP, agent_prefix="antigravity")
+    store = SQLiteEvidenceStore(store_path)
+    caps = [e["capability_id"] for e in store.by_correlation("ag-session")]
+    store.close()
+    assert "antigravity.run_shell_command" in caps
+    assert "antigravity.tool.some_future_tool" in caps      # unknown still governed
+
+
 def test_codex_stop_uses_codex_session_capability(tmp_path) -> None:
     store_path = str(tmp_path / "codex-stop.sqlite")
     process_stop(
@@ -224,3 +240,40 @@ def test_gemini_evidence_has_correct_capability_id_via_cli(tmp_path) -> None:
     store.close()
     assert len(events) == 1
     assert events[0]["capability_id"] == "gemini.write_file"
+
+
+# ---------------------------------------------------------------------------
+# 2026 CLI surface: Codex apply_patch, Claude Code new tools, Antigravity
+# ---------------------------------------------------------------------------
+
+def test_codex_current_tool_names_map() -> None:
+    assert capability_id_for_tool("apply_patch", CODEX_TOOL_CAPABILITY_MAP, "codex") == "codex.apply_patch"
+    assert capability_id_for_tool("update_plan", CODEX_TOOL_CAPABILITY_MAP, "codex") == "codex.update_plan"
+    assert capability_id_for_tool("view_image", CODEX_TOOL_CAPABILITY_MAP, "codex") == "codex.view_image"
+    assert capability_id_for_tool("glob_file_search", CODEX_TOOL_CAPABILITY_MAP, "codex") == "codex.glob"
+    # legacy names still resolve for old Codex sessions
+    assert capability_id_for_tool("str_replace_editor", CODEX_TOOL_CAPABILITY_MAP, "codex") == "codex.edit"
+
+
+def test_claude_code_new_tools_map() -> None:
+    assert capability_id_for_tool("BashOutput") == "claude_code.bash_output"
+    assert capability_id_for_tool("KillShell") == "claude_code.kill_shell"
+    assert capability_id_for_tool("KillBash") == "claude_code.kill_shell"       # legacy alias
+    assert capability_id_for_tool("ExitPlanMode") == "claude_code.exit_plan_mode"
+    assert capability_id_for_tool("Skill") == "claude_code.skill"
+    assert capability_id_for_tool("SlashCommand") == "claude_code.slash_command"
+    assert capability_id_for_tool("AskUserQuestion") == "claude_code.ask_user_question"
+
+
+def test_codex_adapter_declares_apply_patch() -> None:
+    from chp_core.adapters.codex import CodexAdapter
+    caps = [hc.descriptor.id for hc in CodexAdapter().capabilities()]
+    assert "codex.apply_patch" in caps and "codex.update_plan" in caps and "codex.mcp_tool" in caps
+
+
+def test_antigravity_adapter_declares_governable_surface() -> None:
+    from chp_core.adapters.antigravity import AntigravityAdapter
+    caps = [hc.descriptor.id for hc in AntigravityAdapter().capabilities()]
+    assert "antigravity.run_shell_command" in caps
+    assert "antigravity.subagent" in caps and "antigravity.skill" in caps
+    assert "antigravity.session" in caps

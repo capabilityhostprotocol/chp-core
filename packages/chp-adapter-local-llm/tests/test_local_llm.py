@@ -268,3 +268,33 @@ def test_default_urls_are_ipv4_not_localhost(monkeypatch):
     cfg = LocalLLMConfig()
     assert cfg.resolved_ollama_url() == "http://127.0.0.1:11434"
     assert cfg.resolved_llama_cpp_url() == "http://127.0.0.1:8080"
+
+
+# ---------------------------------------------------------------------------
+# structured output (constrained decode) — rad:8f20f64
+# ---------------------------------------------------------------------------
+
+def test_ollama_body_forwards_format_top_level():
+    from chp_adapter_local_llm._backends import _ollama_body
+    schema = {"type": "object", "required": ["id"]}
+    body = _ollama_body({"model": "m", "messages": []}, {"format": schema, "num_ctx": 4096})
+    assert body["format"] == schema           # top-level (ollama constrained decode)
+    assert body["options"]["num_ctx"] == 4096  # gen params still under options
+
+
+def test_openai_body_maps_format_to_response_format():
+    from chp_adapter_local_llm._backends import _openai_body
+    schema = {"type": "object", "required": ["id"]}
+    body = _openai_body({"model": "m", "messages": []}, {"format": schema})
+    rf = body["response_format"]
+    assert rf["type"] == "json_schema" and rf["json_schema"]["schema"] == schema
+    # the string "json" form maps to json_object
+    assert _openai_body({"model": "m"}, {"format": "json"})["response_format"] == {"type": "json_object"}
+
+
+def test_chat_schema_accepts_format():
+    from chp_adapter_local_llm.adapter import LocalLLMAdapter
+    a = LocalLLMAdapter()
+    chat = next(c.descriptor for c in a.capabilities()
+                if c.descriptor.id == "chp.adapters.local_llm.chat")
+    assert "format" in chat.input_schema["properties"]

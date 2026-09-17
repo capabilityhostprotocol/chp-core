@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.3/skill.schema.json",
+  "title": "Skill",
+  "description": "A portable, signable agent skill: an instruction plus a scoped set of capability ids and the agent shape to run them in. The canonical byte serialization (sort_keys, compact separators) is the compatibility surface a provenance signature binds to; changing the field set invalidates every already-signed skill, so extend an AgentProfile around a Skill rather than the Skill itself.",
+  "type": "object",
+  "required": ["name"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "minLength": 1},
+    "description": {"type": "string", "default": ""},
+    "instructions": {"type": "string", "default": ""},
+    "tools": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": [],
+      "description": "Capability ids the skill's agent may call. A DOMAIN id must be fully-qualified 'chp.adapters.<adapter>.<method>'."
+    },
+    "agent_type": {"type": "string", "enum": ["chat", "tool", "code"], "default": "tool"},
+    "role": {"type": "string", "default": "", "description": "Model tier (route|tool|code|reason|…); overridden by an explicit model pin."},
+    "model": {"type": ["string", "null"], "default": null, "description": "Explicit model pin; overrides role."},
+    "version": {"type": "string", "default": "1"}
+  }
+}

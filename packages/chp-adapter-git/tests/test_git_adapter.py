@@ -865,7 +865,7 @@ class TestMerge:
 # ---------------------------------------------------------------------------
 
 class TestShaping:
-    def test_twelve_capabilities_registered(self):
+    def test_fifteen_capabilities_registered(self):
         adapter = GitAdapter()
         caps = list(adapter.capabilities())
         ids = {c.descriptor.id for c in caps}
@@ -876,12 +876,15 @@ class TestShaping:
         assert "chp.adapters.git.precommit_check" in ids
         assert "chp.adapters.git.checkout_branch" in ids
         assert "chp.adapters.git.commit" in ids
+        assert "chp.adapters.git.commit_reconcile" in ids  # rad:8f4b6a0
         assert "chp.adapters.git.push" in ids
         assert "chp.adapters.git.pull" in ids
         assert "chp.adapters.git.merge" in ids
         assert "chp.adapters.git.discover_repos" in ids
         assert "chp.adapters.git.bundle" in ids
-        assert len(ids) == 12
+        assert "chp.adapters.git.clone" in ids
+        assert "chp.adapters.git.init" in ids
+        assert len(ids) == 15
 
     def test_low_risk_read_capabilities(self):
         adapter = GitAdapter()
@@ -1061,3 +1064,107 @@ def test_ensure_git_missing_no_sudo_raises(monkeypatch):
     monkeypatch.setattr(_gitmod.os, "geteuid", lambda: 1000, raising=False)
     with pytest.raises(RuntimeError, match="no root and no sudo"):
         ensure_git_installed()
+
+
+# ---------------------------------------------------------------------------
+# clone
+# ---------------------------------------------------------------------------
+
+class TestClone:
+    @pytest.mark.asyncio
+    async def test_clone_returns_head(self):
+        backend = FakeGitBackend(responses={("rev-parse", "HEAD"): "abc1234def"})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.git.clone", {"url": "https://github.com/o/r", "dest": "/work/r"})
+        assert result.outcome == "success"
+        assert result.data["head"] == "abc1234def"
+        assert result.data["ok"] is True
+        # `--` stops option parsing before the url/dest positional args
+        assert ("clone", "--", "https://github.com/o/r", "/work/r") in backend.calls
+
+    @pytest.mark.asyncio
+    async def test_branch_and_depth_passed(self):
+        backend = FakeGitBackend(responses={("rev-parse", "HEAD"): "h"})
+        host = _make_host(backend)
+        await host.ainvoke("chp.adapters.git.clone", {"url": "https://github.com/o/r", "dest": "/w", "branch": "main", "depth": 1})
+        assert ("clone", "--branch", "main", "--depth", "1", "--", "https://github.com/o/r", "/w") in backend.calls
+
+    @pytest.mark.asyncio
+    async def test_rejects_ext_transport(self):
+        # git's ext:: transport is arbitrary command execution — must be rejected (the safety win).
+        host = _make_host(FakeGitBackend())
+        result = await host.ainvoke("chp.adapters.git.clone", {"url": "ext::sh", "dest": "/w"})
+        assert result.outcome == "failure"
+
+    @pytest.mark.asyncio
+    async def test_rejects_option_injection_dest(self):
+        host = _make_host(FakeGitBackend())
+        result = await host.ainvoke("chp.adapters.git.clone", {"url": "https://github.com/o/r", "dest": "--upload-pack=evil"})
+        assert result.outcome == "failure"
+
+    @pytest.mark.asyncio
+    async def test_url_required(self):
+        host = _make_host(FakeGitBackend())
+        result = await host.ainvoke("chp.adapters.git.clone", {"dest": "/w"})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_unknown_field_denied(self):
+        host = _make_host(FakeGitBackend())
+        result = await host.ainvoke("chp.adapters.git.clone", {"url": "https://github.com/o/r", "dest": "/w", "x": 1})
+        assert result.outcome == "denied"
+
+
+# ---------------------------------------------------------------------------
+# init (folder -> committed git repo)
+# ---------------------------------------------------------------------------
+
+class TestInit:
+    @pytest.mark.asyncio
+    async def test_init_add_commit(self):
+        backend = FakeGitBackend(responses={
+            ("status", "--porcelain"): "?? file.txt",
+            ("rev-parse", "HEAD"): "abc1234",
+        })
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.git.init", {})
+        assert result.outcome == "success"
+        assert result.data["head"] == "abc1234"
+        assert result.data["ok"] is True
+        assert ("init",) in backend.calls
+        assert ("add", "-A") in backend.calls
+        assert ("-c", "user.name=Sprig Import", "-c", "user.email=import@sprig.local", "commit", "-m", "Import") in backend.calls
+
+    @pytest.mark.asyncio
+    async def test_empty_dir_no_commit(self):
+        backend = FakeGitBackend(responses={("status", "--porcelain"): ""})  # nothing to commit
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.git.init", {})
+        assert result.data["ok"] is False
+        assert result.data["head"] == ""
+        assert not any(len(c) > 4 and c[4] == "commit" for c in backend.calls)  # never committed
+
+    @pytest.mark.asyncio
+    async def test_custom_message_and_author(self):
+        backend = FakeGitBackend(responses={("status", "--porcelain"): "?? x", ("rev-parse", "HEAD"): "h"})
+        host = _make_host(backend)
+        await host.ainvoke("chp.adapters.git.init", {"message": "First", "author_name": "Me", "author_email": "me@x"})
+        assert ("-c", "user.name=Me", "-c", "user.email=me@x", "commit", "-m", "First") in backend.calls
+
+    @pytest.mark.asyncio
+    async def test_unknown_field_denied(self):
+        host = _make_host(FakeGitBackend())
+        result = await host.ainvoke("chp.adapters.git.init", {"x": 1})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_error_propagates(self):
+        class ErrorBackend(FakeGitBackend):
+            def run(self, *args, cwd=None):
+                self.calls.append(args)
+                if args[:1] == ("init",):
+                    raise RuntimeError("permission denied")
+                return ""
+        host = _make_host(ErrorBackend())
+        result = await host.ainvoke("chp.adapters.git.init", {})
+        assert result.outcome == "failure"

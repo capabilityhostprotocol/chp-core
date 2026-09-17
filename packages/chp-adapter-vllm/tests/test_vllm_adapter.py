@@ -55,10 +55,20 @@ class FakeHttpAdapter(BaseAdapter):
                 "usage": {"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18},
             }
         elif url.endswith("/v1/chat/completions"):
-            body = {
-                "choices": [{"message": {"role": "assistant", "content": "CHAT_REPLY_TEXT"}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
-            }
+            if (payload.get("json_body") or {}).get("tools"):   # tools forwarded -> model returns tool_calls
+                body = {
+                    "choices": [{"message": {"role": "assistant", "content": "",
+                                             "tool_calls": [{"id": "call_1", "type": "function",
+                                                             "function": {"name": "get_weather",
+                                                                          "arguments": "{\"city\": \"Paris\"}"}}]},
+                                 "finish_reason": "tool_calls"}],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+                }
+            else:
+                body = {
+                    "choices": [{"message": {"role": "assistant", "content": "CHAT_REPLY_TEXT"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+                }
         elif url.endswith("/v1/models"):
             body = {"data": [{"id": "meta-llama/Llama-3.2-1B-Instruct", "owned_by": "vllm"}]}
         else:
@@ -156,6 +166,29 @@ class TestChat:
         assert result.data["message"]["content"] == "CHAT_REPLY_TEXT"
         assert result.data["prompt_tokens"] == 9
         assert result.data["completion_tokens"] == 5
+
+    def test_chat_forwards_tools_and_returns_tool_calls(self):
+        # tools/tool_choice forwarded to /v1/chat/completions; the response's tool_calls pass through
+        result = _invoke(_make_host(), "chp.adapters.vllm.chat", {
+            "messages": [{"role": "user", "content": "weather in Paris?"}],
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+            "tool_choice": "auto",
+        })
+        assert result.success
+        assert result.data["finish_reason"] == "tool_calls"
+        assert result.data["message"]["tool_calls"][0]["function"]["name"] == "get_weather"
+
+    def test_tool_role_message_validates(self):
+        # a tool-result message (role=tool, tool_call_id) must pass the relaxed schema, not be rejected
+        result = _invoke(_make_host(), "chp.adapters.vllm.chat", {
+            "messages": [
+                {"role": "user", "content": "weather?"},
+                {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function",
+                                                                       "function": {"name": "get_weather", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+            ],
+        })
+        assert result.success
 
     def test_message_content_not_in_evidence(self):
         host = _make_host()

@@ -53,6 +53,9 @@ from ._hooks import (
     _install_prepush_hook,
     _settings_path,
     _uninstall_hooks,
+    cmd_hook_antigravity_post_tool,
+    cmd_hook_antigravity_pre_tool,
+    cmd_hook_antigravity_stop,
     cmd_hook_codex_post_tool,
     cmd_hook_codex_pre_tool,
     cmd_hook_codex_stop,
@@ -501,6 +504,19 @@ def build_parser() -> argparse.ArgumentParser:
     gemini_stop_p = hook_sub.add_parser("gemini-stop", help="Process a Gemini CLI Stop event.")
     gemini_stop_p.add_argument("--store", default=None)
     gemini_stop_p.set_defaults(func=cmd_hook_gemini_stop)
+
+    ag_pre_p = hook_sub.add_parser("antigravity-pre-tool", help="Process an Antigravity CLI PreToolUse event.")
+    ag_pre_p.add_argument("--store", default=None, help="Evidence store path.")
+    ag_pre_p.add_argument("--policy", default=None, help="Policy file path (default: auto-locate).")
+    ag_pre_p.set_defaults(func=cmd_hook_antigravity_pre_tool)
+
+    ag_post_p = hook_sub.add_parser("antigravity-post-tool", help="Process an Antigravity CLI PostToolUse event.")
+    ag_post_p.add_argument("--store", default=None)
+    ag_post_p.set_defaults(func=cmd_hook_antigravity_post_tool)
+
+    ag_stop_p = hook_sub.add_parser("antigravity-stop", help="Process an Antigravity CLI Stop event.")
+    ag_stop_p.add_argument("--store", default=None)
+    ag_stop_p.set_defaults(func=cmd_hook_antigravity_stop)
 
     # --- hooks group (user-facing setup) ---
     hooks_p = subcommands.add_parser("hooks", help="Manage Claude Code hook registration.")

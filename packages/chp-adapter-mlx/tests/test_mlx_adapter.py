@@ -339,3 +339,26 @@ def test_ensure_base_snapshot_unreachable_is_caught(monkeypatch):
     monkeypatch.setattr(huggingface_hub, "snapshot_download", boom)
     from chp_adapter_mlx.adapter import _ensure_base_snapshot
     _ensure_base_snapshot("org/model")  # bare repo id → tries snapshot → caught, no raise
+
+
+# ---------------------------------------------------------------------------
+# #13 serving-efficiency knobs on start_server (_server_cmd)
+# ---------------------------------------------------------------------------
+
+def test_server_cmd_serving_knobs():
+    from chp_adapter_mlx.adapter import _server_cmd
+    cmd = _server_cmd("mlx-community/Qwen2.5-0.5B", 8081, "127.0.0.1",
+                      serving={"kv_bits": 8, "kv_group_size": 32,
+                               "quantized_kv_start": 512, "max_kv_size": 4096})
+    def val(flag):
+        return cmd[cmd.index(flag) + 1]
+    assert "--kv-bits" in cmd and val("--kv-bits") == "8"          # quantized KV cache (FP8-KV analog)
+    assert "--kv-group-size" in cmd and val("--kv-group-size") == "32"
+    assert "--quantized-kv-start" in cmd and val("--quantized-kv-start") == "512"
+    assert "--max-kv-size" in cmd and val("--max-kv-size") == "4096"
+
+
+def test_server_cmd_no_knobs_keeps_defaults():
+    from chp_adapter_mlx.adapter import _server_cmd
+    cmd = _server_cmd("m", 8081, "127.0.0.1")
+    assert "--kv-bits" not in cmd and "--max-kv-size" not in cmd    # omitted → engine defaults

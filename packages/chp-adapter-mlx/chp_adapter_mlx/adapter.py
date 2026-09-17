@@ -109,15 +109,31 @@ def _alive(pid: int) -> bool:
         return False
 
 
-def _server_cmd(model: str, port: int, host: str, adapter_path: str | None = None) -> list[str]:
+def _server_cmd(model: str, port: int, host: str, adapter_path: str | None = None,
+                serving: dict | None = None) -> list[str]:
     """Command to launch mlx_lm's OpenAI server. Prefer the console script next to
     the interpreter; fall back to `python -m mlx_lm.server`. --adapter-path serves a
-    LoRA on top of the base model (the flywheel's tuned variant)."""
+    LoRA on top of the base model (the flywheel's tuned variant).
+
+    ``serving`` exposes MLX's serving-efficiency knobs (#13): a **quantized KV cache**
+    (``kv_bits`` — the Apple-Silicon analog of vLLM's FP8 KV cache; halves/quarters KV
+    memory so longer contexts / more concurrency fit) with its group size and warm-up
+    start, plus ``max_kv_size`` to bound (rotate) the cache. Each maps 1:1 to an
+    mlx_lm.server flag; omitted knobs keep the engine defaults."""
     script = os.path.join(os.path.dirname(sys.executable), "mlx_lm.server")
     base = [script] if os.path.exists(script) else [sys.executable, "-m", "mlx_lm.server"]
     cmd = base + ["--model", model, "--port", str(port), "--host", host]
     if adapter_path:
         cmd += ["--adapter-path", adapter_path]
+    s = serving or {}
+    if s.get("kv_bits") is not None:                 # quantized KV cache (e.g. 8 or 4 bit) — memory ↓
+        cmd += ["--kv-bits", str(int(s["kv_bits"]))]
+    if s.get("kv_group_size") is not None:
+        cmd += ["--kv-group-size", str(int(s["kv_group_size"]))]
+    if s.get("quantized_kv_start") is not None:      # begin quantizing the KV cache after N tokens
+        cmd += ["--quantized-kv-start", str(int(s["quantized_kv_start"]))]
+    if s.get("max_kv_size") is not None:             # cap (rotate) the KV cache — bounds memory
+        cmd += ["--max-kv-size", str(int(s["max_kv_size"]))]
     return cmd
 
 
@@ -613,6 +629,17 @@ class MLXAdapter(BaseAdapter):
                 "port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 8081},
                 "host": {"type": "string", "default": "127.0.0.1"},
                 "adapter_path": {"type": "string", "description": "Serve a LoRA adapter on top of the base model (the flywheel's tuned variant)."},
+                "serving": {
+                    "type": "object",
+                    "description": "Serving-efficiency knobs (#13): a quantized KV cache (the FP8-KV analog) + cache sizing.",
+                    "properties": {
+                        "kv_bits": {"type": "integer", "enum": [4, 8], "description": "Quantized KV cache bits (4/8) — cuts KV memory so longer contexts / more concurrency fit."},
+                        "kv_group_size": {"type": "integer", "minimum": 1, "description": "KV quantization group size (default 64)."},
+                        "quantized_kv_start": {"type": "integer", "minimum": 0, "description": "Begin quantizing the KV cache after this many tokens."},
+                        "max_kv_size": {"type": "integer", "minimum": 1, "description": "Cap (rotate) the KV cache to bound memory."},
+                    },
+                    "additionalProperties": False,
+                },
             },
             "additionalProperties": False,
         },
@@ -627,6 +654,7 @@ class MLXAdapter(BaseAdapter):
         port = int(payload.get("port") or 8081)
         host = str(payload.get("host") or "127.0.0.1")
         adapter_path = payload.get("adapter_path") or None
+        serving = payload.get("serving") or None
         pidfile = os.path.join(_run_dir(), f"mlx-server-{port}.pid")
 
         existing = _read_pid(pidfile)
@@ -640,17 +668,19 @@ class MLXAdapter(BaseAdapter):
         fd = os.open(os.path.join(log_dir, f"mlx-server-{port}.log"),
                      os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         try:
-            proc = subprocess.Popen(_server_cmd(model, port, host, adapter_path),
+            proc = subprocess.Popen(_server_cmd(model, port, host, adapter_path, serving),
                                     stdout=fd, stderr=fd, start_new_session=True, env=env)
         finally:
             os.close(fd)
         _write_pid(pidfile, proc.pid)
-        ctx.emit("mlx_server_started", {"model": model, "port": port, "pid": proc.pid}, redacted=False)
+        ctx.emit("mlx_server_started", {"model": model, "port": port, "pid": proc.pid,
+                                        "serving": serving or {}}, redacted=False)
         return {
             "started": True,
             "pid": proc.pid,
             "port": port,
             "model": model,
+            "serving": serving or {},
             "note": "Loads weights (downloads on first run) then serves; poll chp.adapters.mlx.status.",
         }
 

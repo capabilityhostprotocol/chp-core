@@ -32,6 +32,29 @@ def _parse(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+def deadline_exceeded(deadline: str | None, at_time: str | None,
+                      skew_seconds: float = 0.0) -> bool:
+    """True iff the absolute deadline has passed at ``at_time`` (proposal 0052,
+    CAP-006). A None deadline never expires. A clock-skew tolerance (``skew_seconds``,
+    TIME-003) avoids spurious denials for small skew. FAIL CLOSED under clock
+    uncertainty (TIME-006): a present-but-unparseable deadline, or an absent/
+    unparseable ``at_time`` while a deadline is set, counts as exceeded — a live
+    deadline that cannot be safely evaluated must not admit consequential work."""
+    if deadline is None:
+        return False
+    try:
+        dl = _parse(deadline)
+    except (ValueError, TypeError):
+        return True
+    if not at_time:
+        return True
+    try:
+        now = _parse(at_time)
+    except (ValueError, TypeError):
+        return True
+    return now.timestamp() > dl.timestamp() + skew_seconds
+
+
 def temporal_envelope(**times: str | None) -> JSON:
     """Keep only the named temporal dimensions actually supplied — never substitute one for another
     (CHP-TEMP-001). An unknown dimension name is rejected so a caller cannot smuggle a wrong time in

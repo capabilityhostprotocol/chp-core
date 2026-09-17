@@ -1,0 +1,13 @@
+{
+  "name": "prospect-research",
+  "description": "Research a prospect and draft an outreach note.",
+  "instructions": "Use websearch to research the company, then compose a short outreach note.",
+  "tools": [
+    "chp.adapters.scrapegraph.search",
+    "chp.adapters.local_llm.chat"
+  ],
+  "agent_type": "tool",
+  "role": "tool",
+  "model": null,
+  "version": "1"
+}

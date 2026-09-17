@@ -13,6 +13,7 @@ export const RESERVED_DENIAL_CODES = [
   "capability_disabled",
   "capability_not_found",
   "capability_version_unsupported",
+  "deadline_exceeded",
   "escalation_required",
   "evidence_required",
   "host_unreachable",

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 
 def _settings_path(global_scope: bool, project: bool) -> str:
-    from pathlib import Path
     if project:
         return str(Path(".claude") / "settings.json")
     return str(Path.home() / ".claude" / "settings.json")
@@ -17,8 +17,6 @@ def _install_hooks(settings_path: str, with_governance: bool = False,
                    store: str | None = None) -> None:
     """Add CHP hooks to a Claude Code settings.json file (idempotent). ``store`` routes the pre-tool
     gate's evidence (incl. denials) to a shared store so every harness feeds one evidence plane."""
-    from pathlib import Path
-
     path = Path(settings_path)
     settings: dict = {}
     if path.exists():
@@ -59,7 +57,6 @@ def _install_hooks(settings_path: str, with_governance: bool = False,
 
 
 def _default_hook_store() -> str:
-    from pathlib import Path
     return str(Path.home() / ".chp" / "hook-evidence.sqlite")
 
 
@@ -93,53 +90,93 @@ def _write_default_policy() -> str | None:
     return str(path)
 
 
-def _install_gemini_hooks(store: str, chp_bin: str) -> str:
-    """Wire the pre-tool gate into Gemini CLI settings.json (idempotent). Gemini's shell tool is
-    ``run_shell_command`` — matched by ``.*shell.*``."""
-    from pathlib import Path
-    path = Path.home() / ".gemini" / "settings.json"
+def _install_json_hooks(path: "Path", store: str, chp_bin: str, prefix: str, shell_matcher: str) -> str:
+    """Wire the FULL CHP hook set — PreToolUse (gate), PostToolUse (evidence), Stop (session) — into a
+    Claude-Code-style settings.json (Gemini CLI + its Antigravity successor share this shape). Idempotent:
+    each event is added only if a `<prefix>-<event>` command isn't already present, so a session is both
+    GOVERNED and EVIDENCED, not just gated. ``shell_matcher`` scopes the blocking gate to the shell tool."""
     settings: dict = {}
     if path.exists():
         with path.open() as f:
             settings = json.load(f)
-    pre = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    cmds = [h.get("command", "") for e in pre for h in e.get("hooks", [])]
-    if not any("gemini-pre-tool" in c for c in cmds):
-        pre.append({"matcher": ".*shell.*", "hooks": [
-            {"type": "command", "command": f"{chp_bin} hook gemini-pre-tool --store {store}",
-             "timeout": 10}]})
+    hooks = settings.setdefault("hooks", {})
+
+    def _ensure(event: str, marker: str, entry: dict) -> None:
+        arr = hooks.setdefault(event, [])
+        cmds = [h.get("command", "") for e in arr for h in e.get("hooks", [])]
+        if not any(marker in c for c in cmds):
+            arr.append(entry)
+
+    _ensure("PreToolUse", f"{prefix}-pre-tool", {"matcher": shell_matcher, "hooks": [
+        {"type": "command", "command": f"{chp_bin} hook {prefix}-pre-tool --store {store}", "timeout": 10}]})
+    _ensure("PostToolUse", f"{prefix}-post-tool", {"matcher": ".*", "hooks": [
+        {"type": "command", "command": f"{chp_bin} hook {prefix}-post-tool --store {store}"}]})
+    _ensure("Stop", f"{prefix}-stop", {"hooks": [
+        {"type": "command", "command": f"{chp_bin} hook {prefix}-stop --store {store}"}]})
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
         json.dump(settings, f, indent=2)
     return str(path)
 
 
+def _install_gemini_hooks(store: str, chp_bin: str) -> str:
+    """Wire the full gate+evidence hook set into Gemini CLI settings.json (idempotent). Gemini's shell tool
+    is ``run_shell_command`` — the gate matches ``.*shell.*``."""
+    from pathlib import Path
+    return _install_json_hooks(Path.home() / ".gemini" / "settings.json", store, chp_bin,
+                               prefix="gemini", shell_matcher=".*shell.*")
+
+
+def _install_antigravity_hooks(store: str, chp_bin: str) -> str:
+    """Wire the full gate+evidence hook set into the Antigravity CLI (the Gemini CLI successor), whose
+    PreToolUse/PostToolUse lifecycle hooks share the settings.json shape. NOTE: the exact config PATH is not
+    yet confirmed against antigravity.google/docs — modeled on the Gemini CLI location; verify + adjust."""
+    from pathlib import Path
+    return _install_json_hooks(Path.home() / ".antigravity" / "settings.json", store, chp_bin,
+                               prefix="antigravity", shell_matcher=".*shell.*|.*run_command.*")
+
+
 def _install_codex_hooks(store: str, chp_bin: str) -> str:
-    """Wire the pre-tool gate into Codex CLI config.toml (idempotent). Codex PreToolUse fires for the
-    Bash tool only; needs ``[features] hooks = true``. Text-level edit — TOML allows one [features]
-    table, so we insert into it rather than append a duplicate."""
+    """Wire the full CHP hook set into Codex CLI config.toml (idempotent): PreToolUse (the shell gate),
+    PostToolUse + Stop (session evidence) — so a Codex terminal session is both GOVERNED and EVIDENCED.
+    Needs ``[features] hooks = true``. Text-level edit — each block is appended only if absent."""
     import re as _re
     from pathlib import Path
     path = Path.home() / ".codex" / "config.toml"
     text = path.read_text() if path.exists() else ""
-    if "codex-pre-tool" in text:
-        return str(path)  # already wired
     if _re.search(r"(?m)^\s*hooks\s*=\s*true", text) is None:
         if _re.search(r"(?m)^\[features\]\s*$", text):
             text = _re.sub(r"(?m)^\[features\]\s*$", "[features]\nhooks = true", text, count=1)
         else:
             text = text.rstrip() + "\n\n[features]\nhooks = true\n"
-    block = (
-        "\n# CHP governance: block consequential shell commands via the shared policy gate.\n"
-        '[[hooks.PreToolUse]]\nmatcher = "^Bash$"\n\n'
-        "[[hooks.PreToolUse.hooks]]\n"
-        'type = "command"\n'
-        f"command = '{chp_bin} hook codex-pre-tool --store {store}'\n"
-        "timeout = 10\n"
-    )
-    text = text.rstrip() + "\n" + block
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    blocks = []
+    if "codex-pre-tool" not in text:
+        blocks.append(
+            "\n# CHP governance: block consequential shell commands via the shared policy gate.\n"
+            '[[hooks.PreToolUse]]\nmatcher = "^Bash$"\n\n'
+            "[[hooks.PreToolUse.hooks]]\n"
+            'type = "command"\n'
+            f"command = '{chp_bin} hook codex-pre-tool --store {store}'\n"
+            "timeout = 10\n")
+    if "codex-post-tool" not in text:
+        blocks.append(
+            "\n# CHP evidence: record every tool call.\n"
+            '[[hooks.PostToolUse]]\nmatcher = ".*"\n\n'
+            "[[hooks.PostToolUse.hooks]]\n"
+            'type = "command"\n'
+            f"command = '{chp_bin} hook codex-post-tool --store {store}'\n")
+    if "codex-stop" not in text:
+        blocks.append(
+            "\n# CHP evidence: close the session.\n"
+            "[[hooks.Stop]]\n\n"
+            "[[hooks.Stop.hooks]]\n"
+            'type = "command"\n'
+            f"command = '{chp_bin} hook codex-stop --store {store}'\n")
+    if blocks:
+        text = text.rstrip() + "\n" + "".join(blocks)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
     return str(path)
 
 
@@ -264,6 +301,11 @@ def cmd_hook_gemini_pre_tool(args: argparse.Namespace) -> int:
     return _run_pre_tool(args, tool_map=GEMINI_TOOL_CAPABILITY_MAP, agent_prefix="gemini")
 
 
+def cmd_hook_antigravity_pre_tool(args: argparse.Namespace) -> int:
+    from ..hooks import ANTIGRAVITY_TOOL_CAPABILITY_MAP
+    return _run_pre_tool(args, tool_map=ANTIGRAVITY_TOOL_CAPABILITY_MAP, agent_prefix="antigravity")
+
+
 def cmd_hook_post_tool(args: argparse.Namespace) -> int:
     import sys
     from ..hooks import default_store_path, process_post_tool_use
@@ -337,6 +379,33 @@ def cmd_hook_gemini_stop(args: argparse.Namespace) -> int:
     try:
         payload = json.loads(sys.stdin.read())
         process_stop(payload, store_path, agent_prefix="gemini")
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def cmd_hook_antigravity_post_tool(args: argparse.Namespace) -> int:
+    import sys
+    from ..hooks import ANTIGRAVITY_TOOL_CAPABILITY_MAP, default_store_path, process_post_tool_use
+
+    store_path = args.store if args.store else default_store_path()
+    try:
+        payload = json.loads(sys.stdin.read())
+        process_post_tool_use(payload, store_path, tool_map=ANTIGRAVITY_TOOL_CAPABILITY_MAP,
+                              agent_prefix="antigravity")
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def cmd_hook_antigravity_stop(args: argparse.Namespace) -> int:
+    import sys
+    from ..hooks import default_store_path, process_stop
+
+    store_path = args.store if args.store else default_store_path()
+    try:
+        payload = json.loads(sys.stdin.read())
+        process_stop(payload, store_path, agent_prefix="antigravity")
     except Exception:  # noqa: BLE001
         pass
     return 0
@@ -442,9 +511,9 @@ def cmd_hooks_install(args: argparse.Namespace) -> int:
     path = _settings_path(getattr(args, "global_scope", False), getattr(args, "project", False))
     all_harnesses = getattr(args, "all_harnesses", False)
     store = getattr(args, "store", None) or _default_hook_store()
-    # --all-harnesses provisions the governed gate identically across Claude Code, Codex, and Gemini,
-    # all feeding one evidence store, and drops the default policy — one command replaces hand-editing
-    # three configs on every machine.
+    # --all-harnesses provisions the governed gate + session evidence identically across Claude Code, Codex,
+    # Gemini CLI, and its Antigravity successor — all feeding one evidence store — and drops the default
+    # policy: one command replaces hand-editing every terminal CLI's config on every machine.
     _install_hooks(path, with_governance=getattr(args, "with_governance", False) or all_harnesses,
                    store=store if all_harnesses else None)
     print(f"CHP hooks installed in {path}")
@@ -453,6 +522,7 @@ def cmd_hooks_install(args: argparse.Namespace) -> int:
         chp_bin = shutil.which("chp") or "chp"
         print(f"Gemini hooks installed in {_install_gemini_hooks(store, chp_bin)}")
         print(f"Codex hooks installed in {_install_codex_hooks(store, chp_bin)}")
+        print(f"Antigravity hooks installed in {_install_antigravity_hooks(store, chp_bin)}")
         written = _write_default_policy()
         print(f"Default policy written to {written}" if written
               else "Policy already present — left as-is")

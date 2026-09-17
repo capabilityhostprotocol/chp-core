@@ -128,5 +128,95 @@ def test_export_bundle_signed_and_verifiable(tmp_path):
         server.close()
 
 
+def test_decision_stream_pubsub_delivers():
+    """The async HITL carrier: a host publishes a decision, a subscriber receives it — no blocking
+    query (the sync await_decision's timeout class of bug is gone by construction)."""
+    host = _host("zt-dec")
+    server = ZenohHostServer(host)
+    transport = ZenohTransport("zt-dec")
+    received: list = []
+    sub = transport.subscribe_decisions(received.append)
+    time.sleep(0.4)
+    try:
+        server.publish_decision({"approval_id": "a1", "decision": "approve", "by": "@pm:chp.local"})
+        for _ in range(20):
+            if received:
+                break
+            time.sleep(0.1)
+        assert received and received[0]["decision"] == "approve" and received[0]["approval_id"] == "a1"
+    finally:
+        sub.undeclare(); transport.close(); server.close()
+
+
+def test_liveliness_presence_up_and_down():
+    """Push-based presence: a host declares a liveliness token → a watcher sees it UP and can query the
+    live set; when the host closes (token drops) the watcher sees it DOWN — no heartbeat/TTL polling."""
+    host = _host("zt-live")
+    server = ZenohHostServer(host, declare_presence=True)
+    transport = ZenohTransport("zt-live")
+    changes: list = []
+    sub = transport.watch_presence(lambda key, alive: changes.append((key, alive)))
+    time.sleep(0.5)
+    try:
+        for _ in range(20):                       # UP: token appeared (history replays it)
+            if any(alive for _, alive in changes):
+                break
+            time.sleep(0.1)
+        assert any(alive for _, alive in changes), "presence UP not observed"
+        assert any("zt-live" in k for k in transport.live_hosts()), "live_hosts missing the host"
+
+        server.close()                            # drop the token → DOWN
+        for _ in range(20):
+            if any(not alive for _, alive in changes):
+                break
+            time.sleep(0.1)
+        assert any(not alive for _, alive in changes), "presence DOWN not observed after close"
+    finally:
+        sub.undeclare(); transport.close()
+
+
+def test_long_invoke_does_not_starve_health():
+    """The hardening: a long-running invocation must NOT block health/discover. Invokes are drained off
+    the Zenoh callback thread (FifoChannel + worker), so while a slow invoke runs the node stays live."""
+    import threading
+
+    host = LocalCapabilityHost("zt-slow", store=SQLiteEvidenceStore(":memory:"))
+    started = threading.Event()
+
+    async def slow(_c, _p):
+        started.set()
+        await asyncio.sleep(2.0)   # stand-in for a long sovereign-model generation
+        return {"ok": True}
+
+    host.register(CapabilityDescriptor(id="slow.op", version="1.0.0", description="."), slow)
+    server = ZenohHostServer(host)
+    # Two independent clients (separate sessions), as in production: one runs the slow invoke, the
+    # other checks health while it is in-flight.
+    caller = ZenohTransport("zt-slow")
+    watcher = ZenohTransport("zt-slow")
+    time.sleep(0.4)
+    done: list = []
+
+    def _run_slow():
+        env = InvocationEnvelope.from_mapping(
+            {"capability_id": "slow.op", "payload": {}, "correlation": {"correlation_id": "slow-corr"}})
+        done.append(asyncio.run(caller.ainvoke_envelope(env)))
+
+    try:
+        worker = threading.Thread(target=_run_slow, daemon=True)
+        worker.start()
+        assert started.wait(3.0), "slow invoke never started on the node"
+        # WHILE the 2s invoke runs, health must return promptly — not queue behind it.
+        t0 = time.monotonic()
+        health = asyncio.run(watcher.health())
+        dt = time.monotonic() - t0
+        assert health["status"] == "ok"
+        assert dt < 1.5, f"health starved {dt:.2f}s behind the in-flight invoke (loop not hardened)"
+        worker.join(5.0)
+        assert done and done[0].success and done[0].data == {"ok": True}  # the slow invoke still completed
+    finally:
+        caller.close(); watcher.close(); server.close()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "--no-header", "-p", "no:cacheprovider"]))

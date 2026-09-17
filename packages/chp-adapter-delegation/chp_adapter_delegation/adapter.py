@@ -186,3 +186,54 @@ class DelegationAdapter(BaseAdapter):
             "reason": reason,
         })
         return {"delegation_id": delegation_id, "status": "rejected"}
+
+    @capability(
+        id="chp.adapters.delegation.review",
+        version="0.1.0",
+        category="agent_operations",
+        risk="medium",
+        description=(
+            "Supervisor review of a completed handoff: verify the sub-agent's RESULT against acceptance "
+            "criteria through the signed chp.adapters.eval.verify keystone, then accept (emit delegation_"
+            "accepted) or reject (emit delegation_rejected) — a signed verification gate on every handoff. "
+            "Closes the #1 multi-agent failure mode (unverified handoffs, per MAST): no result is accepted "
+            "without a tamper-evident check, so a supervisor/swarm/handoff loop is governed end-to-end. "
+            "criteria = eval.verify config {mode, reference?, match?, rubric?, judge_cap?, threshold}. The "
+            "result text rides the verify call, not this adapter's events."
+        ),
+        emits=["delegation_reviewed", "delegation_accepted", "delegation_rejected"],
+        input_schema={
+            "type": "object",
+            "required": ["delegation_id", "result"],
+            "properties": {
+                "delegation_id": {"type": "string"},
+                "result": {"type": "string", "description": "The sub-agent's output to verify before accepting."},
+                "criteria": {"type": "object", "description": "eval.verify config: {mode, reference?, match?, rubric?, judge_cap?, threshold}."},
+                "verify_cap": {"type": "string", "description": "Verifier capability (default chp.adapters.eval.verify)."},
+            },
+            "additionalProperties": False,
+        },
+    )
+    async def review(self, ctx: Any, payload: dict) -> dict:
+        delegation_id = payload["delegation_id"]
+        result = payload["result"]
+        criteria = dict(payload.get("criteria") or {})
+        verify_cap = payload.get("verify_cap") or "chp.adapters.eval.verify"
+
+        verdict = await ctx.ainvoke(verify_cap, {"output": result, **criteria})   # signed verification gate
+        vd = (getattr(verdict, "data", None) or {}) if getattr(verdict, "success", False) else {}
+        score = round(float(vd.get("score", 0.0)), 4)
+        passed = bool(vd.get("passed", False))
+
+        ctx.emit("delegation_reviewed", {
+            "delegation_id": delegation_id, "score": score, "passed": passed, "verify_cap": verify_cap})
+        if passed:
+            ctx.emit("delegation_accepted", {
+                "delegation_id": delegation_id, "verified": True, "score": score})
+        else:
+            ctx.emit("delegation_rejected", {
+                "delegation_id": delegation_id, "reason": "verification_failed", "score": score})
+        return {
+            "delegation_id": delegation_id, "accepted": passed, "score": score,
+            "verdict": {"score": score, "passed": passed}, "verify_cap": verify_cap,
+        }

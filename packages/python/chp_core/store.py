@@ -505,6 +505,7 @@ class SQLiteEvidenceStore:
         self,
         *,
         capability_id: str | None = None,
+        correlation_id: str | None = None,
         outcome: str | None = None,
         since: str | None = None,
         until: str | None = None,
@@ -515,6 +516,9 @@ class SQLiteEvidenceStore:
         if capability_id is not None:
             clauses.append("capability_id = ?")
             params.append(capability_id)
+        if correlation_id is not None:   # uses idx_evidence_correlation — targeted, no full-window scan
+            clauses.append("correlation_id = ?")
+            params.append(correlation_id)
         if outcome is not None:
             clauses.append("outcome = ?")
             params.append(outcome)

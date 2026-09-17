@@ -47,6 +47,7 @@ accompanies a **`skipped`** outcome, not `denied` (pipeline gate 3).
 | `output_schema_validation_failed` | The result violated the capability's declared `output_schema`. Emitted only in strict mode — host `strict_output_schema` or a caller's `require_output_schema`; the default is validate-and-warn (the violation is recorded on the `execution_completed` evidence, still a success). `details` SHOULD carry `schema_id`, `path`. | false |
 | `invariant_failed` | A declared invariant did not hold. `invariant_id` SHOULD be set. | false |
 | `budget_exceeded` | An `AutonomyProfile` budget (calls / tokens / cost) was exhausted (§4.1). | true |
+| `deadline_exceeded` | The invocation's absolute deadline has passed; no time budget remains (proposal 0052). | false |
 | `approval_required` | A human-approval gate is unsatisfied (§4.1). | true |
 | `safety_blocked` | A safety guardrail blocked the invocation (§4.2). | false |
 | `mandate_invalid` | A presented mandate failed verification — bad signature, principal attestation, validity window, or delegate binding (chp-v0.2.md §10). An expired mandate is NOT retryable: a new mandate is a new object. | false |

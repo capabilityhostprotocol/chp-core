@@ -1,0 +1,51 @@
+{
+  "id": "bd-manager",
+  "role": "reason",
+  "description": "BD orchestrator",
+  "tools": [],
+  "skills": [],
+  "managed": [
+    {
+      "id": "researcher",
+      "role": "tool",
+      "description": "Sourcing specialist",
+      "tools": [
+        "chp.adapters.source.discover"
+      ],
+      "skills": [
+        {
+          "name": "prospect-research",
+          "description": "Research a prospect and draft an outreach note.",
+          "instructions": "Use websearch to research the company, then compose a short outreach note.",
+          "tools": [
+            "chp.adapters.scrapegraph.search",
+            "chp.adapters.local_llm.chat"
+          ],
+          "agent_type": "tool",
+          "role": "tool",
+          "model": null,
+          "version": "1"
+        }
+      ],
+      "managed": [],
+      "agent_type": "tool",
+      "model": null,
+      "node": null,
+      "persona": "",
+      "instructions": "",
+      "mode": "manager",
+      "skill_tasks": {},
+      "version": "1"
+    }
+  ],
+  "agent_type": "manager",
+  "model": null,
+  "node": null,
+  "persona": "You coordinate a small BD team.",
+  "instructions": "Delegate research, then review.",
+  "mode": "manager",
+  "skill_tasks": {
+    "prospect-research": "focus on fintech"
+  },
+  "version": "1"
+}

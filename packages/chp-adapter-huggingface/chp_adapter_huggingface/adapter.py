@@ -1463,12 +1463,15 @@ class HuggingFaceAdapter(BaseAdapter):
         id="chp.adapters.huggingface.finetune",
         version="1.0.0",
         description=(
-            "Fine-tune a model locally. task_type='text-classification' (transformers.Trainer) or "
+            "Fine-tune a model locally. task_type='text-classification' (transformers.Trainer), "
             "'causal-lm' (the GPU route: 4-bit NF4 QLoRA via TRL SFTTrainer + PEFT LoRA over a text "
-            "field → saves a LoRA adapter that feeds merge_adapter→quantize_to_gguf→import). Causal-LM "
-            "4-bit needs a CUDA GPU (else set load_in_4bit=false, or use mlx.finetune on Apple Silicon). "
-            "Governance: model, dataset, hyperparameters, and final loss logged; no training content or "
-            "weights emitted."
+            "field → saves a LoRA adapter that feeds merge_adapter→quantize_to_gguf→import), or 'grpo' "
+            "(RLVR: TRL GRPOTrainer samples num_generations completions per prompt and optimises toward "
+            "a verifiable reward — the reward is a governed CHP invocation of reward_cap (default "
+            "chp.adapters.eval.verify) per completion, so RL reward lands in the signed evidence chain). "
+            "Causal-LM/GRPO 4-bit needs a CUDA GPU (else set load_in_4bit=false, or use mlx.finetune on "
+            "Apple Silicon). Governance: model, dataset, hyperparameters, and final loss logged; no "
+            "training content or weights emitted."
         ),
         category="ai",
         risk="high",
@@ -1481,7 +1484,7 @@ class HuggingFaceAdapter(BaseAdapter):
                 "dataset": {"type": "array", "items": {"type": "object"},
                             "description": "causal-lm: inline training records (each with the text field) — train on mesh data with no Hub dataset"},
                 "output_dir": {"type": "string", "description": "Local path to save the fine-tuned model / LoRA adapter"},
-                "task_type": {"type": "string", "enum": ["text-classification", "causal-lm"], "default": "text-classification"},
+                "task_type": {"type": "string", "enum": ["text-classification", "causal-lm", "grpo", "rl"], "default": "text-classification"},
                 "num_epochs": {"type": "integer", "minimum": 1, "maximum": 10, "default": 3},
                 "batch_size": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8},
                 "learning_rate": {"type": "number", "minimum": 1e-7, "maximum": 0.1, "default": 5e-5},
@@ -1492,6 +1495,13 @@ class HuggingFaceAdapter(BaseAdapter):
                 "lora_alpha": {"type": "integer", "minimum": 1, "description": "causal-lm: LoRA alpha (default 32)"},
                 "lora_dropout": {"type": "number", "minimum": 0, "maximum": 1, "description": "causal-lm: LoRA dropout (default 0.05)"},
                 "max_seq_len": {"type": "integer", "minimum": 1, "description": "causal-lm: max sequence length (default 1024)"},
+                "reward_cap": {"type": "string", "description": "grpo: reward capability invoked per completion (default chp.adapters.eval.verify)"},
+                "reward_mode": {"type": "string", "enum": ["verifiable", "judge"], "description": "grpo: reward_cap mode (default verifiable)"},
+                "reference_field": {"type": "string", "description": "grpo: dataset column holding each prompt's reference answer, passed to the reward (default 'reference')"},
+                "reward_options": {"type": "object", "description": "grpo: extra params forwarded to reward_cap (e.g. match, threshold, rubric, judge_cap)"},
+                "prompt_field": {"type": "string", "description": "grpo: dataset column holding the prompt (default: prompt/question/text)"},
+                "num_generations": {"type": "integer", "minimum": 2, "maximum": 64, "description": "grpo: completions sampled per prompt (default 4)"},
+                "max_completion_length": {"type": "integer", "minimum": 1, "description": "grpo: max tokens per sampled completion (default 256)"},
             },
             "required": ["model", "output_dir"],
             "additionalProperties": False,
@@ -1508,11 +1518,45 @@ class HuggingFaceAdapter(BaseAdapter):
         batch_size: int = payload.get("batch_size", 8)
         learning_rate: float = payload.get("learning_rate", 5e-5)
         max_steps: int | None = payload.get("max_steps")
-        # causal-lm QLoRA knobs (ignored by the classification path)
+        # causal-lm QLoRA + grpo knobs (each path ignores the others' knobs)
         options = {k: payload[k] for k in
                    ("text_field", "load_in_4bit", "lora_r", "lora_alpha", "lora_dropout",
-                    "max_seq_len", "dataset")
+                    "max_seq_len", "dataset", "prompt_field", "num_generations",
+                    "max_completion_length")
                    if k in payload}
+
+        # grpo/rl: build the verifiable-reward callback in this async layer (it holds ctx + the loop),
+        # bridging each completion to a governed CHP reward cap — the training backend stays pure.
+        reward_fn = None
+        if task_type in ("grpo", "rl"):
+            loop = asyncio.get_running_loop()
+            reward_cap: str = payload.get("reward_cap", "chp.adapters.eval.verify")
+            reward_mode: str = payload.get("reward_mode", "verifiable")
+            reference_field: str = payload.get("reference_field", "reference")
+            reward_extra: dict = payload.get("reward_options") or {}
+
+            def _completion_text(comp: Any) -> str:
+                if isinstance(comp, str):
+                    return comp
+                if isinstance(comp, list) and comp:   # conversational: [{role, content}, …]
+                    last = comp[-1]
+                    return last.get("content", "") if isinstance(last, dict) else str(last)
+                return str(comp)
+
+            def _reward(completions: list, **cols: Any) -> list[float]:
+                refs = cols.get(reference_field) or [None] * len(completions)
+                scores: list[float] = []
+                for comp, ref in zip(completions, refs):
+                    vp = {"output": _completion_text(comp), "mode": reward_mode, **reward_extra}
+                    if ref is not None:
+                        vp["reference"] = ref
+                    # same bridge as the smolagents tool wall: govern the reward from the trainer thread
+                    res = asyncio.run_coroutine_threadsafe(ctx.ainvoke(reward_cap, vp), loop).result()
+                    ok = getattr(res, "success", False)
+                    scores.append(float(res.data.get("score", 0.0)) if ok else 0.0)
+                return scores
+
+            reward_fn = _reward
 
         ctx.emit("hf_finetune_started", {
             "model": model,
@@ -1542,6 +1586,7 @@ class HuggingFaceAdapter(BaseAdapter):
                 self._config.resolved_cache_dir(),
                 await self._get_token(ctx),
                 options,
+                reward_fn,
             )
         except Exception as exc:
             ctx.emit("hf_finetune_failed", {
@@ -1558,6 +1603,10 @@ class HuggingFaceAdapter(BaseAdapter):
             "output_dir": result.get("output_dir"),
             "steps": result.get("steps"),
             "final_loss": result.get("final_loss"),
+            # the measured ARPO/RL signal lands in signed evidence: start→end reward + delta
+            "reward_start": result.get("reward_start"),
+            "reward_end": result.get("reward_end"),
+            "reward_delta": result.get("reward_delta"),
             "latency_ms": latency_ms,
         }, redacted=False)
         return {**result, "latency_ms": latency_ms}
@@ -1635,6 +1684,142 @@ class HuggingFaceAdapter(BaseAdapter):
             "latency_ms": latency_ms,
         }, redacted=False)
         return {**result, "latency_ms": latency_ms}
+
+    # ------------------------------------------------------------------
+    # quantize (AWQ / GPTQ — GPU-serving formats)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.huggingface.quantize",
+        version="1.0.0",
+        description=(
+            "Quantize a local HF model to GPTQ/AWQ (int4) — the GPU-serving format vLLM loads natively — "
+            "completing quant breadth beyond GGUF (llama.cpp/CPU) and MLX (Apple Silicon). Output is a "
+            "vLLM-loadable model directory. Two execution paths: execution='in_process' imports the quant "
+            "lib in the node's env (needs the [quant] extra); execution='container' composes "
+            "chp.adapters.container.run against a prebuilt CUDA image (default chp-quant:gptq) with GPU "
+            "passthrough — for GPU nodes where the libs can't be installed (e.g. a Windows node without "
+            "MSVC). method=gptq is the maintained path (autoawq is deprecated / unimportable on 2026 "
+            "transformers). Pass domain-representative `calibration` text for best accuracy. Redacted: "
+            "model weights + calibration text never reach evidence — only method, bits, group_size, size."
+        ),
+        category="ai",
+        risk="medium",
+        emits=_EMITS,
+        input_schema={
+            "type": "object",
+            "x-chp-representation": "hf_dir",  # transmutation-planner: consumes a local HF model dir
+            "properties": {
+                "model_path": {"type": "string", "description": "Local HF model dir (in_process/container-mounted) OR an HF repo id (container pulls it)."},
+                "output_path": {"type": "string", "description": "Destination directory for the quantized model (host path; mounted into the container)."},
+                "method": {"type": "string", "enum": ["awq", "gptq"], "default": "gptq", "description": "Quantization format. gptq is maintained; awq (autoawq) is deprecated."},
+                "bits": {"type": "integer", "enum": [4, 8], "default": 4},
+                "group_size": {"type": "integer", "default": 128, "description": "Weight grouping (128 is standard)."},
+                "calibration": {"type": "array", "items": {"type": "string"}, "description": "Calibration text samples (defaults to a generic set; pass domain text for quality)."},
+                "execution": {"type": "string", "enum": ["in_process", "container"], "default": "in_process", "description": "in_process=import libs in the node env; container=run in a CUDA container via the container adapter."},
+                "container_image": {"type": "string", "description": "Image for execution=container (default chp-quant:gptq)."},
+                "gpus": {"type": "string", "description": "GPU passthrough for execution=container (default 'all')."},
+                "container_timeout": {"type": "integer", "minimum": 60, "description": "Max container run seconds for execution=container (default 1800) — quantize must not be cut short."},
+            },
+            "required": ["model_path", "output_path"],
+            "additionalProperties": False,
+        },
+        output_schema={  # transmutation-planner edge: hf_dir -> quantized GPU dir
+            "type": "object", "x-chp-representation": "awq_dir",
+            "x-chp-loss": 0.15, "x-chp-cost-s": 600.0,
+        },
+    )
+    async def quantize(self, ctx: Any, payload: dict) -> dict:
+        model_path: str = payload["model_path"]
+        output_path: str = payload["output_path"]
+        method: str = payload.get("method", "gptq")
+        bits: int = int(payload.get("bits", 4))
+        group_size: int = int(payload.get("group_size", 128))
+        calibration: list | None = payload.get("calibration")
+        execution: str = payload.get("execution") or "in_process"
+
+        ctx.emit("hf_quantize_started", {
+            "model_path": model_path, "output_path": output_path, "execution": execution,
+            "method": method, "bits": bits, "group_size": group_size,
+            "calibration_n": len(calibration) if calibration else 0,  # count only — text redacted
+        }, redacted=False)
+
+        t0 = time.monotonic()
+        try:
+            if execution == "container":
+                result = await self._quantize_in_container(
+                    ctx, model_path=model_path, output_path=output_path, method=method,
+                    bits=bits, group_size=group_size, calibration=calibration,
+                    image=payload.get("container_image") or "chp-quant:gptq",
+                    gpus=payload.get("gpus") or "all",
+                    timeout=int(payload.get("container_timeout") or 1800))
+            else:
+                result = await asyncio.to_thread(
+                    self._backend().quantize,
+                    model_path, output_path, method, bits, group_size, calibration,
+                )
+        except Exception as exc:
+            ctx.emit("hf_quantize_failed", {
+                "model_path": model_path, "method": method, "execution": execution,
+                "error": str(exc)[:500],
+            }, redacted=False)
+            raise
+
+        latency_ms = round((time.monotonic() - t0) * 1000)
+        ctx.emit("hf_quantize_completed", {
+            "output_path": result.get("output_path"), "method": method, "bits": bits,
+            "execution": execution,
+            "output_size_bytes": result.get("output_size_bytes"), "latency_ms": latency_ms,
+        }, redacted=False)
+        return {**result, "latency_ms": latency_ms}
+
+    async def _quantize_in_container(self, ctx: Any, *, model_path: str, output_path: str,
+                                     method: str, bits: int, group_size: int,
+                                     calibration: list | None, image: str, gpus: str,
+                                     timeout: int = 1800) -> dict:
+        """Run the quantize in a prebuilt CUDA container via the governed container adapter — for GPU
+        nodes where the quant libs can't be installed. The image's entrypoint (python /quantize.py) takes
+        --model/--out/--method/--bits/--group-size and prints ``CHP_QUANTIZE_RESULT <json>``. The output
+        dir is bind-mounted; a local model dir is mounted read-only; an HF repo id is pulled in-container.
+        Calibration text is written into the mounted dir via the governed filesystem cap (never in argv/evidence)."""
+        import json as _json
+
+        cmd = ["--model", model_path, "--out", "/work/out",
+               "--method", method, "--bits", str(bits), "--group-size", str(group_size)]
+        volumes = [f"{output_path}:/work/out"]
+        if os.path.isabs(model_path) and os.path.isdir(model_path):
+            volumes.append(f"{model_path}:/model:ro")
+            cmd[1] = "/model"                      # mount the local model, don't pull
+        if calibration:                            # write via the filesystem cap → visible in the mount
+            await ctx.ainvoke("chp.adapters.filesystem.write_file", {
+                "path": os.path.join(output_path, ".calib.txt"),
+                "content": "\n".join(str(c) for c in calibration)})
+            cmd += ["--calib-file", "/work/out/.calib.txt"]
+
+        res = await ctx.ainvoke("chp.adapters.container.run", {
+            "image": image, "gpus": gpus, "detach": False, "remove": True,
+            "volumes": volumes, "command": cmd, "timeout": timeout})
+        rc = (getattr(res, "data", None) or {}).get("exit_code")
+        if not getattr(res, "success", False) or (rc not in (None, 0)):
+            raise RuntimeError(f"quantize container failed (exit={rc}): {getattr(res, 'error', '')}")
+
+        # Source of truth is the result FILE the entrypoint wrote into the mounted output dir — the
+        # quantizer's progress output can head-truncate the captured stdout past the trailing marker.
+        try:
+            fres = await ctx.ainvoke("chp.adapters.filesystem.read_file",
+                                     {"path": os.path.join(output_path, ".chp_result.json")})
+            content = (getattr(fres, "data", None) or {}).get("content")
+            if content:
+                return _json.loads(content)
+        except Exception:  # noqa: BLE001 — fall back to stdout if the file read is unavailable
+            pass
+        stdout = (getattr(res, "data", None) or {}).get("stdout") or ""
+        marker = "CHP_QUANTIZE_RESULT "
+        idx = stdout.rfind(marker)
+        if idx < 0:
+            raise RuntimeError(
+                f"quantize container exited {rc} but produced no result file or marker: ...{stdout[-300:]}")
+        return _json.loads(stdout[idx + len(marker):].splitlines()[0])
 
     # ------------------------------------------------------------------
     # faiss_index

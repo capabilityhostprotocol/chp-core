@@ -72,15 +72,28 @@ class CodexAdapter(BaseAdapter):
             # --- Filesystem reads ---
             _cap("codex.read", "Read a file.", risk="low", tags=["filesystem", "read"]),
             _cap("codex.ls", "List directory contents.", risk="low", tags=["filesystem", "read"]),
+            _cap("codex.glob", "Search for files by glob (glob_file_search).", risk="low", tags=["filesystem", "search"]),
+            _cap("codex.view_image", "Inspect an image at full resolution.", risk="low", tags=["vision", "read"]),
 
             # --- Filesystem writes ---
-            _cap("codex.edit", "Edit a file (str_replace).", risk="medium", tags=["filesystem", "write"]),
-            _cap("codex.write", "Write a new file.", risk="medium", tags=["filesystem", "write"]),
-            _cap("codex.delete", "Delete a file.", risk="high", tags=["filesystem", "write"]),
+            # apply_patch is Codex's actual edit primitive (a single tool applying a colorized diff); the CLI
+            # intercepts it internally. The old str_replace/create_file/delete_file names are legacy — kept
+            # mapped below for continuity, but apply_patch is what the 2026 CLI emits.
+            _cap("codex.apply_patch", "Apply a patch (add/update/delete files via a diff).", risk="medium",
+                 tags=["filesystem", "write"]),
+            _cap("codex.edit", "Edit a file (legacy str_replace).", risk="medium", tags=["filesystem", "write"]),
+            _cap("codex.write", "Write a new file (legacy).", risk="medium", tags=["filesystem", "write"]),
+            _cap("codex.delete", "Delete a file (legacy).", risk="high", tags=["filesystem", "write"]),
+
+            # --- Planning ---
+            _cap("codex.update_plan", "Maintain the step-by-step task plan.", risk="low", tags=["tasks"]),
 
             # --- Network ---
             _cap("codex.web_search", "Search the web.", risk="low", tags=["network"]),
             _cap("codex.web_fetch", "Fetch a URL.", risk="low", tags=["network"]),
+
+            # --- MCP (generic) ---
+            _cap("codex.mcp_tool", "Invoke an MCP server tool.", risk="medium", tags=["mcp"]),
 
             # --- Session lifecycle ---
             _cap(

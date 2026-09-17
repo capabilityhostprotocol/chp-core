@@ -23,7 +23,7 @@ from .host import CapabilityExecutionContext, LocalCapabilityHost
 from .http import CapabilityHostHTTPServer, RemoteCapabilityHost, create_http_server, serve_http
 from .transport import HttpTransport, LocalTransport, Transport
 from .store import SQLiteEvidenceStore
-from .decorators import capability
+from .decorators import capability, schema_from_type_hints
 from .codex import (
     CODEX_CAPABILITY_IDS,
     record_codex_action,
@@ -196,6 +196,7 @@ from .types import (
     EvaluationResult,
     ExecutionEvidence,
     ExecutionOutcome,
+    CapabilityDenied,
     IndeterminateExecution,
     HostDescriptor,
     HostRequirements,
@@ -353,6 +354,7 @@ __all__ = [
     "RemoteCapabilityHost",
     "CapabilityExecutionContext",
     "capability",
+    "schema_from_type_hints",
     "ConversationEvent",
     "CorrelationContext",
     "ENVIRONMENTS",
@@ -363,6 +365,7 @@ __all__ = [
     "DenialReason",
     "ExecutionEvidence",
     "ExecutionOutcome",
+    "CapabilityDenied",
     "IndeterminateExecution",
     "HostedCapability",
     "HostDescriptor",

@@ -46,6 +46,10 @@ class RadicleBackend(Protocol):
         """Run ``git push <remote> <branch>`` and return combined stdout+stderr."""
         ...
 
+    def git(self, *args: str, cwd: str | None = None) -> str:
+        """Run ``git <args>`` and return combined stdout+stderr. Raises RuntimeError on non-zero exit."""
+        ...
+
 
 class SubprocessRadicleBackend:
     """Production backend: delegates to the ``rad`` binary and ``git``."""
@@ -75,6 +79,19 @@ class SubprocessRadicleBackend:
             raise RuntimeError(combined or f"git push {remote} {branch} failed")
         return combined
 
+    def git(self, *args: str, cwd: str | None = None) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            env=_rad_env(),
+        )
+        combined = (result.stdout + result.stderr).strip()
+        if result.returncode != 0:
+            raise RuntimeError(combined or f"git {args[0] if args else ''} failed")
+        return combined
+
 
 class FakeRadicleBackend:
     """Test double: records calls and returns scripted responses."""
@@ -83,13 +100,16 @@ class FakeRadicleBackend:
         self,
         responses: dict[tuple, str] | None = None,
         push_responses: dict[tuple, str] | None = None,
+        git_responses: dict[tuple, str] | None = None,
         default: str = "",
     ) -> None:
         self._responses = responses or {}
         self._push_responses = push_responses or {}
+        self._git_responses = git_responses or {}
         self._default = default
         self.calls: list[tuple[str, ...]] = []
         self.push_calls: list[tuple[str, str]] = []
+        self.git_calls: list[tuple[str, ...]] = []
 
     def run(self, *args: str, cwd: str | None = None) -> str:
         self.calls.append(args)
@@ -99,3 +119,7 @@ class FakeRadicleBackend:
         self.push_calls.append((remote, branch))
         key = (remote, branch)
         return self._push_responses.get(key, f"To rad://fake\n * [new branch] {branch} -> {branch}")
+
+    def git(self, *args: str, cwd: str | None = None) -> str:
+        self.git_calls.append(args)
+        return self._git_responses.get(args, self._default)

@@ -89,6 +89,79 @@ function verifyCanon(pubB64: string, obj: JsonValue, sigB64: string): boolean {
   return edVerify(Buffer.from(canon(obj), 'utf8'), publicKeyFromB64(pubB64), Buffer.from(sigB64, 'base64'));
 }
 
+export interface HostIdentityVerification {
+  valid: boolean;
+  checks: Record<string, boolean>;
+  /** key_id from the attestation, when present. */
+  keyId: string | null;
+  /** The DID that countersigned the key, when a did anchor verified (offline). */
+  anchoredDid?: string | null;
+  reason?: string;
+}
+
+/**
+ * Verify a host descriptor's self-signed host_identity attestation (spec §3): it binds to the
+ * descriptor (host_id + public_key), is temporally valid, and its signature over the canonical claim
+ * checks out. This is the descriptor-level form of the `host_identity` check inside verifyBundle.
+ *
+ * SCOPE: this verifies host IDENTITY only. A HostDescriptor carries NO signature over its
+ * `capabilities` list, so a valid result means "this is host X's self-attested key", NOT "the catalog
+ * is signed/authorized". Discovery authenticates a host; it does not bind or authorize the catalog.
+ *
+ * Fail-closed: malformed input, a missing attestation, or any throw → { valid: false }.
+ */
+export function verifyHostIdentity(descriptor: unknown): HostIdentityVerification {
+  if (!isRecord(descriptor)) {
+    return { valid: false, checks: {}, keyId: null, reason: 'malformed input: not an object' };
+  }
+  try {
+    const att = descriptor.host_identity;
+    if (!isRecord(att)) {
+      return { valid: false, checks: { present: false }, keyId: null, reason: 'no host_identity attestation' };
+    }
+    const pub = String(descriptor.public_key ?? att.public_key ?? '');
+    // Conditional-anchors rule (spec §3): 'anchors'/'enc_public_key' participate in the signed bytes
+    // only when present — the same omit-when-empty rule as build + the bundle check.
+    const claim: Record<string, JsonValue> = {
+      host_id: att.host_id,
+      public_key: att.public_key,
+      key_id: att.key_id,
+      valid_from: att.valid_from,
+      valid_until: att.valid_until ?? null,
+    };
+    if ('anchors' in att) claim.anchors = att.anchors;
+    if ('enc_public_key' in att) claim.enc_public_key = att.enc_public_key;
+    // A descriptor has no created_at, so validate the window against now.
+    const now = new Date().toISOString();
+    const vf = (att.valid_from as string | null) ?? null;
+    const vu = (att.valid_until as string | null) ?? null;
+    const checks: Record<string, boolean> = {
+      host_id_matches: att.host_id === descriptor.id,
+      public_key_matches: pub !== '' && att.public_key === pub,
+      temporal: (vf === null || vf <= now) && (vu === null || now <= vu),
+      signature: verifyCanon(pub, claim, String(att.signature ?? '')),
+    };
+    let anchoredDid: string | null = null;
+    const dAnchor = didAnchor(att);
+    if (dAnchor) {
+      checks.did_anchor = verifyDidAnchor(dAnchor, pub, String(descriptor.id ?? ''));
+      if (checks.did_anchor) anchoredDid = dAnchor.did as string;
+    }
+    const valid = Object.values(checks).every(Boolean);
+    return {
+      valid,
+      checks,
+      keyId: (att.key_id as string | null) ?? null,
+      anchoredDid,
+      reason: valid
+        ? undefined
+        : 'failed checks: ' + Object.entries(checks).filter(([, v]) => !v).map(([k]) => k).join(', '),
+    };
+  } catch (e) {
+    return { valid: false, checks: {}, keyId: null, reason: `verifier error: ${(e as Error).message}` };
+  }
+}
+
 /** Offline-verify a store-head-anchor of `anchor.type === "rekor"` against a Rekor
  * log's pinned public key (spec §12, proposal 0033) — the SDK form of the
  * verify.mjs rekor-anchor branch + parity with Python `rekor.verify_rekor_anchor`.

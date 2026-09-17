@@ -71,7 +71,7 @@ class TestConfinement:
 # --------------------------------------------------------------------------
 
 class TestShaping:
-    def test_six_capabilities(self):
+    def test_seven_capabilities(self):
         ids = {c.descriptor.id for c in FilesystemAdapter().capabilities()}
         assert ids == {
             "chp.adapters.filesystem.read_file",
@@ -80,6 +80,7 @@ class TestShaping:
             "chp.adapters.filesystem.stat_path",
             "chp.adapters.filesystem.grep",
             "chp.adapters.filesystem.glob_files",
+            "chp.adapters.filesystem.extract",
         }
 
     def test_write_is_high_risk(self):
@@ -499,3 +500,64 @@ class TestGlobFiles:
         })
         types = [e["event_type"] for e in _cap_events(host.store)]
         assert "fs_glob" in types
+
+
+# ---------------------------------------------------------------------------
+# extract (ZIP)
+# ---------------------------------------------------------------------------
+
+import zipfile
+
+
+def _make_zip(path, entries):
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, content in entries.items():
+            zf.writestr(name, content)
+
+
+class TestExtract:
+    def test_extracts_zip(self, tmp_path):
+        z = tmp_path / "app.zip"
+        _make_zip(z, {"package.json": '{"name":"x"}', "src/index.js": "console.log(1)"})
+        dest = tmp_path / "out"
+        host = _make_host(FilesystemConfig(allowed_roots=[str(tmp_path)]))
+        r = host.invoke("chp.adapters.filesystem.extract", {"archive_path": str(z), "dest_dir": str(dest)})
+        assert r.outcome == "success"
+        assert r.data["files_extracted"] == 2
+        assert (dest / "package.json").read_text() == '{"name":"x"}'
+        assert (dest / "src" / "index.js").exists()
+
+    def test_rejects_zip_slip(self, tmp_path):
+        z = tmp_path / "evil.zip"
+        _make_zip(z, {"../escape.txt": "pwned"})
+        dest = tmp_path / "out"
+        host = _make_host(FilesystemConfig(allowed_roots=[str(tmp_path)]))
+        r = host.invoke("chp.adapters.filesystem.extract", {"archive_path": str(z), "dest_dir": str(dest)})
+        assert r.outcome == "failure"
+        assert not (tmp_path / "escape.txt").exists()  # nothing escaped the destination
+
+    def test_not_a_zip_fails(self, tmp_path):
+        f = tmp_path / "not.zip"
+        f.write_text("plain text")
+        host = _make_host(FilesystemConfig(allowed_roots=[str(tmp_path)]))
+        r = host.invoke("chp.adapters.filesystem.extract", {"archive_path": str(f), "dest_dir": str(tmp_path / "out")})
+        assert r.outcome == "failure"
+
+    def test_missing_archive_fails(self, tmp_path):
+        host = _make_host(FilesystemConfig(allowed_roots=[str(tmp_path)]))
+        r = host.invoke("chp.adapters.filesystem.extract", {"archive_path": str(tmp_path / "nope.zip"), "dest_dir": str(tmp_path / "out")})
+        assert r.outcome == "failure"
+
+    def test_archive_outside_sandbox_denied(self, tmp_path):
+        z = tmp_path / "app.zip"
+        _make_zip(z, {"a.txt": "1"})
+        root = tmp_path / "sandbox"
+        root.mkdir()
+        host = _make_host(FilesystemConfig(allowed_roots=[str(root)]))  # archive is OUTSIDE the sandbox
+        r = host.invoke("chp.adapters.filesystem.extract", {"archive_path": str(z), "dest_dir": str(root / "out")})
+        assert r.outcome == "failure"
+
+    def test_unknown_field_denied(self, tmp_path):
+        host = _make_host(FilesystemConfig(allowed_roots=[str(tmp_path)]))
+        r = host.invoke("chp.adapters.filesystem.extract", {"archive_path": str(tmp_path / "a.zip"), "dest_dir": str(tmp_path), "x": 1})
+        assert r.outcome == "denied"

@@ -45,20 +45,34 @@ TOOL_CAPABILITY_MAP: dict[str, str] = {
     "TodoWrite": "claude_code.todo_write",
     "NotebookRead": "claude_code.notebook_read",
     "NotebookEdit": "claude_code.notebook_edit",
+    "BashOutput": "claude_code.bash_output",
+    "KillShell": "claude_code.kill_shell",
+    "KillBash": "claude_code.kill_shell",          # legacy alias
+    "ExitPlanMode": "claude_code.exit_plan_mode",
+    "SlashCommand": "claude_code.slash_command",
+    "Skill": "claude_code.skill",
+    "AskUserQuestion": "claude_code.ask_user_question",
     "mcp__memory__create_entities": "claude_code.mcp.memory.create_entities",
 }
 
 # Maps OpenAI Codex CLI tool names to CHP capability IDs.
 CODEX_TOOL_CAPABILITY_MAP: dict[str, str] = {
     "shell": "codex.shell",
+    "apply_patch": "codex.apply_patch",            # the 2026 CLI's edit primitive
+    "update_plan": "codex.update_plan",
+    "view_image": "codex.view_image",
+    "read_file": "codex.read",
+    "list_dir": "codex.ls",
+    "glob_file_search": "codex.glob",
+    "web_search": "codex.web_search",
+    "web_fetch": "codex.web_fetch",
+    "call_mcp_tool": "codex.mcp_tool",
+    # legacy tool names (older Codex builds) — kept so old sessions still map
     "str_replace_editor": "codex.edit",
     "str_replace_based_edit_tool": "codex.edit",
     "create_file": "codex.write",
     "delete_file": "codex.delete",
-    "read_file": "codex.read",
     "list_directory": "codex.ls",
-    "web_search": "codex.web_search",
-    "web_fetch": "codex.web_fetch",
 }
 
 # Maps Google Gemini CLI tool names to CHP capability IDs.
@@ -82,6 +96,26 @@ GEMINI_TOOL_CAPABILITY_MAP: dict[str, str] = {
     "call_mcp_tool": "gemini.mcp_tool",
 }
 
+# Maps Google Antigravity CLI tool names to CHP capability IDs. PROVISIONAL: Antigravity's exact emitted
+# tool identifiers were not publicly documented at time of writing; these names are inherited from the Gemini
+# CLI (Antigravity "keeps the features"), so they are a best-effort starting point. Unknown tool names fall
+# back to antigravity.tool.<name> and stay governed — verify + refine against antigravity.google/docs.
+ANTIGRAVITY_TOOL_CAPABILITY_MAP: dict[str, str] = {
+    "run_shell_command": "antigravity.run_shell_command",
+    "read_file": "antigravity.read_file",
+    "write_file": "antigravity.write_file",
+    "edit_file": "antigravity.edit",
+    "replace_in_file": "antigravity.edit",
+    "list_directory": "antigravity.ls",
+    "web_search": "antigravity.web_search",
+    "web_fetch": "antigravity.web_fetch",
+    "save_memory": "antigravity.save_memory",
+    "call_mcp_tool": "antigravity.mcp_tool",
+    "subagent": "antigravity.subagent",
+    "skill": "antigravity.skill",
+    "plugin": "antigravity.plugin",
+}
+
 # Risk levels for known built-in capability IDs (sourced from adapter descriptors).
 CAPABILITY_RISK_MAP: dict[str, str] = {
     # Claude Code
@@ -99,8 +133,19 @@ CAPABILITY_RISK_MAP: dict[str, str] = {
     "claude_code.todo_write": "low",
     "claude_code.notebook_read": "low",
     "claude_code.notebook_edit": "medium",
+    "claude_code.bash_output": "low",
+    "claude_code.kill_shell": "medium",
+    "claude_code.skill": "medium",
+    "claude_code.slash_command": "medium",
+    "claude_code.exit_plan_mode": "low",
+    "claude_code.ask_user_question": "low",
     # Codex CLI
     "codex.shell": "medium",
+    "codex.apply_patch": "medium",
+    "codex.update_plan": "low",
+    "codex.view_image": "low",
+    "codex.glob": "low",
+    "codex.mcp_tool": "medium",
     "codex.edit": "medium",
     "codex.write": "medium",
     "codex.read": "low",
@@ -124,6 +169,19 @@ CAPABILITY_RISK_MAP: dict[str, str] = {
     "gemini.notebook_run": "medium",
     "gemini.notebook_edit": "medium",
     "gemini.mcp_tool": "medium",
+    # Antigravity CLI
+    "antigravity.run_shell_command": "medium",
+    "antigravity.write_file": "medium",
+    "antigravity.edit": "medium",
+    "antigravity.read_file": "low",
+    "antigravity.ls": "low",
+    "antigravity.web_search": "low",
+    "antigravity.web_fetch": "low",
+    "antigravity.save_memory": "low",
+    "antigravity.subagent": "medium",
+    "antigravity.skill": "medium",
+    "antigravity.plugin": "medium",
+    "antigravity.mcp_tool": "medium",
 }
 
 
