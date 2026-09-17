@@ -41,6 +41,7 @@ ordering are normative in [chp-invocation-pipeline.md](chp-invocation-pipeline.m
 - `capability_disabled`
 - `capability_not_found`
 - `capability_version_unsupported`
+- `deadline_exceeded`
 - `escalation_required`
 - `evidence_required`
 - `host_unreachable`

@@ -39,6 +39,8 @@ _EMITS = [
 
 _MAX_GREP_RESULTS = 200
 _MAX_GLOB_RESULTS = 500
+_MAX_EXTRACT_BYTES = 100 * 1024 * 1024  # 100 MB total uncompressed — zip-bomb guard
+_MAX_EXTRACT_FILES = 10_000
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -168,6 +170,67 @@ class FilesystemAdapter(BaseAdapter):
         }, redacted=False)
 
         return {"path": str(resolved), "content": content, "size_bytes": size, "encoding": encoding}
+
+    # ------------------------------------------------------------------
+    # extract (ZIP)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.filesystem.extract",
+        version="1.0.0",
+        description=(
+            "Extract a ZIP archive into a destination directory. Path-sandboxed via allowed_roots; "
+            "rejects zip-slip (entries escaping the destination via .. or an absolute path) and guards "
+            "against zip bombs (total-uncompressed-size and file-count caps). Returns {dest, files_extracted}."
+        ),
+        category="execution",
+        risk="medium",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "archive_path": {"type": "string", "description": "Path to the .zip archive."},
+                "dest_dir": {"type": "string", "description": "Directory to extract into (created if missing)."},
+            },
+            "required": ["archive_path", "dest_dir"],
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["filesystem", "extract", "zip"],
+    )
+    async def extract(self, ctx: Any, payload: dict) -> dict:
+        import zipfile
+
+        try:
+            archive = self._check_path(payload["archive_path"])
+            dest = self._check_path(payload["dest_dir"])
+        except PermissionError as exc:
+            ctx.emit("fs_access_denied", {"path": payload.get("archive_path"), "reason": str(exc)}, redacted=False)
+            raise
+        if not archive.is_file():
+            ctx.emit("fs_error", {"op": "extract", "path": str(archive), "reason": "not_found"}, redacted=False)
+            raise FileNotFoundError(f"Archive not found: {archive}")
+        if not zipfile.is_zipfile(archive):
+            ctx.emit("fs_error", {"op": "extract", "path": str(archive), "reason": "not_a_zip"}, redacted=False)
+            raise ValueError(f"Not a ZIP archive: {archive}")
+
+        with zipfile.ZipFile(archive) as zf:
+            infos = zf.infolist()
+            total = sum(i.file_size for i in infos)
+            files = [i for i in infos if not i.is_dir()]
+            if len(files) > _MAX_EXTRACT_FILES or total > _MAX_EXTRACT_BYTES:
+                ctx.emit("fs_error", {"op": "extract", "reason": "archive_too_large", "files": len(files), "bytes": total}, redacted=False)
+                raise ValueError(f"archive exceeds limits: {len(files)} files / {total} bytes")
+            # zip-slip guard: EVERY member must resolve to a path under dest (validate ALL before writing).
+            for i in infos:
+                target = (dest / i.filename).resolve()
+                if Path(i.filename).is_absolute() or ".." in Path(i.filename).parts or not _is_within(target, dest.resolve()):
+                    ctx.emit("fs_error", {"op": "extract", "reason": "unsafe_entry", "entry": i.filename}, redacted=False)
+                    raise ValueError(f"unsafe zip entry (path traversal): {i.filename}")
+            dest.mkdir(parents=True, exist_ok=True)
+            zf.extractall(dest)  # safe: every member validated above
+
+        ctx.emit("fs_write", {"op": "extract", "dest": str(dest), "files": len(files)}, redacted=False)
+        return {"dest": str(dest), "files_extracted": len(files), "ok": True}
 
     # ------------------------------------------------------------------
     # write_file

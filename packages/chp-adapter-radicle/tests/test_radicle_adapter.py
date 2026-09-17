@@ -49,9 +49,14 @@ NID  z6MkuyYxVQL4aRVpAKPbG4tc15FJ9E1ryZSSHjFyqsBBuxAn
 
 _RAD_NODE_STATUS = "Running   z6Mku... connected: 3"
 
+# rad 1.9.1 `rad patch list` box table (open patches marked ●; the parser takes ● rows).
 _RAD_PATCH_LIST = """\
-5eaeae9 open  feat(adapters): add 20 packages  feat/chp-v0.1-foundation
-abc1234 open  fix(router): failover test  feat/multi-host
+╭────────────────────────────────────────────────────────────────────────────╮
+│ ●  ID       Title                             Author              Reviews  Head     +    -   Updated     │
+├────────────────────────────────────────────────────────────────────────────┤
+│ ●  5eaeae9  feat(adapters): add 20 packages   macbook-pro  (you)  -        a7d2390  +10  -0  1 hour ago  │
+│ ●  abc1234  fix(router): failover test        macbook-pro  (you)  -        b1c2d3e  +5   -1  2 hours ago │
+╰────────────────────────────────────────────────────────────────────────────╯
 """
 
 def _issue_table(rows: list[tuple[str, str, str]]) -> str:
@@ -73,11 +78,15 @@ _RAD_ISSUE_LIST = _issue_table([
     ("beef456", "Add Radicle adapter", "approved-for-dev"),
 ])
 
+# rad 1.9.1 `rad issue show` box table (key is "Status", not "State").
 _RAD_ISSUE_SHOW = """\
-Title   Add Radicle adapter
-State   open
-Labels  enhancement
-2 comments
+╭────────────────────────────────────────────────╮
+│ Title   Add Radicle adapter                    │
+│ Issue   beef456beef456beef456beef456beef456beef │
+│ Author  macbook-pro (you)                      │
+│ Labels  enhancement                            │
+│ Status  open                                   │
+╰────────────────────────────────────────────────╯
 """
 
 SECRET_ISSUE_BODY = "SECRET_ISSUE_BODY_TEXT"
@@ -305,14 +314,33 @@ class TestPatchList:
 
 class TestPatchOpen:
     @pytest.mark.asyncio
-    async def test_patch_id_extracted(self):
-        backend = FakeRadicleBackend(
-            responses={("patch", "open", "--title", "My Patch", "--base", "master", "--no-edit"): "✓ Opened patch abc1234"}
-        )
+    async def test_opens_patch_via_refs_patches(self):
+        # rad 1.9.1 opens a patch by pushing HEAD to the magic refs/patches ref (verified live).
+        backend = FakeRadicleBackend(git_responses={
+            ("push", "rad", "HEAD:refs/patches"): "✓ Patch 2594c826a46af7d15e1e21668adbcd4848c7224b opened",
+        })
         host = _make_host(backend)
         result = await host.ainvoke("chp.adapters.radicle.patch_open", {"title": "My Patch"})
-        assert result.data["patch_id"] == "abc1234"
-        assert result.data["title"] == "My Patch"
+        assert result.outcome == "success"
+        assert result.data["patch_id"] == "2594c826a46af7d15e1e21668adbcd4848c7224b"
+        assert result.data["ok"] is True
+        assert ("push", "rad", "HEAD:refs/patches") in backend.git_calls
+
+    @pytest.mark.asyncio
+    async def test_title_required(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.patch_open", {})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_push_failure_propagates(self):
+        class ErrBackend(FakeRadicleBackend):
+            def git(self, *args, cwd=None):
+                self.git_calls.append(args)
+                raise RuntimeError("no rad remote")
+        host = _make_host(ErrBackend())
+        result = await host.ainvoke("chp.adapters.radicle.patch_open", {"title": "x"})
+        assert result.outcome == "failure"
 
     @pytest.mark.asyncio
     async def test_patch_body_not_in_evidence(self):
@@ -396,10 +424,13 @@ class TestIssueShow:
         assert result.data["state"] == "open"
 
     @pytest.mark.asyncio
-    async def test_comment_count(self, backend):
+    async def test_labels_and_issue_id(self, backend):
+        # issue_show returns {issue_id, title, state, labels} — rad 1.9.1 `issue show` has no
+        # parseable comment count, so the impl does not expose one (was a stale 1.6.1 assertion).
         host = _make_host(backend)
         result = await host.ainvoke("chp.adapters.radicle.issue_show", {"issue_id": "beef456"})
-        assert result.data["comment_count"] == 2
+        assert result.data["issue_id"] == "beef456"
+        assert result.data["labels"] == "enhancement"
 
     @pytest.mark.asyncio
     async def test_body_not_in_evidence(self, backend):
@@ -481,8 +512,9 @@ class TestIssueClose:
 class TestIssueOpen:
     @pytest.mark.asyncio
     async def test_issue_id_extracted(self):
+        # rad 1.9.1: --description makes it non-interactive (no --no-edit); defaults to the title.
         backend = FakeRadicleBackend(
-            responses={("issue", "open", "--title", "My Issue", "--no-edit"): "✓ Opened issue abc1234"}
+            responses={("issue", "open", "--title", "My Issue", "--description", "My Issue"): "✓ Opened issue abc1234"}
         )
         host = _make_host(backend)
         result = await host.ainvoke("chp.adapters.radicle.issue_open", {"title": "My Issue"})
@@ -504,15 +536,13 @@ class TestIssueOpen:
 
     @pytest.mark.asyncio
     async def test_labels_passed_to_backend(self):
-        backend = FakeRadicleBackend(
-            responses={
-                ("issue", "open", "--title", "T", "--no-edit", "--labels", "bug,p1"): "opened abc1234"
-            }
-        )
+        # rad 1.9.1 takes repeated --labels flags (one per label), not a comma-joined value.
+        expected = ("issue", "open", "--title", "T", "--description", "T", "--labels", "bug", "--labels", "p1")
+        backend = FakeRadicleBackend(responses={expected: "opened abc1234"})
         host = _make_host(backend)
         result = await host.ainvoke("chp.adapters.radicle.issue_open", {"title": "T", "labels": ["bug", "p1"]})
         assert result.outcome == "success"
-        assert ("issue", "open", "--title", "T", "--no-edit", "--labels", "bug,p1") in backend.calls
+        assert expected in backend.calls
 
     @pytest.mark.asyncio
     async def test_title_required(self):
@@ -636,3 +666,285 @@ class TestIssueLabel:
         host = _make_host(FakeRadicleBackend())
         result = await host.ainvoke("chp.adapters.radicle.issue_label", {"issue_id": "cafe123"})
         assert result.outcome == "failure"
+
+
+# ---------------------------------------------------------------------------
+# init
+# ---------------------------------------------------------------------------
+
+_RAD_INIT = """\
+Initializing radicle 👾 repository in /fake/repo..
+
+✓ Repository widget created.
+
+Your Repository ID (RID) is rad:z2A5ozGWKwFbTHDvC5c6nQ3AL9F2z
+"""
+
+
+class TestInit:
+    @pytest.mark.asyncio
+    async def test_returns_rid_private_by_default(self):
+        # No default_branch is passed by default — forcing one that doesn't exist breaks rad init.
+        args = ("init", "/fake/repo", "--name", "widget", "--description", "A widget",
+                "--no-confirm", "--private")
+        backend = FakeRadicleBackend(responses={args: _RAD_INIT})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.init", {"name": "widget", "description": "A widget"})
+        assert result.data["rid"] == "rad:z2A5ozGWKwFbTHDvC5c6nQ3AL9F2z"
+        assert result.data["visibility"] == "private"
+        assert result.data["ok"] is True
+        assert backend.calls[0] == args  # non-interactive (--no-confirm), explicit visibility, no forced branch
+
+    @pytest.mark.asyncio
+    async def test_public_visibility(self):
+        args = ("init", "/fake/repo", "--name", "widget", "--description", "",
+                "--no-confirm", "--public")
+        backend = FakeRadicleBackend(responses={args: _RAD_INIT})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.init", {"name": "widget", "private": False})
+        assert result.data["visibility"] == "public"
+        assert result.data["rid"].startswith("rad:")
+
+    @pytest.mark.asyncio
+    async def test_default_branch_passed_only_when_specified(self):
+        args = ("init", "/fake/repo", "--name", "widget", "--description", "",
+                "--no-confirm", "--private", "--default-branch", "trunk")
+        backend = FakeRadicleBackend(responses={args: _RAD_INIT})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.init", {"name": "widget", "default_branch": "trunk"})
+        assert result.data["ok"] is True
+        assert backend.calls[0] == args
+
+    @pytest.mark.asyncio
+    async def test_missing_name_denied(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.init", {"description": "x"})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_unknown_field_denied(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.init", {"name": "w", "unknown": "x"})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_error_propagates(self):
+        class ErrorBackend(FakeRadicleBackend):
+            def run(self, *args, cwd=None):
+                raise RuntimeError("already initialized")
+        host = _make_host(ErrorBackend())
+        result = await host.ainvoke("chp.adapters.radicle.init", {"name": "w"})
+        assert result.outcome == "failure"
+
+
+# ---------------------------------------------------------------------------
+# patch_merge — fixtures are the REAL rad 1.9.1 push-marks-merged output
+# (captured live: checkout -> git merge --ff-only -> git push rad <default>)
+# ---------------------------------------------------------------------------
+
+_RAD_PUSH_MERGED = """\
+✓ Patch 2594c826a46af7d15e1e21668adbcd4848c7224b merged
+✓ Canonical reference refs/heads/main updated to target commit 8342b3d5ac966322699036cefb2e8df32b69bd3c
+To rad://z2PM8DYB1XKjbF3ZCZejLn5LPZTxi/z6MkuyYxVQL4aRVpAKPbG4tc15FJ9E1ryZSSHjFyqsBBuxAn
+   781eb73..8342b3d  main -> main
+"""
+
+
+class TestPatchMerge:
+    @pytest.mark.asyncio
+    async def test_merges_and_advances_canonical(self):
+        backend = FakeRadicleBackend(push_responses={("rad", "main"): _RAD_PUSH_MERGED})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.patch_merge", {"patch_id": "2594c82"})
+        assert result.outcome == "success"
+        assert result.data["merged"] is True
+        assert result.data["canonical_commit"] == "8342b3d5ac966322699036cefb2e8df32b69bd3c"
+        # the live-verified sequence: rad patch checkout -> git checkout -> git merge --ff-only -> push
+        assert ("patch", "checkout", "2594c82", "--name", "patch-2594c82") in backend.calls
+        assert ("checkout", "main") in backend.git_calls
+        assert ("merge", "--ff-only", "patch-2594c82") in backend.git_calls
+        assert ("rad", "main") in backend.push_calls
+
+    @pytest.mark.asyncio
+    async def test_conflict_fails_before_any_push(self):
+        # A non-fast-forward merge raises; the push MUST NOT happen — canonical branch stays untouched.
+        class ConflictBackend(FakeRadicleBackend):
+            def git(self, *args, cwd=None):
+                self.git_calls.append(args)
+                if args and args[0] == "merge":
+                    raise RuntimeError("fatal: Not possible to fast-forward, aborting.")
+                return ""
+        backend = ConflictBackend()
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.patch_merge", {"patch_id": "2594c82"})
+        assert result.outcome == "failure"
+        assert backend.push_calls == []  # never pushed → no canonical mutation
+
+    @pytest.mark.asyncio
+    async def test_patch_id_required(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.patch_merge", {})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_unknown_field_denied(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.patch_merge", {"patch_id": "x", "unknown": "y"})
+        assert result.outcome == "denied"
+
+
+# ---------------------------------------------------------------------------
+# restore (Go Back)
+# ---------------------------------------------------------------------------
+
+class TestRestore:
+    @pytest.mark.asyncio
+    async def test_restore_appends_commit_and_pushes(self):
+        backend = FakeRadicleBackend(git_responses={("rev-parse", "HEAD"): "newsha1234"})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.restore", {"revision": "rev123"})
+        assert result.outcome == "success"
+        assert result.data["restored_from"] == "rev123"
+        assert result.data["revision"] == "newsha1234"
+        assert result.data["ok"] is True
+        # append-only idiom: hard-reset to revision, soft-reset back to old HEAD, commit, push canonical
+        assert ("reset", "--hard", "rev123") in backend.git_calls
+        assert ("reset", "--soft", "newsha1234") in backend.git_calls
+        assert ("rad", "main") in backend.push_calls
+
+    @pytest.mark.asyncio
+    async def test_revision_required(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.restore", {})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_fails_cleanly_without_pushing(self):
+        class ConflictBackend(FakeRadicleBackend):
+            def git(self, *args, cwd=None):
+                self.git_calls.append(args)
+                if len(args) > 4 and args[4] == "commit":
+                    raise RuntimeError("nothing to commit")
+                if args[:2] == ("rev-parse", "HEAD"):
+                    return "sha"
+                return ""
+        backend = ConflictBackend()
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.restore", {"revision": "rev123"})
+        assert result.outcome == "failure"
+        assert backend.push_calls == []  # never pushed on failure — canonical untouched
+
+
+# ---------------------------------------------------------------------------
+# clone (recover a RID from the network)
+# ---------------------------------------------------------------------------
+
+class TestClone:
+    @pytest.mark.asyncio
+    async def test_clones_rid_to_dest(self):
+        args = ("clone", "rad:z2A5ozGWKwFbTHDvC5c6nQ3AL9F2z", "/tmp/recover")
+        backend = FakeRadicleBackend(responses={args: "✓ Creating checkout in /tmp/recover.."})
+        host = _make_host(backend)
+        result = await host.ainvoke(
+            "chp.adapters.radicle.clone",
+            {"rid": "rad:z2A5ozGWKwFbTHDvC5c6nQ3AL9F2z", "dest": "/tmp/recover"},
+        )
+        assert result.outcome == "success"
+        assert result.data["rid"] == "rad:z2A5ozGWKwFbTHDvC5c6nQ3AL9F2z"
+        assert result.data["dest"] == "/tmp/recover"
+        assert result.data["ok"] is True
+        assert backend.calls[0] == args  # dest passed positionally, non-interactive
+
+    @pytest.mark.asyncio
+    async def test_seed_and_scope_flags(self):
+        args = ("clone", "rad:zABC", "/tmp/r", "--seed", "z6Mk", "--scope", "followed")
+        backend = FakeRadicleBackend(responses={args: ""})
+        host = _make_host(backend)
+        result = await host.ainvoke(
+            "chp.adapters.radicle.clone",
+            {"rid": "rad:zABC", "dest": "/tmp/r", "seed": "z6Mk", "scope": "followed"},
+        )
+        assert result.outcome == "success"
+        assert backend.calls[0] == args
+
+    @pytest.mark.asyncio
+    async def test_parses_checkout_path_when_no_dest(self):
+        backend = FakeRadicleBackend(responses={("clone", "rad:zABC"): "✓ Creating checkout in ./widget.."})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.clone", {"rid": "rad:zABC"})
+        assert result.data["dest"] == "./widget"
+
+    @pytest.mark.asyncio
+    async def test_rid_required(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.clone", {"dest": "/tmp/r"})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_unknown_field_denied(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.clone", {"rid": "rad:zABC", "unknown": "x"})
+        assert result.outcome == "denied"
+
+    @pytest.mark.asyncio
+    async def test_error_propagates(self):
+        class ErrorBackend(FakeRadicleBackend):
+            def run(self, *args, cwd=None):
+                raise RuntimeError("repository not found on any seed")
+        host = _make_host(ErrorBackend())
+        result = await host.ainvoke("chp.adapters.radicle.clone", {"rid": "rad:zMISSING"})
+        assert result.outcome == "failure"
+
+
+# ---------------------------------------------------------------------------
+# patch_show (canonical diff for review)
+# ---------------------------------------------------------------------------
+
+_RAD_PATCH_DIFF = """\
+diff --git a/src/app.ts b/src/app.ts
+index abc1234..def5678 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,2 +1,2 @@
+-const theme = "light";
++const theme = "dark";
+diff --git a/README.md b/README.md
+index 111..222 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old
++new
+"""
+
+
+class TestPatchShow:
+    @pytest.mark.asyncio
+    async def test_returns_diff_and_files(self):
+        backend = FakeRadicleBackend(responses={("patch", "diff", "patch123"): _RAD_PATCH_DIFF})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.patch_show", {"patch_id": "patch123"})
+        assert result.outcome == "success"
+        assert result.data["patch_id"] == "patch123"
+        assert 'const theme = "dark"' in result.data["diff"]  # the REAL canonical change
+        assert result.data["files"] == ["README.md", "src/app.ts"]  # parsed from +++ b/ lines, sorted
+        assert result.data["ok"] is True
+        assert backend.calls[0] == ("patch", "diff", "patch123")
+
+    @pytest.mark.asyncio
+    async def test_diff_never_in_evidence(self):
+        # The diff is a RETURN value; evidence carries only patch id + file count (patch_list discipline).
+        import json as _json
+        backend = FakeRadicleBackend(responses={("patch", "diff", "p"): _RAD_PATCH_DIFF})
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.radicle.patch_show", {"patch_id": "p"})
+        assert result.outcome == "success"
+        evidence = _json.dumps(host.store.all())
+        assert 'const theme = "dark"' not in evidence  # the diff text NEVER enters the evidence stream
+        assert "patch_show" in evidence  # but the operation itself IS recorded
+
+    @pytest.mark.asyncio
+    async def test_patch_id_required(self):
+        host = _make_host(FakeRadicleBackend())
+        result = await host.ainvoke("chp.adapters.radicle.patch_show", {})
+        assert result.outcome == "denied"

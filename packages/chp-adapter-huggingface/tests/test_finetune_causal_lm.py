@@ -37,6 +37,21 @@ def test_finetune_dispatches_by_task_type(monkeypatch):
     assert calls == ["causal", "cls"]
 
 
+def test_finetune_dispatches_grpo(monkeypatch):
+    b = _RealHFBackend()
+    calls = []
+    monkeypatch.setattr(b, "_finetune_grpo", lambda *a, **k: calls.append("grpo") or {})
+    b.finetune("m", "d", "/o", "grpo", 1, 1, 1e-4, 10, "", "", {}, reward_fn=lambda c, **k: [1.0])
+    b.finetune("m", "d", "/o", "rl", 1, 1, 1e-4, 10, "", "", {}, reward_fn=lambda c, **k: [1.0])
+    assert calls == ["grpo", "grpo"]   # both "grpo" and "rl" route to the RL trainer
+
+
+def test_grpo_requires_reward_fn():
+    b = _RealHFBackend()
+    with pytest.raises(ValueError, match="reward_fn"):
+        b.finetune("m", "d", "/o", "grpo", 1, 1, 1e-4, 10, "", "", {})   # no reward → fail closed
+
+
 def test_inline_dataset_flows_to_causal_lm(monkeypatch):
     """Inline records (mesh facts) reach the causal-lm path via options — no Hub dataset needed."""
     b = _RealHFBackend()

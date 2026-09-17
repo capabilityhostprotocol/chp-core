@@ -907,8 +907,11 @@ def check_alignment(repo_root: Path) -> JSON:
     # key-expression table, and the downstream package must satisfy the Transport
     # protocol (structural — no eclipse-zenoh import needed to check the shape).
     zenoh_binding = read_text(repo_root / "spec" / "chp-zenoh-binding.md")
-    zenoh_pkg = read_text(repo_root / "packages" / "chp-transport-zenoh"
-                          / "chp_transport_zenoh" / "__init__.py")
+    # The package was split from a monolithic __init__.py into focused modules (client.py/server.py/…),
+    # so read the WHOLE package — the classes/methods now live in client.py + server.py, and the check
+    # must find them wherever they are, not only in __init__.py.
+    zenoh_dir = repo_root / "packages" / "chp-transport-zenoh" / "chp_transport_zenoh"
+    zenoh_pkg = "\n".join(read_text(p) for p in sorted(zenoh_dir.glob("*.py")))
     add_check(
         checks,
         "spec_defines_zenoh_binding",

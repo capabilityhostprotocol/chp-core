@@ -54,6 +54,7 @@ class TestCapabilityShaping:
             "chp.adapters.secrets.set",
             "chp.adapters.secrets.delete",
             "chp.adapters.secrets.list",
+            "chp.adapters.secrets.bind",
         }
 
     def test_adapter_id(self):
@@ -522,6 +523,82 @@ class TestKeychainBackend:
 
         dump = str([e["payload"] for e in host.store.all()])
         assert secret_val not in dump
+
+
+# --------------------------------------------------------------------------
+# 12. bind capability — apply a secret to a sink WITHOUT returning the value
+# --------------------------------------------------------------------------
+
+class TestBind:
+    def test_bind_is_high_risk(self):
+        cap = next(c for c in SecretsAdapter().capabilities()
+                   if c.descriptor.id == "chp.adapters.secrets.bind")
+        assert cap.descriptor.risk == "high"
+
+    def test_bind_git_credential_writes_store(self, tmp_path):
+        token = "ghp_bind_token_abc123"
+        host = _make_host(MemoryBackend({"GH": token}))
+        credfile = tmp_path / "gitcreds"
+        r = host.invoke("chp.adapters.secrets.bind", {
+            "key": "GH",
+            "sink": {"type": "git_credential", "host": "github.com", "file": str(credfile)},
+        })
+        assert r.outcome == "success"
+        assert r.data["applied"] is True
+        assert r.data["sink"] == "git_credential"
+        # the credential was written for later git ops...
+        content = credfile.read_text()
+        assert token in content and "github.com" in content
+
+    def test_bind_value_never_returned(self, tmp_path):
+        token = "ghp_never_returned_xyz"
+        host = _make_host(MemoryBackend({"GH": token}))
+        r = host.invoke("chp.adapters.secrets.bind", {
+            "key": "GH",
+            "sink": {"type": "git_credential", "host": "github.com",
+                     "file": str(tmp_path / "c")},
+        })
+        assert token not in str(r.data)  # ...but never handed back to the caller
+
+    def test_bind_value_never_in_evidence(self, tmp_path):
+        token = "ghp_not_in_evidence_qqq"
+        host = _make_host(MemoryBackend({"GH": token}))
+        host.invoke("chp.adapters.secrets.bind", {
+            "key": "GH",
+            "sink": {"type": "git_credential", "host": "example.com",
+                     "file": str(tmp_path / "c")},
+        })
+        dump = str([e["payload"] for e in host.store.all()])
+        assert token not in dump
+
+    def test_bind_emits_bind_event_without_value(self, tmp_path):
+        host = _make_host(MemoryBackend({"GH": "ghp_evt"}))
+        host.invoke("chp.adapters.secrets.bind", {
+            "key": "GH",
+            "sink": {"type": "git_credential", "host": "example.com",
+                     "file": str(tmp_path / "c")},
+        })
+        ev = _events(host, "secrets_bind")
+        assert len(ev) == 1
+        assert ev[0]["payload"]["key"] == "GH"
+        assert ev[0]["payload"]["sink"] == "git_credential"
+        assert "value" not in ev[0]["payload"]
+
+    def test_bind_missing_secret_fails(self, tmp_path):
+        host = _make_host()
+        r = host.invoke("chp.adapters.secrets.bind", {
+            "key": "NOPE",
+            "sink": {"type": "git_credential", "host": "example.com",
+                     "file": str(tmp_path / "c")},
+        })
+        assert r.outcome == "failure"
+
+    def test_bind_unknown_sink_denied(self):
+        host = _make_host(MemoryBackend({"GH": "x"}))
+        r = host.invoke("chp.adapters.secrets.bind", {
+            "key": "GH", "sink": {"type": "arbitrary_command"},
+        })
+        assert r.outcome == "denied"  # sink type is enum-restricted at the schema
 
 
 # ── EncryptedFileBackend (durable non-darwin default) ─────────────────────────

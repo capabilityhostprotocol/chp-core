@@ -1,5 +1,9 @@
 """CHP capability adapter for Google Gemini CLI tool calls and sessions.
 
+DEPRECATED (2026): Google is retiring individual-tier Gemini CLI access on 2026-06-18,
+replaced by the Antigravity CLI — see ``antigravity.py`` / ``AntigravityAdapter``. This
+adapter is kept for legacy Gemini CLI sessions; new work should target Antigravity.
+
 Registers capability descriptors for Gemini CLI built-in tools so they are
 discoverable in host.discover() and can participate in CHP governance.
 
@@ -61,8 +65,9 @@ class GeminiCLIAdapter(BaseAdapter):
     """
 
     adapter_id = "gemini_cli"
-    adapter_name = "Google Gemini CLI"
-    adapter_description = "Evidence adapter for Google Gemini CLI tool calls and sessions."
+    adapter_name = "Google Gemini CLI (deprecated)"
+    adapter_description = ("Evidence adapter for Google Gemini CLI tool calls and sessions. "
+                          "DEPRECATED — Gemini CLI is superseded by the Antigravity CLI (2026-06-18).")
     adapter_version = "1.0.0"
     adapter_tags = ["agentic", "gemini", "google"]
     adapter_category = "domain.agentic"

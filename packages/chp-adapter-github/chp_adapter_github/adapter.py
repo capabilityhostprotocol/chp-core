@@ -10,9 +10,10 @@ adapter loop-safe with no shared state.
 
 from __future__ import annotations
 
+import inspect
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from chp_core import BaseAdapter, capability
 
@@ -54,6 +55,12 @@ class GitHubConfig:
     token: str | None = None
     base_url: str = _DEFAULT_BASE_URL
     timeout: float = _DEFAULT_TIMEOUT
+    # Per-invocation token seam (rad:d7d22ca): a callable that returns the bearer token
+    # for THIS call — so a caller can inject a narrowly-scoped, short-lived credential
+    # (e.g. resolved from a CredentialBroker) WITHOUT subclassing the adapter. It is
+    # called with the execution ctx when it accepts one (async allowed), else with no
+    # args; its result overrides ``token``/env. None → the static resolved_token().
+    token_provider: Callable[..., Any] | None = None
 
     def resolved_token(self) -> str | None:
         return self.token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -73,15 +80,33 @@ class GitHubAdapter(BaseAdapter):
 
     # -- HTTP + evidence core ----------------------------------------------
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, token: str | None = None) -> dict[str, str]:
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": _API_VERSION,
         }
-        token = self._config.resolved_token()
+        # ``token`` is the authoritative resolution for this call (see _resolve_token):
+        # the provider's result when configured, else the static config/env token. A
+        # configured provider that returns None means "no token this call" — do NOT
+        # silently fall back to the static token here.
         if token:
             headers["Authorization"] = f"Bearer {token}"
         return headers
+
+    async def _resolve_token(self, ctx: Any) -> str | None:
+        """Resolve the bearer token for one call: the per-invocation token_provider seam
+        if configured (called with ctx when it accepts one, awaited if async), else the
+        static config/env token. (rad:d7d22ca)"""
+        provider = self._config.token_provider
+        if provider is None:
+            return self._config.resolved_token()
+        try:
+            value = provider(ctx)
+        except TypeError:
+            value = provider()
+        if inspect.isawaitable(value):
+            value = await value
+        return value or None
 
     async def _http(
         self,
@@ -102,10 +127,11 @@ class GitHubAdapter(BaseAdapter):
         """
         ctx.emit("github_request", {"op": op, "method": method, "path": path, **(started or {})}, redacted=False)
 
+        token = await self._resolve_token(ctx)
         req: dict[str, Any] = {
             "method": method,
             "url": self._config.base_url.rstrip("/") + path,
-            "headers": self._headers(),
+            "headers": self._headers(token),
             "timeout": self._config.timeout,
         }
         if params:

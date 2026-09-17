@@ -25,6 +25,7 @@ Capabilities:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -474,6 +475,7 @@ class GitAdapter(BaseAdapter):
         description="Create a new branch or switch to an existing one.",
         category="developer_tooling",
         risk="medium",
+        side_effects=["working_tree_write"],  # mutation — bare-host must not auto-ALLOW (rad:8f4b6a0)
         input_schema={
             "type": "object",
             "properties": {
@@ -512,6 +514,117 @@ class GitAdapter(BaseAdapter):
         return result
 
     # ------------------------------------------------------------------
+    # clone
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.git.clone",
+        version="0.1.0",
+        description=(
+            "Clone a git repository from a URL into a destination directory and return the HEAD commit. "
+            "Bounded: only https/git/ssh remotes are allowed (ext:: transport and option-injection are "
+            "rejected), so unlike process.run this performs no arbitrary execution."
+        ),
+        category="developer_tooling",
+        risk="medium",
+        side_effects=["filesystem_write", "network"],  # mutation — bare-host must not auto-ALLOW (rad:8f4b6a0)
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Repository URL (https/git/ssh)"},
+                "dest": {"type": "string", "description": "Destination directory for the clone"},
+                "branch": {"type": "string", "description": "Branch to check out (default: remote default)"},
+                "depth": {"type": "integer", "minimum": 1, "description": "Shallow-clone depth (omit for full history)"},
+            },
+            "required": ["url", "dest"],
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["git", "clone", "import"],
+    )
+    async def clone(self, ctx: Any, payload: dict) -> dict:
+        url = payload["url"]
+        dest = payload["dest"]
+        branch = payload.get("branch")
+        depth = payload.get("depth")
+        ctx.emit("git_request", {"operation": "clone", "url": url, "dest": dest})
+        # Bounded: reject anything that isn't a plain https/git/ssh remote. This blocks git's `ext::`
+        # transport (arbitrary command execution) and leading-dash option injection — the safety win
+        # over process.run. `file://`/local paths are intentionally disallowed here.
+        if not re.match(r"^(https?|git|ssh)://[^\s]+$", url) and not re.match(r"^git@[\w.\-]+:[^\s]+$", url):
+            ctx.emit("git_error", {"operation": "clone", "error": "unsafe or unsupported clone url"})
+            raise ValueError("clone url must be an https/git/ssh remote (no ext:: / local / option injection)")
+        if url.startswith("-") or dest.startswith("-"):
+            ctx.emit("git_error", {"operation": "clone", "error": "option-injection rejected"})
+            raise ValueError("url/dest must not start with '-'")
+        args = ["clone"]
+        if branch:
+            args += ["--branch", str(branch)]
+        if depth:
+            args += ["--depth", str(depth)]
+        args += ["--", url, dest]  # `--` stops option parsing, a second guard against injection
+        try:
+            self._backend().run(*args)
+            head = self._backend().run("rev-parse", "HEAD", cwd=dest)
+        except RuntimeError as exc:
+            ctx.emit("git_error", {"operation": "clone", "error": str(exc)})
+            raise
+        result = {"dest": dest, "head": head, "ok": bool(head)}
+        ctx.emit("git_response", {"operation": "clone", "dest": dest, "head": head})
+        return result
+
+    # ------------------------------------------------------------------
+    # init (turn a plain folder into a committed git repo)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.git.init",
+        version="0.1.0",
+        description=(
+            "Initialize a directory as a git repository and commit its current contents "
+            "(git init + add -A + commit) — for importing a plain folder that isn't yet under version "
+            "control. Bounded to a directory path; runs no arbitrary command. An empty directory is "
+            "initialized but not committed (ok=false)."
+        ),
+        category="developer_tooling",
+        risk="medium",
+        side_effects=["filesystem_write", "repository_write"],  # mutation — bare-host must not auto-ALLOW (rad:8f4b6a0)
+        input_schema={
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string", "description": "Directory to initialize (defaults to config)"},
+                "message": {"type": "string", "description": "Initial commit message (default: Import)"},
+                "author_name": {"type": "string", "description": "Commit author name (default: Sprig Import)"},
+                "author_email": {"type": "string", "description": "Commit author email (default: import@sprig.local)"},
+            },
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["git", "init", "import"],
+    )
+    async def init(self, ctx: Any, payload: dict) -> dict:
+        repo = self._repo(payload)
+        message = payload.get("message", "Import")
+        name = payload.get("author_name", "Sprig Import")
+        email = payload.get("author_email", "import@sprig.local")
+        ctx.emit("git_request", {"operation": "init", "repo_path": repo})
+        try:
+            self._git("init", repo=repo)
+            # A fresh repo has NO tracked files, so stage everything with add -A (not add -u).
+            self._git("add", "-A", repo=repo)
+            head = ""
+            if self._git("status", "--porcelain", repo=repo).strip():  # something to commit
+                # Identity passed inline so a fresh repo needs no global git config.
+                self._git("-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "-m", message, repo=repo)
+                head = self._git("rev-parse", "HEAD", repo=repo)
+        except RuntimeError as exc:
+            ctx.emit("git_error", {"operation": "init", "error": str(exc)})
+            raise
+        result = {"repo_path": repo, "head": head, "ok": bool(head)}
+        ctx.emit("git_response", {"operation": "init", "head": head})
+        return result
+
+    # ------------------------------------------------------------------
     # commit
     # ------------------------------------------------------------------
 
@@ -521,6 +634,7 @@ class GitAdapter(BaseAdapter):
         description="Stage specified files and create a commit. Diff content is never in evidence.",
         category="developer_tooling",
         risk="medium",
+        side_effects=["repository_write"],  # mutation — bare-host must not auto-ALLOW (rad:8f4b6a0)
         input_schema={
             "type": "object",
             "properties": {
@@ -574,6 +688,73 @@ class GitAdapter(BaseAdapter):
         }
         ctx.emit("git_response", {"operation": "commit", "sha7": sha7, "files_staged": result["files_staged"]})
         return result
+
+    # ------------------------------------------------------------------
+    # commit_reconcile (rad:8f4b6a0)
+    # ------------------------------------------------------------------
+    @capability(
+        id="chp.adapters.git.commit_reconcile",
+        version="0.1.0",
+        description=(
+            "Reconciliation READ for git.commit: returns a verdict envelope "
+            "{outcome: SUCCEEDED|NOT_FOUND|UNKNOWN, result} so a host can reconcile an "
+            "ambiguous commit BEFORE any retry (no blind retry after OUTCOME_UNKNOWN). "
+            "Composes git.log; performs no mutation. Accepts the commit's own arguments "
+            "({repo_path?, message, files?}) so a kernel can re-invoke it with the source "
+            "effect's arguments verbatim; 'expected_message' is also accepted explicitly."
+        ),
+        category="developer_tooling",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string"},
+                "message": {"type": "string"},
+                "expected_message": {"type": "string"},
+                "since_head": {"type": "string", "description": "pre-dispatch HEAD sha7; bounds the search to commits at/after it"},
+                # accepted so a kernel can forward the SOURCE commit's args verbatim
+                # (they are ignored here — reconcile only reads):
+                "files": {"type": "array", "items": {"type": "string"}},
+                "allow_empty": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+    )
+    async def commit_reconcile(self, ctx: Any, payload: dict) -> dict:
+        request = dict(payload or {})
+        expected = str(request.get("expected_message") or request.get("message") or "").strip()
+        since_head = request.get("since_head")
+        ctx.emit("git_request", {"operation": "commit_reconcile",
+                                 "repo_path": request.get("repo_path")})  # message NOT in evidence
+        log_args: dict[str, Any] = {"limit": 50, "include_body": True}
+        if request.get("repo_path"):
+            log_args["repo_path"] = request["repo_path"]
+        result = await ctx.ainvoke("chp.adapters.git.log", log_args)
+        data = getattr(result, "data", None)
+
+        if not getattr(result, "success", False) or not isinstance(data, dict):
+            # The read could not observe the repo — the world is genuinely ambiguous.
+            # NEVER downgrade to NOT_FOUND (that would admit a blind retry).
+            err = getattr(result, "error", None) or getattr(result, "denial", None)
+            verdict = {"outcome": "UNKNOWN", "result": {"error": str(err) if err else "git.log read failed"}}
+        else:
+            commits = list(data.get("commits") or [])
+            head = commits[0].get("sha7") if commits else None
+            verdict = {"outcome": "NOT_FOUND", "result": {"head": head}}
+            for commit in commits:
+                sha7 = str(commit.get("sha7") or "")
+                if since_head and sha7 and str(since_head).startswith(sha7):
+                    break  # reached pre-dispatch HEAD; nothing newer matched
+                subject = str(commit.get("subject") or "").strip()
+                body = str(commit.get("body") or "").strip()
+                full = (subject + ("\n\n" + body if body else "")).strip()
+                if expected and (expected in (subject, full)
+                                 or (subject and subject == expected.splitlines()[0][:80])):
+                    verdict = {"outcome": "SUCCEEDED", "result": {"sha7": sha7, "message": subject}}
+                    break
+
+        ctx.emit("git_response", {"operation": "commit_reconcile", "outcome": verdict["outcome"]})
+        return verdict
 
     # ------------------------------------------------------------------
     # discover_repos
@@ -702,6 +883,7 @@ class GitAdapter(BaseAdapter):
         description="Push a ref to a remote. Evidence: remote, ref, HEAD SHA7, success flag.",
         category="developer_tooling",
         risk="high",
+        side_effects=["network", "remote_write"],  # mutation — bare-host must not auto-ALLOW (rad:8f4b6a0)
         input_schema={
             "type": "object",
             "properties": {
@@ -752,6 +934,7 @@ class GitAdapter(BaseAdapter):
         description="Pull from a remote. Evidence: remote, branch, new HEAD SHA7, fast_forward flag.",
         category="developer_tooling",
         risk="medium",
+        side_effects=["network", "working_tree_write"],  # mutation — bare-host must not auto-ALLOW (rad:8f4b6a0)
         input_schema={
             "type": "object",
             "properties": {

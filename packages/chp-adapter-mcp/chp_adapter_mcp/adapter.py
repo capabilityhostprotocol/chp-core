@@ -15,6 +15,8 @@ without spawning a subprocess or thread.
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -23,6 +25,27 @@ from typing import Any, Protocol
 from chp_core import BaseAdapter, CapabilityDescriptor, HostedCapability
 
 MAX_ERROR_LEN = 500
+
+
+def _secret(key: str) -> str:
+    """Read a mesh secret from the node's local secrets backend (soft dep — "" if unavailable)."""
+    try:
+        from chp_adapter_secrets.adapter import _default_backend
+        return _default_backend().get(key) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _resolve_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
+    """Resolve placeholders in header values at connect time so an auth secret never lives in config or
+    evidence: ``${secret:KEY}`` reads the node's secrets backend (e.g.
+    ``Authorization: Bearer ${secret:twenty/api_key}``); ``${VAR}`` reads the environment. Unknown → ""."""
+    if not headers:
+        return None
+    def _sub(v: str) -> str:
+        v = re.sub(r"\$\{secret:([^}]+)\}", lambda m: _secret(m.group(1)), v)
+        return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), v)
+    return {k: _sub(str(v)) for k, v in headers.items()}
 
 # Domain events only — the host owns execution_started/completed/failed.
 _EMITS = [
@@ -37,7 +60,8 @@ class MCPServerConfig:
     """Connection config for one MCP server.
 
     For stdio transport set ``command`` (and optional ``args``/``env``).
-    For SSE/HTTP transport set ``url``.
+    For SSE/HTTP transport set ``url`` (+ optional ``headers`` for auth, and ``transport`` to force
+    "http" streamable vs "sse"; default auto-detects "http" for ``/mcp`` URLs).
     """
 
     name: str
@@ -45,6 +69,8 @@ class MCPServerConfig:
     args: list[str] = field(default_factory=list)
     env: dict[str, str] | None = None
     url: str | None = None
+    headers: dict[str, str] | None = None      # e.g. {"Authorization": "Bearer ${TWENTY_API_KEY}"}
+    transport: str | None = None               # None=auto | "http" (streamable) | "sse"
 
 
 class _MCPSession(Protocol):
@@ -235,7 +261,8 @@ class _ThreadedMCPSession:
         try:
             from mcp import ClientSession
             async with AsyncExitStack() as stack:
-                read, write = await stack.enter_async_context(self._open_streams())
+                streams = await stack.enter_async_context(self._open_streams())
+                read, write = streams[0], streams[1]   # streamable-http yields a 3rd (get_session_id)
                 session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
                 listed = await session.list_tools()
@@ -250,8 +277,18 @@ class _ThreadedMCPSession:
     def _open_streams(self):
         cfg = self._config
         if cfg.url:
+            headers = _resolve_headers(cfg.headers)
+            transport = cfg.transport or ("http" if cfg.url.rstrip("/").endswith("/mcp") else "sse")
+            if transport == "http":                # streamable-HTTP (Twenty, most modern servers)
+                import mcp.client.streamable_http as _sh
+                if hasattr(_sh, "streamablehttp_client"):   # older mcp: headers kwarg on the client
+                    return _sh.streamablehttp_client(cfg.url, headers=headers)
+                # newer mcp: no headers kwarg — auth rides a preconfigured http client
+                hc = _sh.create_mcp_http_client(headers=headers) if headers else None
+                return (_sh.streamable_http_client(cfg.url, http_client=hc) if hc
+                        else _sh.streamable_http_client(cfg.url))
             from mcp.client.sse import sse_client
-            return sse_client(cfg.url)
+            return sse_client(cfg.url, headers=headers)
         if cfg.command:
             from mcp import StdioServerParameters
             from mcp.client.stdio import stdio_client

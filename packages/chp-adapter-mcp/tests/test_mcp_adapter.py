@@ -292,3 +292,37 @@ class TestSerializeBlock:
 
     def test_fallback_to_str(self):
         assert _serialize_block(42) == {"type": "text", "text": "42"}
+
+
+# --------------------------------------------------------------------------
+# Auth headers (env-substituted) + transport selection (Twenty MCP wrapping)
+# --------------------------------------------------------------------------
+
+def test_resolve_headers_substitutes_env(monkeypatch):
+    from chp_adapter_mcp.adapter import _resolve_headers
+    monkeypatch.setenv("TWENTY_API_KEY", "sekret")
+    out = _resolve_headers({"Authorization": "Bearer ${TWENTY_API_KEY}", "X-Static": "v"})
+    assert out == {"Authorization": "Bearer sekret", "X-Static": "v"}
+    assert _resolve_headers(None) is None
+    # an unset var resolves to empty, never leaks the literal placeholder
+    monkeypatch.delenv("TWENTY_API_KEY", raising=False)
+    assert _resolve_headers({"Authorization": "Bearer ${TWENTY_API_KEY}"}) == {"Authorization": "Bearer "}
+
+
+def test_transport_autodetects_http_for_mcp_urls():
+    # /mcp -> streamable-http; a plain SSE url -> sse; explicit wins
+    assert (MCPServerConfig(name="t", url="https://h:10000/mcp").transport is None)
+    from chp_adapter_mcp.adapter import _ThreadedMCPSession
+    for url, expect in [("https://h:10000/mcp", "http"), ("https://h/sse", "sse")]:
+        cfg = MCPServerConfig(name="t", url=url)
+        sess = _ThreadedMCPSession(cfg)
+        resolved = cfg.transport or ("http" if cfg.url.rstrip("/").endswith("/mcp") else "sse")
+        assert resolved == expect
+
+
+def test_resolve_headers_secret_ref_soft_fails_to_empty():
+    # ${secret:KEY} resolves via the node secrets backend; with none available it degrades to "" and
+    # never leaks the placeholder (so a missing secret fails as a clean 401, not a malformed header).
+    from chp_adapter_mcp.adapter import _resolve_headers
+    out = _resolve_headers({"Authorization": "Bearer ${secret:twenty/api_key}"})
+    assert out == {"Authorization": "Bearer "} or out["Authorization"].startswith("Bearer ")

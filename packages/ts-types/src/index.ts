@@ -15,6 +15,10 @@ export * from "./v0_1.js";
 // families) — always in lockstep with the Python reference and
 // spec/reserved-names.md via scripts/gen-reserved-names.py.
 export * from "./reserved.js";
+// v0.3 profile-family artifacts (signable, portable): AgentProfile + Skill.
+// Mirror schemas/{agent-profile,skill}.schema.json and chp-agentkit's dataclasses.
+export * from "./skill.js";
+export * from "./agent-profile.js";
 
 export const CHP_VERSION = "0.1";
 export const VERSION = "0.1.0";

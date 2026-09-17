@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import typing
 from typing import Any, Callable
 
 from .types import (
@@ -18,6 +19,52 @@ from .types import (
     RetryPolicy,
 )
 
+# Python annotation -> JSON Schema type. Unmapped annotations (Optional[int],
+# custom classes, unannotated params) fall back to an unconstrained property.
+_JSON_TYPES: dict[Any, str] = {
+    bool: "boolean", int: "integer", float: "number",
+    str: "string", list: "array", dict: "object",
+}
+# Fallback for stringized annotations (PEP 563 / `from __future__ import
+# annotations`) that get_type_hints could not resolve.
+_JSON_TYPE_NAMES: dict[str, str] = {
+    "bool": "boolean", "int": "integer", "float": "number",
+    "str": "string", "list": "array", "List": "array",
+    "dict": "object", "Dict": "object",
+}
+
+
+def _json_type(annotation: Any) -> str | None:
+    if isinstance(annotation, str):        # unresolved stringized annotation
+        return _JSON_TYPE_NAMES.get(annotation)
+    return _JSON_TYPES.get(annotation)
+
+
+def schema_from_type_hints(fn: Callable[..., Any]) -> dict | None:
+    """A JSON-Schema object built from a function's annotated parameters.
+
+    Resolves stringized annotations (`from __future__ import annotations`, PEP 563)
+    via ``get_type_hints``, falling back to the raw annotation name. Skips ``ctx`` /
+    ``payload`` / ``self`` and ``*args`` / ``**kwargs``; adds no ``required`` (a
+    missing field is the handler's default, not a denial). Returns ``None`` when there
+    are no usable parameters. Pure and opt-in — nothing infers schemas unless asked.
+    """
+    try:
+        hints = typing.get_type_hints(fn)
+    except Exception:
+        hints = {}
+    props: dict[str, dict] = {}
+    for name, param in inspect.signature(fn).parameters.items():
+        if name in ("ctx", "payload", "self"):
+            continue
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        json_type = _json_type(hints.get(name, param.annotation))
+        props[name] = {"type": json_type} if json_type else {}
+    if not props:
+        return None
+    return {"type": "object", "properties": props}
+
 
 def capability(
     *,
@@ -32,6 +79,7 @@ def capability(
     # invocation contract
     modes: list[str] | None = None,
     input_schema: JSON | None = None,
+    infer_schema: bool = False,
     output_schema: JSON | None = None,
     idempotency: CapabilityIdempotency = "optional",
     side_effects: list[str] | None = None,
@@ -58,43 +106,50 @@ def capability(
     The decorated function can be registered with ``LocalCapabilityHost.register``.
     Ordinary functions receive payload fields as keyword arguments. Handlers that
     explicitly accept ``ctx`` and ``payload`` keep the lower-level handler shape.
+
+    Pass ``infer_schema=True`` to derive ``input_schema`` from the function's type
+    hints (via :func:`schema_from_type_hints`) when one is not given explicitly — the
+    same inference the ``CapabilityServer`` surface uses. Off by default, so existing
+    capabilities keep their behavior.
     """
 
-    descriptor = CapabilityDescriptor(
-        id=id,
-        version=version,
-        description=description,
-        name=name,
-        category=category,
-        provider=provider,
-        status=status,
-        modes=modes or ["sync"],
-        input_schema=input_schema or {},
-        output_schema=output_schema or {},
-        idempotency=idempotency,
-        side_effects=side_effects or [],
-        invariants=invariants or [],
-        risk=risk,  # type: ignore[arg-type]
-        emits=emits
-        or [
-            "execution_started",
-            "execution_completed",
-            "execution_failed",
-            "execution_denied",
-            "execution_skipped",
-        ],
-        assurance=assurance or AssuranceMetadata(),
-        owner=owner,
-        tags=tags or [],
-        metadata=metadata or {},
-        host_requirements=host_requirements,
-        policy=policy,
-        autonomy=autonomy,
-        timeout_s=timeout_s,
-        retry=retry,
-    )
-
     def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
+        resolved_input_schema = input_schema
+        if not resolved_input_schema and infer_schema:
+            resolved_input_schema = schema_from_type_hints(fn)
+        descriptor = CapabilityDescriptor(
+            id=id,
+            version=version,
+            description=description,
+            name=name,
+            category=category,
+            provider=provider,
+            status=status,
+            modes=modes or ["sync"],
+            input_schema=resolved_input_schema or {},
+            output_schema=output_schema or {},
+            idempotency=idempotency,
+            side_effects=side_effects or [],
+            invariants=invariants or [],
+            risk=risk,  # type: ignore[arg-type]
+            emits=emits
+            or [
+                "execution_started",
+                "execution_completed",
+                "execution_failed",
+                "execution_denied",
+                "execution_skipped",
+            ],
+            assurance=assurance or AssuranceMetadata(),
+            owner=owner,
+            tags=tags or [],
+            metadata=metadata or {},
+            host_requirements=host_requirements,
+            policy=policy,
+            autonomy=autonomy,
+            timeout_s=timeout_s,
+            retry=retry,
+        )
         setattr(fn, "__chp_descriptor__", descriptor)
         return fn
 

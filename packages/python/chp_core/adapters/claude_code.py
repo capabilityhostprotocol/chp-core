@@ -74,7 +74,11 @@ class ClaudeCodeAdapter(BaseAdapter):
         return [
             # --- Execution ---
             _cap("claude_code.bash", "Execute shell commands.", risk="medium", tags=["shell", "execution"]),
+            _cap("claude_code.bash_output", "Read output from a background shell.", risk="low", tags=["shell", "read"]),
+            _cap("claude_code.kill_shell", "Terminate a background shell.", risk="medium", tags=["shell", "execution"]),
             _cap("claude_code.agent", "Spawn a sub-agent.", risk="medium", tags=["agentic", "delegation"]),
+            _cap("claude_code.skill", "Invoke a packaged Skill.", risk="medium", tags=["agentic", "skill"]),
+            _cap("claude_code.slash_command", "Run a slash command.", risk="medium", tags=["agentic", "command"]),
 
             # --- Filesystem reads ---
             _cap("claude_code.read", "Read a file.", risk="low", tags=["filesystem", "read"]),
@@ -92,9 +96,11 @@ class ClaudeCodeAdapter(BaseAdapter):
             _cap("claude_code.web_fetch", "Fetch a URL.", risk="low", tags=["network"]),
             _cap("claude_code.web_search", "Search the web.", risk="low", tags=["network"]),
 
-            # --- Task management ---
+            # --- Task management + interaction ---
             _cap("claude_code.todo_read", "Read the task list.", risk="low", tags=["tasks"]),
             _cap("claude_code.todo_write", "Update the task list.", risk="low", tags=["tasks"]),
+            _cap("claude_code.exit_plan_mode", "Exit plan mode (present a plan for approval).", risk="low", tags=["planning"]),
+            _cap("claude_code.ask_user_question", "Ask the user a structured question.", risk="low", tags=["interaction"]),
 
             # --- MCP (generic) ---
             _cap("claude_code.mcp_tool", "Invoke an MCP server tool.", risk="medium", tags=["mcp"]),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib as _hashlib
 import inspect
+import contextlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from .checker import (
 
 _SESSION_FILE = Path.home() / ".chp" / "active-session.json"  # global default (back-compat)
 _SESSION_DIR = Path.home() / ".chp" / "sessions"  # per-repo/worktree keyed sessions
+_SESSION_STALE_HOURS = 24  # past this a worktree session is takeover-able (mirrors reap_stale_sessions)
 
 
 def _session_file(repo_path: str | None) -> Path:
@@ -36,6 +38,44 @@ def _session_file(repo_path: str | None) -> Path:
         return _SESSION_FILE
     key = _hashlib.sha1(str(Path(repo_path).resolve()).encode()).hexdigest()[:12]
     return _SESSION_DIR / f"{key}.json"
+
+
+def _session_conflict(session_file: Path, issue_ids: list[str]) -> str | None:
+    """Guidance message if a FRESH, DIFFERENT active session already holds this worktree's session
+    file (the caller should REFUSE, not clobber), else None.
+
+    A worktree keys to one session file (git has one index/HEAD per worktree), so two live sessions
+    here race: the second open overwrites the first, and the loser's commits then fail the pre-commit
+    gate ("references none of the session's issues") with no hint why. Refusing at open-time turns that
+    invisible race into a clear error for the SECOND opener. None (allow) when: no existing session;
+    an idempotent re-open of the SAME issue set (a reap can drop the file mid-work); or a session older
+    than the reaper's window (takeover-able).
+    """
+    if not session_file.exists():
+        return None
+    try:
+        existing = json.loads(session_file.read_text())
+    except Exception:
+        return None  # unreadable → don't block; a fresh write is the recovery
+    existing_ids = set(existing.get("issue_ids")
+                       or ([existing["issue_id"]] if existing.get("issue_id") else []))
+    if not existing_ids or existing_ids == set(issue_ids):
+        return None
+    started = existing.get("started_at")
+    if started:
+        with contextlib.suppress(Exception):
+            age_h = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(started)).total_seconds() / 3600
+            if age_h > _SESSION_STALE_HOURS:
+                return None  # stale → takeover-able (the reaper would clear it anyway)
+    return (
+        "session_conflict: this worktree already has an active dev session for "
+        f"{sorted(existing_ids)} ('{existing.get('issue_title', '?')}'). A worktree holds ONE session "
+        "(git has one index/HEAD per worktree), so opening a second here would silently clobber it and "
+        "break the other worker's commit gate. Either JOIN it — open_dev_session with issue_ids "
+        "including the existing issue(s) — or run your work in a SEPARATE worktree: "
+        "`git worktree add <path> -b <branch>` (each worktree gets its own session). Pass takeover=true "
+        "only if that session is abandoned.")
 
 # Declared evidence-emission contract for this adapter's capabilities (the granular
 # events each method emits). Declaring the superset makes the catalog honest vs what's
@@ -68,6 +108,14 @@ def _is_core_file(path: Path) -> bool:
     cannot compose through chp-adapter-http without creating a circular
     dependency."""
     return _CORE_PKG_SEGMENT in path.parts or _HOST_PKG_SEGMENT in path.parts
+
+
+def _is_example_file(path: Path) -> bool:
+    """Example/demo scripts under an ``examples/`` directory are standalone
+    clients, not capability code — a demo that reaches a server with only the
+    stdlib is exactly the property being shown. Like test modules, they are
+    exempt from the I/O-isolation rules (raw_http et al.)."""
+    return "examples" in path.parts
 
 
 def _source_of_handler(handler: Any) -> str | None:
@@ -329,6 +377,7 @@ class ConformanceAdapter(BaseAdapter):
                 "issue_ids": {"type": "array", "items": {"type": "string"}, "description": "Radicle issue short-hashes — a session may span several issues (a planned batch of work)."},
                 "description": {"type": "string", "description": "Optional work description"},
                 "repo_path": {"type": "string", "description": "Repo/worktree path to key this session by (defaults to the global session)"},
+                "takeover": {"type": "boolean", "description": "Take over an existing DIFFERENT active session in this worktree instead of refusing. Only for a session you know is abandoned — normally use issue_ids to join it, or a separate worktree."},
             },
             "additionalProperties": False,
         },
@@ -390,6 +439,14 @@ class ConformanceAdapter(BaseAdapter):
         #    Keyed by repo_path when given so worktree builds don't clobber an authoring session.
         session_file = _session_file(payload.get("repo_path"))
         session_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Guardrail: never SILENTLY clobber a different worker's active session in this worktree
+        # (see _session_conflict). takeover=true forces past a known-abandoned session.
+        if not payload.get("takeover"):
+            conflict = _session_conflict(session_file, issue_ids)
+            if conflict:
+                raise ValueError(conflict)
+
         session_data = {
             "issue_id": issue_id,          # primary (first) — back-compat for readers of the scalar
             "issue_ids": issue_ids,        # full set — a session may span several issues (rad:80fadcc)
@@ -483,6 +540,8 @@ class ConformanceAdapter(BaseAdapter):
                 continue
             if _is_test_file(path):
                 continue  # tests may use httpx.MockTransport etc.
+            if _is_example_file(path):
+                continue  # examples/ are standalone client scripts, not capability code
             if _is_core_file(path):
                 continue  # chp_core is below the adapter layer; cannot depend on adapters
 

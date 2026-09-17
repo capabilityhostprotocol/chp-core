@@ -293,3 +293,45 @@ class TestReject:
             "reason": "no id provided",
         })
         assert result.outcome == "denied"
+
+
+# ---------------------------------------------------------------------------
+# review (#8 — signed verification gate on handoffs)
+# ---------------------------------------------------------------------------
+from chp_core import BaseAdapter, capability  # noqa: E402
+
+
+class _FakeVerify(BaseAdapter):
+    """Stand-in for chp.adapters.eval.verify: passes iff the output contains 'good'."""
+    adapter_id = "chp.adapters.eval"
+
+    @capability(id="chp.adapters.eval.verify", version="1.0.0",
+                description="test verifier", category="ai", risk="low")
+    async def verify(self, ctx, payload):  # noqa: ANN001
+        ok = "good" in (payload.get("output") or "")
+        return {"score": 1.0 if ok else 0.0, "passed": ok}
+
+
+def _host_with_verify() -> LocalCapabilityHost:
+    host = LocalCapabilityHost(store=SQLiteEvidenceStore(":memory:"))
+    register_adapter(host, DelegationAdapter())
+    register_adapter(host, _FakeVerify())
+    return host
+
+
+class TestReview:
+    async def test_accepts_a_verified_result(self):
+        host = _host_with_verify()
+        r = await host.ainvoke("chp.adapters.delegation.review",
+                               {"delegation_id": "d1", "result": "a good result"})
+        assert r.outcome == "success"
+        assert r.data["accepted"] is True and r.data["score"] == 1.0
+        assert "delegation_accepted" in _event_types(host)
+
+    async def test_rejects_an_unverified_result(self):
+        host = _host_with_verify()
+        r = await host.ainvoke("chp.adapters.delegation.review",
+                               {"delegation_id": "d2", "result": "a bad result"})
+        assert r.data["accepted"] is False and r.data["score"] == 0.0
+        types = _event_types(host)
+        assert "delegation_rejected" in types and "delegation_accepted" not in types

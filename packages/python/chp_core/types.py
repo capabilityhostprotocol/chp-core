@@ -216,6 +216,33 @@ class IndeterminateExecution(Exception):
     event — NOT failure — and reconciliation later ADDS a record without rewriting it
     (CHP-CORE-015). A plain exception, by contrast, is a failure (the effect did not land)."""
 
+
+class CapabilityDenied(Exception):
+    """Raised by a capability handler that determines at DISPATCH time it lacks the
+    authority to act — e.g. a downstream provider returns HTTP 401/403, or a credential
+    is absent/revoked. The host records outcome=denied (execution_denied) with the
+    handler's DenialReason, instead of outcome=failure. This distinguishes
+    "not authorized" from "authorized but broke" for a post-admission failure the
+    governance gates cannot see (they run before the handler). ``code`` is the handler's
+    denial vocabulary — a governed-boundary reserved code (DenialReason.RESERVED_CODES)
+    if one fits, else a descriptive/reverse-DNS-namespaced code; it defaults to
+    ``handler_denied``. A plain exception remains a failure."""
+
+    def __init__(self, message: str, *, code: str = "handler_denied",
+                 retryable: bool = False, invariant_id: str | None = None,
+                 details: "JSON | None" = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+        self.invariant_id = invariant_id
+        self.details = details or {}
+
+    def to_denial(self) -> "DenialReason":
+        return DenialReason(code=self.code, message=self.message,
+                            invariant_id=self.invariant_id, retryable=self.retryable,
+                            details=dict(self.details))
+
 CapabilityStatus = Literal["draft", "experimental", "certified", "deprecated"]
 CapabilityLocality = Literal["local", "edge", "cloud", "hybrid", "any"]
 CapabilityIdempotency = Literal["required", "optional", "not_supported"]
@@ -765,6 +792,7 @@ class DenialReason:
         "output_schema_validation_failed",# result violated the capability's output schema (strict/require, proposal 0029)
         "invariant_failed",               # a declared invariant did not hold
         "budget_exceeded",                # AutonomyProfile budget (calls/tokens/cost) exhausted
+        "deadline_exceeded",              # absolute invocation deadline has passed (§gates, proposal 0052)
         "approval_required",              # human approval gate not satisfied
         "safety_blocked",                 # a safety guardrail blocked the invocation
         "mandate_invalid",                # presented mandate failed verification (§10)
@@ -884,6 +912,22 @@ class CapabilityBinding:
         )
 
 
+def _validated_deadline(value: object) -> str | None:
+    """Trust-boundary validation for the 0052 absolute deadline: None stays None; a
+    present value must be a non-empty string that parses as an RFC 3339 / ISO-8601
+    instant, else ValueError (→ 400) so a malformed budget never reaches the gate.
+    Stored verbatim so the wire bytes round-trip unchanged."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError("deadline must be a non-empty RFC 3339 timestamp string")
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"deadline is not a valid RFC 3339 timestamp: {value!r}") from exc
+    return value
+
+
 @dataclass(slots=True)
 class InvocationEnvelope:
     capability_id: str
@@ -922,6 +966,12 @@ class InvocationEnvelope:
     # host binds invocation_digest to it; when absent a self-hosted binding is
     # synthesized (provider == host). Omit-when-None → byte-identical wire pre-0043.
     binding: JSON | None = None
+    # OPTIONAL absolute deadline (proposal 0052): an RFC 3339 / ISO-8601 UTC instant
+    # after which the result is no longer wanted. ABSOLUTE, never re-based per hop, so
+    # it propagates across fan-out / remote hops unchanged (CAP-005) and the admission
+    # gate can reject work whose budget has passed (CAP-006). None = today's behavior
+    # (omit-when-absent → byte-identical wire pre-0052).
+    deadline: str | None = None
 
     @classmethod
     def from_mapping(cls, value: JSON) -> "InvocationEnvelope":
@@ -968,6 +1018,10 @@ class InvocationEnvelope:
             # omit-when-absent so pre-0043 envelopes are byte-identical.
             binding=(CapabilityBinding.from_mapping(value["binding"]).to_dict()
                      if value.get("binding") else None),
+            # Absolute deadline (0052): validated at the trust boundary — a present
+            # deadline must be a parseable instant, else reject (→ 400) rather than
+            # let a malformed budget reach the gate.
+            deadline=_validated_deadline(value.get("deadline")),
         )
 
     def to_dict(self) -> JSON:
@@ -985,6 +1039,8 @@ class InvocationEnvelope:
             del data["approval_ref"]  # additive (proposal 0037): absent stays absent
         if data.get("binding") is None:
             del data["binding"]  # additive (proposal 0043): absent stays absent
+        if data.get("deadline") is None:
+            del data["deadline"]  # additive (proposal 0052): absent stays absent
         return data
 
 

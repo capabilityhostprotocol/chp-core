@@ -161,21 +161,40 @@ class WorkCLITests(unittest.TestCase):
             correlation_id = "corr-check-alignment"
             repo_root = str(Path(__file__).resolve().parents[3])
 
-            alignment = self.run_cli(
-                [
-                    "work",
-                    "check-alignment",
-                    "--store",
-                    store,
-                    "--correlation-id",
-                    correlation_id,
-                    "--repo-root",
-                    repo_root,
-                ]
-            )
+            # NOT run_cli: `check-alignment` exits non-zero when the aggregate is red,
+            # and chp_dev_python_sync_clean is inherently red outside the canonical
+            # checkout (see below). The capability still runs and emits a valid result
+            # JSON, so parse it directly and judge the individual checks.
+            _out = StringIO()
+            with redirect_stdout(_out):
+                cli_main(
+                    [
+                        "work",
+                        "check-alignment",
+                        "--store",
+                        store,
+                        "--correlation-id",
+                        correlation_id,
+                        "--repo-root",
+                        repo_root,
+                    ]
+                )
+            alignment = json.loads(_out.getvalue())
 
             self.assertTrue(alignment["success"])
-            self.assertTrue(alignment["data"]["passed"])
+            # Every alignment check must pass EXCEPT chp_dev_python_sync_clean — a
+            # repo-STATE meta-check (chp-dev's files vs the public mirror) that is green
+            # only in the exact canonical checkout. It is inherently red in any worktree
+            # and on the generated mirror between syncs, so asserting the aggregate
+            # data["passed"] here made this test (and the mirror's `tests` gate, which
+            # runs it) unpassable outside canonical — silently blocking every public
+            # sync. Assert the real protocol-alignment checks instead.
+            red = [
+                c["name"]
+                for c in alignment["data"]["checks"]
+                if not c["passed"] and c["name"] != "chp_dev_python_sync_clean"
+            ]
+            self.assertEqual(red, [], f"unexpected alignment failures: {red}")
             self.assertIn("CapabilityDescriptor", alignment["data"]["core_objects"])
             self.assertEqual(
                 alignment["data"]["outcomes"],

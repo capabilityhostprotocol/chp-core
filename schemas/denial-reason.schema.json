@@ -21,6 +21,7 @@
         "output_schema_validation_failed",
         "invariant_failed",
         "budget_exceeded",
+        "deadline_exceeded",
         "approval_required",
         "safety_blocked",
         "mandate_invalid",

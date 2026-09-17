@@ -77,6 +77,8 @@ class TestShaping:
             "chp.adapters.audit.token_report",
             "chp.adapters.audit.emission_report",
             "chp.adapters.audit.agent_runs",
+            "chp.adapters.audit.inclusion_proof",
+            "chp.adapters.audit.countersign_head",
         }
 
     def test_all_risk_low(self):
@@ -111,6 +113,17 @@ class TestQueryInvocations:
                         {"capability_id": "chp.adapters.echo.ping"})
         assert r.data["total"] == 1
         assert r.data["invocations"][0]["capability_id"] == "chp.adapters.echo.ping"
+
+    def test_filter_by_correlation_id(self):
+        host = _make_host()
+        host.invoke("chp.adapters.echo.ping", {"msg": "a"})
+        host.invoke("chp.adapters.echo.ping", {"msg": "b"})
+        allr = host.invoke("chp.adapters.audit.query_invocations", {})
+        assert allr.data["total"] == 2
+        cid = allr.data["invocations"][0]["correlation_id"]   # one run's correlation
+        r = host.invoke("chp.adapters.audit.query_invocations", {"correlation_id": cid})
+        assert r.data["total"] == 1                            # indexed filter isolates that run
+        assert r.data["invocations"][0]["correlation_id"] == cid
 
     def test_filter_by_outcome(self):
         host = _make_host()
@@ -389,3 +402,100 @@ class TestTokenReport:
             "frontier_price_per_1m_output": 20.0,
         })
         assert r.data["estimated_frontier_cost_usd"] == 5.0
+
+
+# --------------------------------------------------------------------------
+# inclusion_proof — verifiable Merkle store-head inclusion (the "provable" dimension)
+# --------------------------------------------------------------------------
+
+class TestInclusionProof:
+    def test_proves_a_committed_correlation_and_verifies(self):
+        from chp_core.merkle import verify_store_head_inclusion
+
+        host = _make_host()
+        host.invoke("chp.adapters.echo.ping", {"msg": "a"})
+        host.invoke("chp.adapters.echo.ping", {"msg": "b"})
+        q = host.invoke("chp.adapters.audit.query_invocations",
+                        {"capability_id": "chp.adapters.echo.ping"})
+        corr = q.data["invocations"][0]["correlation_id"]
+
+        r = host.invoke("chp.adapters.audit.inclusion_proof", {"correlation_id": corr})
+        assert r.outcome == "success"
+        d = r.data
+        assert d["scheme"] == "chp-store-head-v2"
+        assert d["inclusion"]["correlation_id"] == corr
+        # the artifact is self-contained and third-party-verifiable (RFC 6962)
+        assert verify_store_head_inclusion(
+            d["store_head"], corr, d["inclusion"]["head_hash"], d["inclusion"]) is True
+        # metadata only — the summary carries ids/outcomes/counts, never payloads
+        assert d["event_summary"]["correlation_id"] == corr
+        assert "capability_ids" in d["event_summary"]
+
+    def test_uncommitted_correlation_is_an_error(self):
+        host = _make_host()
+        host.invoke("chp.adapters.echo.ping", {"msg": "a"})
+        r = host.invoke("chp.adapters.audit.inclusion_proof",
+                        {"correlation_id": "corr-does-not-exist"})
+        assert r.outcome != "success"
+
+    def test_graceful_without_signing_key(self, tmp_path, monkeypatch):
+        # No host key → head_signature omitted; the proof stays inclusion-verifiable (hash-chain tier).
+        from chp_core.merkle import verify_store_head_inclusion
+
+        monkeypatch.setenv("CHP_KEY_DIR", str(tmp_path / "nokeys"))
+        host = _make_host()
+        host.invoke("chp.adapters.echo.ping", {"msg": "a"})
+        q = host.invoke("chp.adapters.audit.query_invocations", {})
+        corr = q.data["invocations"][0]["correlation_id"]
+        r = host.invoke("chp.adapters.audit.inclusion_proof", {"correlation_id": corr})
+        assert r.outcome == "success"
+        assert "head_signature" not in r.data
+        assert verify_store_head_inclusion(
+            r.data["store_head"], corr, r.data["inclusion"]["head_hash"], r.data["inclusion"]) is True
+
+    def test_signs_head_when_key_present(self, tmp_path, monkeypatch):
+        # v2 authenticity: with a host ed25519 key the head is self-signed and the signature verifies.
+        from chp_core import signing
+
+        if not signing.signing_available():
+            pytest.skip("ed25519 backend not installed (chp-core[signing])")
+        key_dir = tmp_path / "keys"
+        signing.generate_keypair(key_dir)
+        monkeypatch.setenv("CHP_KEY_DIR", str(key_dir))
+        host = _make_host()
+        host.invoke("chp.adapters.echo.ping", {"msg": "a"})
+        q = host.invoke("chp.adapters.audit.query_invocations", {})
+        corr = q.data["invocations"][0]["correlation_id"]
+        r = host.invoke("chp.adapters.audit.inclusion_proof", {"correlation_id": corr})
+        assert r.outcome == "success"
+        sig = r.data.get("head_signature")
+        assert sig is not None and sig["algorithm"] == "ed25519"
+        message = signing.store_head_anchor_message(
+            r.data["host_id"], r.data["sequence"], r.data["store_head"], sig["anchored_at"])
+        assert signing._verify_sig(sig["public_key_b64"], message, sig["signature_b64"]) is True
+
+
+class TestCountersignHead:
+    def test_witnesses_another_hosts_head_and_verifies(self, tmp_path, monkeypatch):
+        from chp_core import signing
+        if not signing.signing_available():
+            pytest.skip("no ed25519 backend")
+        key_dir = tmp_path / "wkeys"
+        signing.generate_keypair(key_dir)
+        monkeypatch.setenv("CHP_KEY_DIR", str(key_dir))
+        host = _make_host()
+        # witness a FOREIGN head (another host's {host_id, sequence, store_head})
+        r = host.invoke("chp.adapters.audit.countersign_head",
+                        {"host_id": "node-other", "sequence": 42, "store_head": "deadbeef"})
+        assert r.outcome == "success" and r.data["witnessed"] is True
+        w = r.data["witness"]
+        assert w["algorithm"] == "ed25519" and w["head"]["host_id"] == "node-other"
+        msg = signing.store_head_anchor_message("node-other", 42, "deadbeef", w["anchored_at"])
+        assert signing._verify_sig(w["public_key_b64"], msg, w["signature_b64"]) is True
+
+    def test_graceful_without_signing_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CHP_KEY_DIR", str(tmp_path / "nokeys"))
+        host = _make_host()
+        r = host.invoke("chp.adapters.audit.countersign_head",
+                        {"host_id": "node-other", "sequence": 1, "store_head": "aa"})
+        assert r.outcome == "success" and r.data["witnessed"] is False

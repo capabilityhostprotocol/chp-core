@@ -93,6 +93,11 @@ def _openai_body(base: dict[str, Any], kwargs: dict[str, Any]) -> dict[str, Any]
         kwargs["temperature"] = opts["temperature"]
     for k in ("num_ctx", "think", "keep_alive", "top_k"):  # not OpenAI params
         kwargs.pop(k, None)
+    fmt = kwargs.pop("format", None)  # ollama's `format` → OpenAI `response_format`
+    if fmt is not None:
+        base["response_format"] = ({"type": "json_object"} if fmt == "json"
+            else {"type": "json_schema",
+                  "json_schema": {"name": "structured_output", "schema": fmt, "strict": True}})
     for k in ("temperature", "max_tokens", "top_p", "tools", "seed", "stop"):
         if k in kwargs:
             base[k] = kwargs.pop(k)

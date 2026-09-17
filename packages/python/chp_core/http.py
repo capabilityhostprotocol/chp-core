@@ -737,11 +737,20 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         if unhealthy is not None:
             from .metrics import format_routing_prometheus
             body += b"\n" + format_routing_prometheus(len(unhealthy)).encode("utf-8")
+        extra = self._extra_metrics()  # subclass exposition hook (base: none)
+        if extra:
+            body += b"\n" + extra.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _extra_metrics(self) -> str:
+        """Additive Prometheus exposition appended to /metrics. The base returns
+        nothing; a server distribution overrides this to add its own series (e.g.
+        feature/attachment health) without forking the metrics handler."""
+        return ""
 
     def _do_post(self) -> None:
         if self._reject_unsupported_version():

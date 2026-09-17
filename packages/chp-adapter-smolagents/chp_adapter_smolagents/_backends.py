@@ -15,15 +15,56 @@ import re
 from typing import Any, Callable
 
 
-def _tool_calls_from_content(content: str) -> list[dict]:
-    """Best-effort: extract tool calls a model emitted as TEXT in its content (instead of the
-    structured tool_calls channel). Handles OpenAI-nested ({"function": {"name","arguments"}}) and
-    flat ({"name","arguments"}) JSON objects; dedupes repeats. Returns [{name, arguments}, ...]."""
+def _resolve_tool_name(name: str, known: list[str] | None) -> str:
+    """Map a name a model emitted (e.g. harmony's ``commercial.assess_fit``, or the task-text short form)
+    to an actually-registered tool name (e.g. ``agency_commercial_assess_fit``). Exact first, then a
+    normalized (alnum-only) suffix/substring match when it's unambiguous; else the name is passed through."""
+    if not known or name in known:
+        return name
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+    n = norm(name)
+    for k in known:                                   # exact match ignoring separators/case
+        if norm(k) == n:
+            return k
+    cand = [k for k in known if norm(k).endswith(n) or n.endswith(norm(k))]
+    if len(cand) == 1:
+        return cand[0]
+    cand = [k for k in known if n and (n in norm(k) or norm(k) in n)]
+    return cand[0] if len(cand) == 1 else name
+
+
+def _tool_calls_from_content(content: str, known_names: list[str] | None = None) -> list[dict]:
+    """Best-effort: extract tool calls a model emitted as TEXT in its content instead of the structured
+    tool_calls channel. Covers (1) gpt-oss HARMONY syntax that ft serve's parser sometimes leaks verbatim
+    — ``...to=functions.NAME...<|message|>{args}`` — where the name lives in the marker, not the JSON; and
+    (2) OpenAI-nested ({"function":{"name","arguments"}}) / flat ({"name","arguments"}) JSON objects.
+    Names are resolved against ``known_names`` (the registered tools). Dedupes. Returns [{name,arguments}]."""
     if not content:
         return []
     out: list[dict] = []
     seen: set[str] = set()
-    # match brace-balanced JSON objects up to one level of nesting (covers the tool-call shapes)
+
+    def _add(name: str, args: Any) -> None:
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:  # noqa: BLE001
+                pass
+        name = _resolve_tool_name(name, known_names)
+        key = name + json.dumps(args, sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
+            out.append({"name": name, "arguments": args if args is not None else {}})
+
+    # (1) harmony tool-call channel: the function name is in `to=functions.NAME`, args after `<|message|>`
+    for m in re.finditer(r"to=functions\.([A-Za-z0-9_.\-]+)", content):
+        mm = re.search(r"<\|message\|>\s*(\{(?:[^{}]|\{[^{}]*\})*\})", content[m.end():])
+        if mm:
+            try:
+                _add(m.group(1), json.loads(mm.group(1)))
+            except Exception:  # noqa: BLE001
+                pass
+    # (2) bare JSON objects carrying their own name (OpenAI-nested or flat)
     for m in re.finditer(r"\{(?:[^{}]|\{[^{}]*\})*\}", content):
         try:
             obj = json.loads(m.group(0))
@@ -33,19 +74,8 @@ def _tool_calls_from_content(content: str) -> list[dict]:
             continue
         fn = obj.get("function") if isinstance(obj.get("function"), dict) else obj
         name = fn.get("name") if isinstance(fn, dict) else None
-        if not name:
-            continue
-        args = fn.get("arguments")
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except Exception:  # noqa: BLE001
-                pass
-        key = name + json.dumps(args, sort_keys=True, default=str)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"name": name, "arguments": args if args is not None else {}})
+        if name:
+            _add(name, fn.get("arguments"))
     return out
 
 
@@ -119,7 +149,8 @@ def build_model(model_type: str, model_id: str, api_base: str, api_key: str) -> 
 
 
 def make_chp_model(model_id: str, invoke: Callable[[dict], dict], *,
-                   temperature: float | None = None) -> Any:
+                   temperature: float | None = None, tool_choice: str | None = None,
+                   max_tokens: int | None = None, reasoning_effort: str | None = None) -> Any:
     """A smolagents Model whose completions are served by a CHP capability (e.g.
     ``chp.adapters.local_llm.chat``) invoked through the host router, instead of a raw
     OpenAI ``/v1`` endpoint. Every model call is then governed + evidenced, and can target
@@ -168,13 +199,46 @@ def make_chp_model(model_id: str, invoke: Callable[[dict], dict], *,
             payload: dict[str, Any] = {"model": self.model_id, "messages": messages}
             if ck.get("tools"):
                 payload["tools"] = ck["tools"]
+                # nudge tool-calling: without tool_choice some servers (ft serve / gpt-oss) default to a
+                # prose/reasoning turn and never emit tool_calls. Only sent when the model cap accepts it
+                # (e.g. freetoken.chat) — local_llm.chat's schema forbids it, so the caller opts in.
+                if tool_choice:
+                    payload["tool_choice"] = tool_choice
             if temperature is not None:   # deterministic agentic completions (tool-calling/reasoning)
                 payload["temperature"] = temperature
+            if max_tokens is not None:
+                # reasoning models (gpt-oss via ft serve) spend the completion budget on an analysis
+                # channel BEFORE the content/tool_calls; the cap's small default (2048) can be exhausted
+                # by reasoning alone, yielding finish_reason:length with empty content + no tool_calls —
+                # which the agent loop sees as "failed to generate output". Give the loop headroom.
+                payload["max_tokens"] = max_tokens
+            if reasoning_effort is not None:
+                # keep a reasoning model DECISIVE in the tool loop: 'low' stops gpt-oss over-reasoning
+                # (which exhausts the budget or repeats a tool instead of advancing). Cap forwards it iff supported.
+                payload["reasoning_effort"] = reasoning_effort
+            # registered tool names — used to resolve a name a leaked/harmony tool-call emitted (which may
+            # be the short/task-text form) back to the actually-registered tool.
+            known = [n for n in (getattr(t, "name", None) for t in (tools_to_call_from or [])) if n]
             res = invoke(payload) or {}
+
+            def _is_empty(r: dict) -> bool:
+                m = r.get("message", {}) or {}
+                return not (m.get("content") or m.get("tool_calls") or r.get("tool_calls")
+                            or _tool_calls_from_content((m.get("content") or ""), known))
+
+            # Reasoning-overflow recovery: a reasoning model can spend the whole completion budget on its
+            # analysis channel and return finish_reason='length' with NO content and NO tool_calls — which
+            # the agent loop reports as the opaque "failed to generate output". Retry ONCE with doubled
+            # headroom (bounded) before giving up.
+            if _is_empty(res) and res.get("finish_reason") == "length" and payload.get("max_tokens"):
+                payload = {**payload, "max_tokens": min(int(payload["max_tokens"]) * 2, 32768)}
+                res = invoke(payload) or {}
             msg = res.get("message", {}) or {}
             raw_calls = msg.get("tool_calls") or res.get("tool_calls") or []
+            from_content = False
             if not raw_calls:  # model emitted the call as text in content — parse it out
-                raw_calls = [{"function": c} for c in _tool_calls_from_content(msg.get("content") or "")]
+                raw_calls = [{"function": c} for c in _tool_calls_from_content(msg.get("content") or "", known)]
+                from_content = bool(raw_calls)
             tool_calls = [
                 ChatMessageToolCall(
                     id=tc.get("id") or f"call_{i}",
@@ -186,9 +250,16 @@ def make_chp_model(model_id: str, invoke: Callable[[dict], dict], *,
                 )
                 for i, tc in enumerate(raw_calls)
             ] or None
+            content = "" if from_content else (msg.get("content") or "")  # drop the raw harmony/JSON we parsed
+            if not content and not tool_calls:
+                # Still nothing after the headroom retry — surface WHY (finish_reason + token counts) as
+                # legible content instead of a blank turn the loop reports as "failed to generate output".
+                content = (f"[no model output: finish_reason={res.get('finish_reason')!r}, "
+                           f"completion_tokens={res.get('completion_tokens')}; the completion budget "
+                           f"may be too small for this model's reasoning — raise max_tokens]")
             return ChatMessage(
                 role=MessageRole.ASSISTANT,
-                content=msg.get("content") or "",
+                content=content,
                 tool_calls=tool_calls,
                 raw=res,
             )
@@ -198,12 +269,14 @@ def make_chp_model(model_id: str, invoke: Callable[[dict], dict], *,
 
 def build_agent(model: Any, tools: list[Any], agent_type: str = "code", max_steps: int = 6,
                 *, name: str | None = None, description: str | None = None,
-                managed_agents: list[Any] | None = None, planning_interval: int | None = None) -> Any:
+                managed_agents: list[Any] | None = None, planning_interval: int | None = None,
+                max_tool_threads: int | None = None) -> Any:
     """Construct a smolagents agent. agent_type selects the action channel: 'code' → CodeAgent
     (writes Python over the tools), 'tool' → ToolCallingAgent (JSON tool_calls, reliable with small
-    models). name/description make it delegatable as a managed sub-agent; managed_agents are the
-    specialist sub-agents this (manager) agent may delegate to; planning_interval makes it re-plan
-    every N steps (steadier multi-step orchestration)."""
+    models — and it runs a step's independent tool calls CONCURRENTLY on a thread pool). name/description
+    make it delegatable as a managed sub-agent; managed_agents are the specialist sub-agents this
+    (manager) agent may delegate to; planning_interval makes it re-plan every N steps (steadier multi-step
+    orchestration); max_tool_threads caps that parallel tool-call pool (ToolCallingAgent only)."""
     kwargs: dict[str, Any] = {"tools": tools, "model": model, "max_steps": max_steps}
     if name:
         kwargs["name"] = name
@@ -215,6 +288,8 @@ def build_agent(model: Any, tools: list[Any], agent_type: str = "code", max_step
         kwargs["planning_interval"] = planning_interval
     if agent_type == "tool":
         from smolagents import ToolCallingAgent
+        if max_tool_threads:                          # bound the parallel tool-call pool (else the library default)
+            kwargs["max_tool_threads"] = max_tool_threads
         return ToolCallingAgent(**kwargs)
     from smolagents import CodeAgent
     return CodeAgent(**kwargs)
@@ -222,16 +297,26 @@ def build_agent(model: Any, tools: list[Any], agent_type: str = "code", max_step
 
 def run_agent(model: Any, tools: list[Any], task: str, max_steps: int,
               agent_type: str = "code", managed_agents: list[Any] | None = None,
-              planning_interval: int | None = None) -> dict:
-    """Build the (manager) agent and run the task; returns answer + step count."""
+              planning_interval: int | None = None, max_tool_threads: int | None = None) -> dict:
+    """Build the (manager) agent and run the task; returns answer + step count + the delegation trace.
+
+    ``calls`` is the ordered list of tool / managed-sub-agent names the manager actually invoked (a
+    managed agent is called by name, like a tool) — so a swarm run is no longer opaque (a pure manager
+    has no direct tools, so ``tool_names`` is empty and only ``calls`` shows what ran)."""
     agent = build_agent(model, tools, agent_type, max_steps, managed_agents=managed_agents,
-                        planning_interval=planning_interval)
+                        planning_interval=planning_interval, max_tool_threads=max_tool_threads)
     answer = agent.run(task)
 
-    steps = 0
+    steps, calls = 0, []
     try:
-        steps = len([s for s in agent.memory.steps if type(s).__name__ == "ActionStep"])
+        action_steps = [s for s in agent.memory.steps if type(s).__name__ == "ActionStep"]
+        steps = len(action_steps)
+        for s in action_steps:                              # smolagents records each ToolCall(name=…)
+            for tc in (getattr(s, "tool_calls", None) or []):
+                name = getattr(tc, "name", None)
+                if name:
+                    calls.append(name)
     except Exception:
-        steps = 0
+        steps, calls = steps, calls
 
-    return {"answer": str(answer), "steps": steps}
+    return {"answer": str(answer), "steps": steps, "calls": calls}

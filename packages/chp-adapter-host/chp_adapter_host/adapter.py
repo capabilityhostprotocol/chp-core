@@ -370,15 +370,27 @@ class HostAdapter(BaseAdapter):
             "required": ["base_url", "capability_id"],
             "additionalProperties": False,
         },
-        emits=["host_remote_invoked"],
+        emits=["host_remote_invoked", "host_mesh_key_lookup_skipped"],
         tags=["host", "invoke", "remote", "federation"],
     )
     async def invoke(self, ctx: Any, payload: dict) -> dict:
         from chp_core.http import RemoteCapabilityHost
         base_url = str(payload["base_url"])
         capability_id = str(payload["capability_id"])
+        # federated auth: default the bearer to the node's mesh HTTP key when the caller doesn't supply
+        # one — so cross-node invocation self-authenticates node-side and the shared key never rides in
+        # the caller's payload/evidence. Source order mirrors mesh_auth: CHP_MESH_HTTP_KEY env, then the
+        # node's own secrets store (mesh/http_control_key, composed via the local secrets cap).
+        api_key = payload.get("api_key") or os.environ.get("CHP_MESH_HTTP_KEY")
+        if not api_key:
+            try:
+                r = await ctx.ainvoke("chp.adapters.secrets.get", {"key": "mesh/http_control_key"})
+                if getattr(r, "success", False):
+                    api_key = (r.data or {}).get("value") or (r.data or {}).get("secret")
+            except Exception as exc:  # no secrets cap / not set → auth simply not configured
+                ctx.emit("host_mesh_key_lookup_skipped", {"error": str(exc)[:120]}, redacted=False)
         remote = RemoteCapabilityHost(base_url, timeout=int(payload.get("timeout") or 120),
-                                      api_key=payload.get("api_key") or None)
+                                      api_key=api_key or None)
         result = await remote.ainvoke(capability_id, payload.get("payload") or {},
                                       version=payload.get("version") or None)
         outcome = getattr(result, "outcome", None)

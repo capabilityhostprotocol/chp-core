@@ -199,21 +199,18 @@ class VLLMAdapter(BaseAdapter):
             "type": "object",
             "properties": {
                 "model": {"type": "string"},
-                "messages": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "role": {"type": "string", "enum": ["system", "user", "assistant"]},
-                            "content": {"type": "string"},
-                        },
-                        "required": ["role", "content"],
-                    },
-                    "minItems": 1,
-                },
+                # Relaxed to any message shape so tool-calling flows validate: an assistant turn with
+                # `tool_calls` (null content) and a `tool`-role result message aren't the strict
+                # {role in [system,user,assistant], content required} shape.
+                "messages": {"type": "array", "items": {"type": "object", "additionalProperties": True},
+                             "minItems": 1},
                 "max_tokens": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 256},
                 "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0, "default": 0.7},
                 "top_p": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "tools": {"type": "array", "items": {"type": "object", "additionalProperties": True},
+                          "description": "OpenAI-format tool definitions to forward (enables tool-calling; "
+                                         "vLLM must serve with a --tool-call-parser). Never recorded in evidence."},
+                "tool_choice": {"description": "OpenAI tool_choice, forwarded verbatim."},
             },
             "required": ["messages"],
             "additionalProperties": False,
@@ -230,8 +227,14 @@ class VLLMAdapter(BaseAdapter):
         }
         if "top_p" in payload:
             body["top_p"] = payload["top_p"]
+        if payload.get("tools"):                       # forward tools -> the response message carries tool_calls
+            body["tools"] = payload["tools"]
+        if payload.get("tool_choice") is not None:
+            body["tool_choice"] = payload["tool_choice"]
 
-        ctx.emit("vllm_chat_started", {"model": model, "message_count": len(messages)}, redacted=False)
+        ctx.emit("vllm_chat_started",
+                 {"model": model, "message_count": len(messages), "tool_count": len(payload.get("tools") or [])},
+                 redacted=False)
 
         t0 = time.monotonic()
         try:

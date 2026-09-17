@@ -112,6 +112,7 @@ from .types import (
     Actor,
     AdmissionDecision,
     AssuranceMetadata,
+    CapabilityDenied,
     CapabilityDescriptor,
     CORE_EVIDENCE_TYPES,
     ConversationEvent,
@@ -279,6 +280,9 @@ class CapabilityExecutionContext:
             payload,
             correlation=self.child_correlation(),
             subject=subject,
+            # Inherit the caller's absolute deadline unchanged (proposal 0052, CAP-005):
+            # one end-to-end budget across the call tree, never re-based per hop.
+            deadline=self.envelope.deadline,
         )
 
 
@@ -612,6 +616,7 @@ class LocalCapabilityHost:
         actor: JSON | None = None,
         mode: str = "sync",
         metadata: JSON | None = None,
+        deadline: str | None = None,
     ) -> InvocationResult:
         if isinstance(correlation, CorrelationContext):
             corr = correlation
@@ -629,6 +634,10 @@ class LocalCapabilityHost:
             # so a wrong-shaped actor fails clean; None = today's behavior.
             actor=(Actor.from_mapping(actor).to_dict() if actor else None),
             metadata=metadata or {},
+            # Absolute deadline (proposal 0052): a governed sub-invocation inherits its
+            # parent's deadline VERBATIM (see InvocationContext.ainvoke) — absolute, so
+            # the end-to-end budget is never re-based per hop (CAP-005).
+            deadline=deadline,
         )
         _KNOWN_MODES = {"sync", "async", "stream", "fire_and_forget"}
         if envelope.mode not in _KNOWN_MODES:
@@ -904,6 +913,24 @@ class LocalCapabilityHost:
         if invariant_denial is not None:
             return envelope, None, self._deny(envelope, invariant_denial)
 
+        # Absolute-deadline gate (proposal 0052, CAP-006): reject before execution
+        # when the envelope's absolute deadline has passed — skew-aware and
+        # fail-closed under clock uncertainty. No effect runs; the denial is evidenced.
+        if envelope.deadline is not None:
+            from .temporal import deadline_exceeded
+            skew = float(os.environ.get("CHP_HOST_DEADLINE_SKEW_S", "0") or 0)
+            if deadline_exceeded(envelope.deadline, self._decision_now(), skew_seconds=skew):
+                return envelope, None, self._deny(
+                    envelope,
+                    DenialReason(
+                        code="deadline_exceeded",
+                        message=(f"invocation deadline {envelope.deadline} has passed; "
+                                 "no time budget remains"),
+                        retryable=False,
+                        details={"deadline": envelope.deadline},
+                    ),
+                )
+
         autonomy_denial = self._check_autonomy_budget(descriptor, envelope)
         if autonomy_denial is not None:
             return envelope, None, self._deny(envelope, autonomy_denial)
@@ -949,6 +976,20 @@ class LocalCapabilityHost:
         or None. Best-effort — a cache error means a fresh execution."""
         return lookup_recorded_result(self.store, invocation_id)
 
+    def _result_cacheable(self, capability_id: str | None) -> bool:
+        """False when the capability declares descriptor metadata
+        ``{"cache_results": False}`` — its result must not persist in the §13
+        replay cache (sensitive returns like secrets.get). Default True. (rad:3d5b718)"""
+        if not capability_id:
+            return True
+        with self._registry_lock:
+            for uri in self._matching_uris(capability_id):
+                entry = self._capabilities.get(uri)
+                metadata = (getattr(entry.descriptor, "metadata", None) or {}) if entry else {}
+                if metadata.get("cache_results") is False:
+                    return False
+        return True
+
     def _record_result(self, result: InvocationResult,
                        chunks: list | None = None) -> InvocationResult:
         """Record a processed result for idempotent replay (spec §13).
@@ -958,6 +999,13 @@ class LocalCapabilityHost:
         ``CHP_STREAM_CACHE_MAX_CHUNKS`` (default 10000) — over the cap the stream
         is recorded non-resumable (replay degrades to the terminal result)."""
         if result.replayed:
+            return result
+        # A capability may opt its RESULT out of the §13 replay cache via descriptor
+        # metadata {"cache_results": False} — for sensitive returns (e.g. secrets.get's
+        # {"value": <token>}) that must never sit at rest in invocation_results. The
+        # Gate 0 replay lookup then finds nothing and re-executes, which is the correct
+        # behavior for a credential read (freshness / revocation) anyway. (rad:3d5b718)
+        if not self._result_cacheable(getattr(result, "capability_id", None)):
             return result
         record = getattr(self.store, "record_result", None)
         if record is not None:
@@ -1005,7 +1053,12 @@ class LocalCapabilityHost:
         started = self.emit_evidence(
             "execution_started",
             envelope,
-            payload={"capability_uri": descriptor.capability_uri},
+            # Carry the caller's causal metadata (e.g. run_id/effect_id/tenant_id) into
+            # evidence so downstream can query it natively instead of reconstructing it.
+            # Redacted like any payload; omitted when empty so events without caller
+            # metadata stay byte-identical (no schema/dual-digest impact). (rad:e0f0826)
+            payload={"capability_uri": descriptor.capability_uri,
+                     **({"metadata": envelope.metadata} if envelope.metadata else {})},
             outcome=None,
             execution_id=execution_id,
             admission=admission,
@@ -1079,6 +1132,9 @@ class LocalCapabilityHost:
                 evidence_ids=[started.event_id, *ctx._evidence_ids, indeterminate.event_id],
                 started_at=started.timestamp,
             ))
+        except CapabilityDenied as exc:
+            # Post-admission authority failure (e.g. provider 401): DENIED, not failure. (rad:d96efd3)
+            return self._handler_denied(envelope, descriptor, ctx, started, execution_id, exc)
         except Exception as exc:
             failed = self.emit_evidence(
                 "execution_failed",
@@ -1155,7 +1211,12 @@ class LocalCapabilityHost:
         started = self.emit_evidence(
             "execution_started",
             envelope,
-            payload={"capability_uri": descriptor.capability_uri},
+            # Carry the caller's causal metadata (e.g. run_id/effect_id/tenant_id) into
+            # evidence so downstream can query it natively instead of reconstructing it.
+            # Redacted like any payload; omitted when empty so events without caller
+            # metadata stay byte-identical (no schema/dual-digest impact). (rad:e0f0826)
+            payload={"capability_uri": descriptor.capability_uri,
+                     **({"metadata": envelope.metadata} if envelope.metadata else {})},
             outcome=None,
             execution_id=execution_id,
             admission=admission,
@@ -1238,6 +1299,9 @@ class LocalCapabilityHost:
             )
             self._record_result(indet_result)
             yield {"result": indet_result}
+        except CapabilityDenied as exc:
+            # Post-admission authority failure in a streaming handler: DENIED, not failure. (rad:d96efd3)
+            yield {"result": self._handler_denied(envelope, descriptor, ctx, started, execution_id, exc)}
         except Exception as exc:
             failed = self.emit_evidence(
                 "execution_failed",
@@ -1511,6 +1575,28 @@ class LocalCapabilityHost:
                 details={"schema_id": descriptor.output_schema.get("$id"), "path": path},
             ), {}
         return None, {"output_schema_valid": False, "output_schema_error": msg}
+
+    def _handler_denied(self, envelope, descriptor, ctx, started, execution_id,
+                        exc: CapabilityDenied) -> InvocationResult:
+        """A handler raised CapabilityDenied at dispatch (post-admission authority
+        failure, e.g. provider 401) → outcome=denied, not failure. (rad:d96efd3)"""
+        denial = exc.to_denial()
+        denied = self.emit_evidence(
+            "execution_denied", envelope,
+            payload={"capability_uri": descriptor.capability_uri, "reason": denial.code},
+            outcome="denied", denial=denial, execution_id=execution_id,
+        )
+        return self._record_result(InvocationResult(
+            invocation_id=envelope.invocation_id,
+            capability_id=descriptor.id,
+            capability_version=descriptor.version,
+            correlation=envelope.correlation,
+            outcome="denied",
+            success=False,
+            denial=denial,
+            evidence_ids=[started.event_id, *ctx._evidence_ids, denied.event_id],
+            started_at=started.timestamp,
+        ))
 
     def _deny(self, envelope: InvocationEnvelope, denial: DenialReason) -> InvocationResult:
         denied = self.emit_evidence(

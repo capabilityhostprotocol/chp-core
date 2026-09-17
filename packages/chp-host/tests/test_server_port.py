@@ -157,6 +157,19 @@ def test_router_port_requires_remotes():
         RouterPort().validate()
 
 
+def test_router_port_remotes_carry_api_key(monkeypatch):
+    """A config-driven gateway must authenticate to mesh-auth-gated nodes: the URL-based
+    remotes path resolves a key (explicit, or from a named env var — never plaintext config)
+    and hands it to each HttpTransport. Proven live against the fleet (024bdb9)."""
+    from chp_host.server_port import RouterPort
+
+    assert RouterPort(remotes=["http://n:8802"], api_key="sekret")._resolved_api_key() == "sekret"
+    monkeypatch.setenv("CHP_TEST_MESH_KEY", "from-env")
+    assert RouterPort(remotes=["http://n:8802"],
+                      api_key_env="CHP_TEST_MESH_KEY")._resolved_api_key() == "from-env"
+    assert RouterPort(remotes=["http://n:8802"])._resolved_api_key() is None  # unauth stays opt-in
+
+
 def test_mcp_export_attachment(tmp_path):
     """mcp.export truth: SSE bridge actually serving (auth-checked), import stays unsupported."""
     pytest.importorskip("mcp")

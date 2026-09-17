@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.3/agent-profile.schema.json",
+  "title": "AgentProfile",
+  "description": "A named worker (or a whole swarm): a role (model tier) + the capabilities it may use + its skills. A 'manager' profile also carries 'managed' sub-profiles it may delegate to. Pure data every product can build and extend; a product's runtime turns it into a governed agent run. The canonical byte serialization is a signable, portable artifact exactly like a Skill.",
+  "type": "object",
+  "required": ["id"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "default": "tool", "description": "Model tier; overridden by an explicit model pin."},
+    "description": {"type": "string", "default": ""},
+    "tools": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": [],
+      "description": "Capability ids this profile may use (its own; its skills' tools are added at runtime)."
+    },
+    "skills": {
+      "type": "array",
+      "items": {"$ref": "https://chp.dev/schemas/v0.3/skill.schema.json"},
+      "default": []
+    },
+    "managed": {
+      "type": "array",
+      "items": {"$ref": "https://chp.dev/schemas/v0.3/agent-profile.schema.json"},
+      "default": [],
+      "description": "Sub-workers a manager delegates to (orchestrator-workers). Recursive."
+    },
+    "agent_type": {"type": "string", "enum": ["tool", "code", "manager"], "default": "tool"},
+    "model": {"type": ["string", "null"], "default": null, "description": "Explicit model pin; overrides role tiering."},
+    "node": {"type": ["string", "null"], "default": null, "description": "Preferred node to run on; the product routes to it."},
+    "persona": {"type": "string", "default": "", "description": "System voice seeded ahead of the task."},
+    "instructions": {"type": "string", "default": "", "description": "Extra task-seed instructions."},
+    "mode": {"type": "string", "enum": ["manager", "sequential"], "default": "manager", "description": "manager = delegate to 'managed'; sequential = run skills in order."},
+    "skill_tasks": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "default": {},
+      "description": "Per-skill task overrides (sequential mode)."
+    },
+    "version": {"type": "string", "default": "1"}
+  }
+}
