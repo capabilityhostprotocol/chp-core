@@ -1199,6 +1199,68 @@ class TestPipelineCache:
         assert (0,) not in be._model_cache  # oldest evicted
         assert (_MAX_CACHED_MODELS + 1,) in be._model_cache  # newest retained
 
+    def test_eviction_releases_the_model(self, monkeypatch):
+        """Evicted models must be actively RELEASED, not just dropped from the dict.
+
+        Dropping the dict reference alone leaks: torch's device allocator retains an
+        evicted model's memory until empty_cache(), so the host's RSS grows with every
+        DISTINCT model ever loaded. Regression for rad:ec512b9.
+        """
+        from chp_adapter_huggingface import _backends
+        from chp_adapter_huggingface._backends import _RealHFBackend, _MAX_CACHED_MODELS
+
+        released = []
+        monkeypatch.setattr(_backends, "_release_model", released.append)
+
+        be = _RealHFBackend()
+        sentinels = [object() for _ in range(_MAX_CACHED_MODELS + 2)]
+        for i, s in enumerate(sentinels):
+            be._cached((i,), lambda s=s: s)
+
+        # The two oldest were evicted → released, in eviction order; the newest stay
+        # resident and are NOT released while cached.
+        assert released == sentinels[:2]
+        assert len(be._model_cache) == _MAX_CACHED_MODELS
+
+    def test_release_is_torch_optional(self):
+        """The eviction release path must never raise, even with no torch installed."""
+        from chp_adapter_huggingface._backends import _release_model
+        _release_model(object())  # no exception, torch present or not
+
+    def test_evicted_cyclic_objects_are_reclaimed_synchronously(self):
+        """Every evicted model — including the LAST one evicted — must be reclaimed at
+        eviction time, not left for a later pass. Transformers pipelines are reference
+        cycles, so refcounting alone can't free them; only the fix's gc.collect() can.
+
+        With automatic GC disabled, the fix's own gc.collect() is the *only* thing that can
+        reclaim an evicted cyclic object — so a surviving weakref means the release didn't
+        actually free it. Regression for the pop()-vs-iterate timing bug (rad:ec512b9).
+        """
+        import gc
+        import weakref
+        from chp_adapter_huggingface._backends import _RealHFBackend, _MAX_CACHED_MODELS
+
+        gc.disable()
+        try:
+            be = _RealHFBackend()
+            refs = {}
+            n = _MAX_CACHED_MODELS + 3
+            for i in range(n):
+                class _Cyclic:
+                    pass
+                obj = _Cyclic()
+                obj.self = obj                      # a reference cycle, like a real pipeline
+                refs[i] = weakref.ref(obj)
+                be._cached((i,), (lambda o=obj: o))
+                del obj                             # only the cache (then eviction) holds it
+            evicted = list(range(n - _MAX_CACHED_MODELS))
+            resident = list(range(n - _MAX_CACHED_MODELS, n))
+            assert [i for i in evicted if refs[i]() is None] == evicted  # ALL freed, last included
+            assert [i for i in resident if refs[i]() is not None] == resident  # residents kept
+            assert len(be._model_cache) == _MAX_CACHED_MODELS
+        finally:
+            gc.enable()
+
 
 # ---------------------------------------------------------------------------
 # Conformance
