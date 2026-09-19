@@ -34,7 +34,11 @@ def _hook_p99_budget_ms(tmp_path) -> float:
     reporting a fake regression."""
     import sqlite3
 
-    baseline_db = str(tmp_path / "baseline.sqlite")
+    # A FRESH db per calibration: this helper runs once per retry attempt on the SAME
+    # tmp_path, so a fixed filename let attempt 2+ reconnect to attempt 1's db and re-run
+    # CREATE TABLE b -> "table b already exists" (only on a slow runner whose round-1
+    # overshoot triggers the retry). A unique path isolates each round.
+    baseline_db = str(tmp_path / f"baseline-{time.perf_counter_ns()}.sqlite")
     conn = sqlite3.connect(baseline_db)
     conn.execute("CREATE TABLE b (i INTEGER, t TEXT)")
     conn.commit()
