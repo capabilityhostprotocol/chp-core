@@ -288,6 +288,40 @@ def _qlora_plan(options: dict | None, cuda_available: bool) -> dict:
     }
 
 
+def _release_model(obj: Any) -> None:
+    """Best-effort release of a model/pipeline evicted from the warm cache so its device
+    memory is actually reclaimed — not merely unreferenced. Safe on any object and when
+    torch is absent: the cache-eviction path must never raise."""
+    del obj  # drop this frame's reference to the evicted object, then reclaim
+    _reclaim_torch_memory()
+
+
+def _reclaim_torch_memory() -> None:
+    """Break reference cycles and return freed device blocks to the torch allocator.
+
+    torch's CUDA/MPS caching allocator does not release blocks back to the OS on its own,
+    so an evicted model's footprint persists until ``empty_cache()`` is called; and a
+    transformers pipeline is a reference cycle that only a cyclic-GC pass collects. This is
+    a no-op (and never raises) when torch is not installed.
+    """
+    import gc
+    gc.collect()
+    try:
+        import torch
+    except Exception:
+        return
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    try:
+        if hasattr(torch, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Real backend — lazy-imports all HF libraries
 # ---------------------------------------------------------------------------
@@ -317,11 +351,25 @@ class _RealHFBackend:
                 self._model_cache.move_to_end(key)
                 return obj
         obj = factory()
+        evicted: list = []
         with self._cache_lock:
             self._model_cache[key] = obj
             self._model_cache.move_to_end(key)
             while len(self._model_cache) > _MAX_CACHED_MODELS:
-                self._model_cache.popitem(last=False)
+                # Append the value directly — do NOT bind a `victim` local. A named local
+                # would keep the last-evicted object referenced by this frame through the
+                # release loop below, so its gc.collect() couldn't reclaim it synchronously.
+                evicted.append(self._model_cache.popitem(last=False)[1])
+        # Release evicted models OUTSIDE the lock. Dropping the dict reference is NOT
+        # enough to reclaim their memory: transformers pipelines hold reference cycles
+        # (model<->config<->tokenizer), and torch's CUDA/MPS caching allocator keeps freed
+        # device blocks in a process-lifetime pool. Without this the host's RSS grows with
+        # every DISTINCT model ever loaded, not the _MAX_CACHED_MODELS kept resident.
+        # pop() (not iteration) so the list holds no reference to the victim while
+        # _release_model runs gc.collect() — otherwise the current victim's cycle can't be
+        # reclaimed until a later pass, only synchronously freeing previously-evicted ones.
+        while evicted:
+            _release_model(evicted.pop())
         return obj
 
     def pull(
@@ -1388,26 +1436,32 @@ class _RealHFBackend:
         pipe = DiffusionPipeline.from_pretrained(model, cache_dir=cache_dir or None)
         dev = _resolve_diffusers_device(device)
         pipe = pipe.to(dev)
+        try:
+            generator = None
+            if seed is not None:
+                generator = torch.Generator(device=dev).manual_seed(seed)
 
-        generator = None
-        if seed is not None:
-            generator = torch.Generator(device=dev).manual_seed(seed)
+            image = pipe(
+                prompt,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                generator=generator,
+            ).images[0]
+            image.save(output_path)
 
-        image = pipe(
-            prompt,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            generator=generator,
-        ).images[0]
-        image.save(output_path)
-
-        return {
-            "output_path": output_path,
-            "width": image.width,
-            "height": image.height,
-            "steps": num_inference_steps,
-            "seed": seed,
-        }
+            return {
+                "output_path": output_path,
+                "width": image.width,
+                "height": image.height,
+                "steps": num_inference_steps,
+                "seed": seed,
+            }
+        finally:
+            # generate_image does NOT use the warm cache — the (multi-GB) diffusion pipeline
+            # is loaded fresh per call. Release its device memory here or repeated
+            # generations grow torch's allocator pool unbounded (rad:ec512b9).
+            del pipe
+            _reclaim_torch_memory()
 
 
 def _resolve_diffusers_device(device: str) -> str:
