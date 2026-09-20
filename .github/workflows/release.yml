@@ -256,12 +256,12 @@ jobs:
       # npm install (not ci) — tolerant of root-lockfile drift after a workspace
       # version bump (release syncs package.json but not the root lockfile); matches
       # publish-ts-alpha.yml. Prevents the whole "npm ci out of sync" release failure.
-      # --ignore-scripts: skip workspace prepare builds (chp-sdk's tsup→rollup, which hits
-      # the npm optional-deps bug #4828 on @rollup/rollup-linux-x64-gnu). ts-types is
-      # foundational — chp-sdk depends on IT, not the reverse — so publishing types never
-      # needs the sdk built; its own Build step below still runs.
+      # Scope the install to ONLY the ts-types workspace: publishing types never needs the
+      # sibling chp-sdk built (chp-sdk depends on ts-types, not the reverse), and building
+      # chp-sdk here hits npm optional-deps bug #4828 on @rollup/rollup-linux-x64-gnu.
+      # (--ignore-scripts did not stop npm running chp-sdk's workspace `prepare`; -w does.)
       - name: Install dependencies
-        run: npm install --no-audit --no-fund --ignore-scripts
+        run: npm install --no-audit --no-fund -w packages/ts-types
 
       - name: Build
         working-directory: packages/ts-types
