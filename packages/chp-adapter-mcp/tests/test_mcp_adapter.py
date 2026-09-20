@@ -326,3 +326,13 @@ def test_resolve_headers_secret_ref_soft_fails_to_empty():
     from chp_adapter_mcp.adapter import _resolve_headers
     out = _resolve_headers({"Authorization": "Bearer ${secret:twenty/api_key}"})
     assert out == {"Authorization": "Bearer "} or out["Authorization"].startswith("Bearer ")
+
+
+def test_innermost_reason_distils_exception_group():
+    # A failed MCP handshake surfaces as a nested anyio ExceptionGroup; connect() distils it
+    # to one concise reason instead of re-raising the 60-line tree that crashed compose().
+    from chp_adapter_mcp.adapter import _innermost_reason
+    inner = RuntimeError("Connection closed")
+    grp = ExceptionGroup("outer", [ExceptionGroup("mid", [inner])])
+    assert _innermost_reason(grp) == "RuntimeError: Connection closed"
+    assert _innermost_reason(ValueError("bad")) == "ValueError: bad"  # plain passes through

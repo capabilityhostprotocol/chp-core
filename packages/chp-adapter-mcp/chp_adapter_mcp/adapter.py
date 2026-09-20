@@ -55,6 +55,29 @@ _EMITS = [
 ]
 
 
+def _innermost_reason(exc: BaseException) -> str:
+    """Distil a (possibly nested) ExceptionGroup / cause chain to one concise reason.
+
+    A failed MCP handshake surfaces as an anyio ``ExceptionGroup`` wrapping the real cause
+    (e.g. ``MCPError: Connection closed``); unwrap sub-exception groups and cause/context
+    links to the innermost specific exception so the caller sees one line, not a tree.
+    """
+    cur: BaseException = exc
+    seen: set[int] = set()
+    while id(cur) not in seen:
+        seen.add(id(cur))
+        subs = getattr(cur, "exceptions", None)  # (Base)ExceptionGroup
+        if subs:
+            cur = subs[0]
+            continue
+        nxt = cur.__cause__ or cur.__context__
+        if nxt is not None:
+            cur = nxt
+            continue
+        break
+    return f"{type(cur).__name__}: {cur}"
+
+
 @dataclass(slots=True)
 class MCPServerConfig:
     """Connection config for one MCP server.
@@ -234,7 +257,14 @@ class _ThreadedMCPSession:
         self._thread.start()
         self._ready.wait()
         if self._error is not None:
-            raise self._error
+            cfg = self._config
+            target = f"command={cfg.command!r}" if cfg.command else f"url={cfg.url!r}"
+            # A server that launches but fails the MCP handshake raises a raw anyio
+            # ExceptionGroup (60+ lines) that would crash compose() inscrutably — distil it
+            # to the innermost reason and name the server, keeping the original as the cause.
+            raise RuntimeError(
+                f"MCP server {cfg.name!r} ({target}) failed to connect/initialize: "
+                f"{_innermost_reason(self._error)}") from self._error
 
     async def call(self, name: str, arguments: dict[str, Any]) -> Any:
         future = asyncio.run_coroutine_threadsafe(
