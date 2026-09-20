@@ -45,15 +45,19 @@ def schema_from_type_hints(fn: Callable[..., Any]) -> dict | None:
 
     Resolves stringized annotations (`from __future__ import annotations`, PEP 563)
     via ``get_type_hints``, falling back to the raw annotation name. Skips ``ctx`` /
-    ``payload`` / ``self`` and ``*args`` / ``**kwargs``; adds no ``required`` (a
-    missing field is the handler's default, not a denial). Returns ``None`` when there
-    are no usable parameters. Pure and opt-in — nothing infers schemas unless asked.
+    ``payload`` / ``self`` and ``*args`` / ``**kwargs``. A parameter WITHOUT a default
+    is ``required`` — a missing one has no handler fallback, so it must be denied at
+    schema validation (``input_schema_validation_failed``) rather than crash the handler
+    with a ``TypeError``; a parameter WITH a default stays optional (its default applies).
+    Returns ``None`` when there are no usable parameters. Pure and opt-in — nothing
+    infers schemas unless asked.
     """
     try:
         hints = typing.get_type_hints(fn)
     except Exception:
         hints = {}
     props: dict[str, dict] = {}
+    required: list[str] = []
     for name, param in inspect.signature(fn).parameters.items():
         if name in ("ctx", "payload", "self"):
             continue
@@ -61,9 +65,14 @@ def schema_from_type_hints(fn: Callable[..., Any]) -> dict | None:
             continue
         json_type = _json_type(hints.get(name, param.annotation))
         props[name] = {"type": json_type} if json_type else {}
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
     if not props:
         return None
-    return {"type": "object", "properties": props}
+    schema: dict = {"type": "object", "properties": props}
+    if required:
+        schema["required"] = required
+    return schema
 
 
 def capability(
