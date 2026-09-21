@@ -65,6 +65,15 @@ Intentionally small:
 - replay evidence by correlation ID
 - optionally serve discovery, invocation, and replay over local HTTP
 
+## Where this fits
+
+`chp-core` is the canonical implementation — the local host, evidence, signing, and the 12-gate
+invocation pipeline — that **every CHP node, adapter, and product builds on**. It stands alone:
+govern your own agent locally with nothing else installed (above). To *serve* these capabilities
+over HTTP as a **node others can discover, compose, and federate with**, add
+[`chp-server`](https://github.com/capabilityhostprotocol/chp-server) — one dependency (this
+package) and you have a node in the network.
+
 ## Quick Example
 
 ```python
