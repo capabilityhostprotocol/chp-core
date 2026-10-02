@@ -154,6 +154,7 @@ from .supply import (
     provenanced,
 )
 from .trust import TrustAnchor, anchored_issuer_trusted, verified_supply
+from .qualification import QualificationClaim, observation
 from .composition import (
     Composition,
     CompositionEdge,
@@ -327,6 +328,8 @@ __all__ = [
     "PROVENANCE",
     "provenanced",
     "provenance_of",
+    "QualificationClaim",
+    "observation",
     "current_offers",
     "offer_validity_state",
     "ReadinessAssessment",

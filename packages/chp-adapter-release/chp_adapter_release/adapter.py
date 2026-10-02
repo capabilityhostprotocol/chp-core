@@ -33,6 +33,17 @@ from chp_core import BaseAdapter, capability
 _EMITS = ["release_request", "release_response", "release_error"]
 
 
+def _short_reason(exc: Exception, limit: int = 200) -> str:
+    """A brief, evidence-safe failure reason — the final meaningful line, capped at ``limit``.
+
+    The FULL subprocess output stays in the raised exception (disclosed to the caller); only this
+    short summary is emitted to evidence, so build/diff/upload output can never leak into the signed
+    record (see the module-level Evidence hygiene note)."""
+    lines = [ln for ln in str(exc).strip().splitlines() if ln.strip()]
+    reason = lines[-1] if lines else str(exc).strip()
+    return reason[:limit]
+
+
 # ---------------------------------------------------------------------------
 # Injectable backend
 # ---------------------------------------------------------------------------
@@ -57,7 +68,15 @@ class SubprocessProcessBackend:
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or f"{args[0]} failed")
+            # Disclose BOTH streams: the actual failing step (e.g. which preflight check failed)
+            # is usually on STDOUT, while STDERR may carry only notices + a terminal summary.
+            # Raising stderr-only hid the real cause. The full detail goes to the CALLER via this
+            # exception — the caps emit only a short, evidence-safe reason (see `_short_reason`), so
+            # build/diff/upload output never lands in the signed evidence.
+            detail = "\n".join(s for s in (result.stdout.strip(), result.stderr.strip()) if s)
+            raise RuntimeError(
+                f"{args[0]} exited {result.returncode}" + (f"\n{detail}" if detail else "")
+            )
         return result.stdout.strip()
 
 
@@ -253,7 +272,7 @@ class ReleaseAdapter(BaseAdapter):
                     args.append(branch)
             output = self._run(*args, cwd=repo)
         except RuntimeError as exc:
-            ctx.emit("release_error", {"operation": "sync", "error": str(exc)})
+            ctx.emit("release_error", {"operation": "sync", "error": _short_reason(exc)})
             raise
 
         pr_url: str | None = None
@@ -331,7 +350,7 @@ class ReleaseAdapter(BaseAdapter):
                 self._run("git", "push", remote, tag_name, cwd=repo)
                 pushed = True
         except RuntimeError as exc:
-            ctx.emit("release_error", {"operation": "tag", "error": str(exc)})
+            ctx.emit("release_error", {"operation": "tag", "error": _short_reason(exc)})
             raise
 
         result = {
@@ -417,7 +436,7 @@ class ReleaseAdapter(BaseAdapter):
             upload_args.extend(dist_files)
             self._run(*upload_args, cwd=str(pkg_path))
         except RuntimeError as exc:
-            ctx.emit("release_error", {"operation": "publish_pypi", "error": str(exc)})
+            ctx.emit("release_error", {"operation": "publish_pypi", "error": _short_reason(exc)})
             raise
 
         index_url = (
@@ -504,7 +523,7 @@ class ReleaseAdapter(BaseAdapter):
                 args.append("--dry-run")
             self._run(*args, cwd=str(pkg_path))
         except RuntimeError as exc:
-            ctx.emit("release_error", {"operation": "publish_npm", "error": str(exc)})
+            ctx.emit("release_error", {"operation": "publish_npm", "error": _short_reason(exc)})
             raise
 
         result = {

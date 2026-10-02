@@ -514,10 +514,12 @@ class TailscaleAdapter(BaseAdapter):
                     "description": "Disable serving for this port instead of enabling it.",
                 },
                 "funnel_port": {
-                    "type": "integer", "enum": [443, 8443, 10000],
-                    "description": "Public HTTPS port to expose on (443/8443/10000). Omit for the "
-                                   "default single-service form; set distinct ports to host several "
-                                   "services on one node.",
+                    "type": "integer", "minimum": 1, "maximum": 65535,
+                    "description": "HTTPS port to serve on. Unlike Funnel (limited to 443/8443/10000), "
+                                   "tailnet `serve` allows ANY port. Omit for the default single-service "
+                                   "form (443 root); set distinct ports to host several services on one "
+                                   "node (e.g. a UI on 9444 while the funnel ports stay free for public "
+                                   "services).",
                 },
             },
             "required": ["port"],
