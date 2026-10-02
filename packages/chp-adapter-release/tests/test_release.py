@@ -228,7 +228,7 @@ class TestSync:
     async def test_pr_url_extracted(self) -> None:
         pr_url = "https://github.com/capabilityhostprotocol/chp-core/pull/3"
         backend = FakeProcessBackend(responses={
-            ("bash", "scripts/sync-to-public.sh", "--pr"): f"PR opened.\n{pr_url}\n",
+            ("bash", "scripts/sync-to-public.sh", "--publish"): f"PR opened.\n{pr_url}\n",
         })
         host = _make_host(backend)
         result = await host.ainvoke("chp.adapters.release.sync", {})
@@ -237,7 +237,7 @@ class TestSync:
 
     async def test_custom_branch(self) -> None:
         backend = FakeProcessBackend(responses={
-            ("bash", "scripts/sync-to-public.sh", "--pr", "release/v0.8.0"): "PR opened.",
+            ("bash", "scripts/sync-to-public.sh", "--publish", "release/v0.8.0"): "PR opened.",
         })
         host = _make_host(backend)
         result = await host.ainvoke("chp.adapters.release.sync", {"branch": "release/v0.8.0"})
@@ -264,7 +264,7 @@ class TestSync:
     async def test_evidence_has_pr_url(self) -> None:
         pr_url = "https://github.com/capabilityhostprotocol/chp-core/pull/5"
         backend = FakeProcessBackend(responses={
-            ("bash", "scripts/sync-to-public.sh", "--pr"): f"done\n{pr_url}",
+            ("bash", "scripts/sync-to-public.sh", "--publish"): f"done\n{pr_url}",
         })
         host = _make_host(backend)
         await host.ainvoke("chp.adapters.release.sync", {})
@@ -479,3 +479,41 @@ class TestShaping:
         adapter = ReleaseAdapter()
         for cap in adapter.capabilities():
             assert cap.descriptor.emits, f"{cap.descriptor.id} missing emits"
+
+
+# ---------------------------------------------------------------------------
+# Error disclosure (full output to caller) + evidence hygiene (short emit)
+# ---------------------------------------------------------------------------
+
+class TestErrorDisclosure:
+    def test_subprocess_backend_discloses_stdout_and_stderr_on_failure(self) -> None:
+        be = SubprocessProcessBackend()
+        with pytest.raises(RuntimeError) as ei:
+            be.run("sh", "-c", "echo OUT_DETAIL; echo ERR_LINE 1>&2; exit 3")
+        msg = str(ei.value)
+        assert "OUT_DETAIL" in msg      # the real failure detail (on stdout) is now disclosed
+        assert "ERR_LINE" in msg        # stderr too
+        assert "exited 3" in msg        # and the exit code
+
+    async def test_error_emit_carries_only_a_short_reason(self) -> None:
+        # A verbose multi-line failure ending in a summary line (like a preflight build log).
+        class _Raising:
+            def run(self, *args: str, cwd: str | None = None) -> str:
+                raise RuntimeError(
+                    "bash exited 1\nverbose BUILD_LOG line that must not reach evidence\n"
+                    "preflight FAILED — fix before syncing"
+                )
+
+        config = ReleaseConfig(default_repo_path="/fake/repo", backend=_Raising())
+        adapter = ReleaseAdapter(config=config)
+        host = LocalCapabilityHost(store=SQLiteEvidenceStore(":memory:"))
+        register_adapter(host, adapter)
+        result = await host.ainvoke("chp.adapters.release.sync", {"dry_run": False})
+        assert result.outcome == "failure"
+        # The release_error EMIT carries only the short last-line reason — never the full build log.
+        errs = [e["payload"] for e in host.store.all()
+                if e.get("payload", {}).get("operation") == "sync" and "error" in e.get("payload", {})]
+        assert errs, "a release_error emit should be recorded"
+        emitted = errs[-1]["error"]
+        assert "preflight FAILED" in emitted
+        assert "BUILD_LOG" not in emitted
