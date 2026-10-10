@@ -49,6 +49,16 @@ reach no owner of the capability, so the invocation never arrived at any host
 does not speak (chp-v0.2.md §1.1); this is a **transport-level** rejection before
 routing (HTTP `400`, no evidence — like an auth failure), not a processed denial.
 
+**Proposed — activation-effect authority (ADR-002, M1.3; NOT YET a normative gate).**
+The reserved code `activation_not_authorized` is reserved for a forthcoming pipeline step
+that authorizes a privileged **activation effect** (CONNECT bind / DEPLOY provision /
+INSTANTIATE run) as an authority **distinct from invocation authority** — registration,
+connectivity, and invocation authority never imply activation permission; the effect
+requires a scoped, bounded, plan-digest-bound, approver-signed grant. The step's position
+in the gate order and its full semantics are pending the ADR-002 independent security
+review; until then the logic lives, unwired, in `chp_core/activation_gate.py` with the
+negative-case catalog as its contract.
+
 **Gate 0 — idempotent replay** (chp-v0.2.md §13, proposal 0008): before gate 1,
 a host that has already recorded this `invocation_id` returns the RECORDED
 result (`"replayed": true`) and runs NOTHING below — including denials: a

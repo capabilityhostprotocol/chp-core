@@ -198,3 +198,88 @@ def test_execution_grant_generalization() -> None:
     assert not (set(plain) & {"invocation_digest", "action_digest", "binding_id",
                               "audience", "max_attempts"})
     assert verify_approval_grant(plain, at_time="2026-07-15T00:00:00Z").valid
+
+
+# ── A4: approver-identity anchoring (reject unanchored self-signed grants under strict mode) ──
+
+def test_strict_mode_rejects_unanchored_self_signed_grant(monkeypatch) -> None:
+    """With CHP_HOST_REQUIRE_PINNED_APPROVER on and NO approver pinned, a grant self-signed by an
+    arbitrary key is refused — a caller who reaches the endpoint cannot forge its own approval."""
+    monkeypatch.delenv("CHP_HOST_APPROVER_KEYS", raising=False)
+    monkeypatch.setenv("CHP_HOST_REQUIRE_PINNED_APPROVER", "1")
+    host, calls, approver = _approval_host()
+    payload, inv = {"x": 1}, "inv-a4-strict"
+    grant = build_approval_grant(approver, invocation_id=inv, payload_commitment=_commit(payload),
+                                 approval_id="ap", valid_until="2099-01-01T00:00:00Z")
+    r = _run(host.ainvoke_envelope(InvocationEnvelope(
+        capability_id="w.cap", invocation_id=inv, payload=payload, approval_ref=grant)))
+    assert r.outcome == "denied" and r.denial.code == "approval_required"
+    assert calls["n"] == 0
+
+
+def test_strict_mode_accepts_pinned_approver(monkeypatch) -> None:
+    """Strict mode + the grant's approver IS the pinned key → resumes exactly as before."""
+    host, calls, approver = _approval_host()
+    payload, inv = {"x": 2}, "inv-a4-pinned"
+    grant = build_approval_grant(approver, invocation_id=inv, payload_commitment=_commit(payload),
+                                 approval_id="ap", valid_until="2099-01-01T00:00:00Z")
+    monkeypatch.setenv("CHP_HOST_APPROVER_KEYS", grant["approver"])   # pin the operator key
+    monkeypatch.setenv("CHP_HOST_REQUIRE_PINNED_APPROVER", "1")
+    r = _run(host.ainvoke_envelope(InvocationEnvelope(
+        capability_id="w.cap", invocation_id=inv, payload=payload, approval_ref=grant)))
+    assert r.outcome == "success" and r.data == {"echo": 2}
+
+
+def test_unanchored_grant_accepted_but_evidenced_by_default(monkeypatch) -> None:
+    """Migration default (flag off): an unanchored grant still resumes — the fleet is not broken — but
+    the approval_grant_verified event records approver_anchored=False so the unanchored path is auditable."""
+    monkeypatch.delenv("CHP_HOST_APPROVER_KEYS", raising=False)
+    monkeypatch.delenv("CHP_HOST_REQUIRE_PINNED_APPROVER", raising=False)
+    host, calls, approver = _approval_host()
+    payload, inv = {"x": 3}, "inv-a4-migrate"
+    grant = build_approval_grant(approver, invocation_id=inv, payload_commitment=_commit(payload),
+                                 approval_id="ap", valid_until="2099-01-01T00:00:00Z")
+    r = _run(host.ainvoke_envelope(InvocationEnvelope(
+        capability_id="w.cap", invocation_id=inv, payload=payload, approval_ref=grant)))
+    assert r.outcome == "success"
+    evs = [e for e in host.store.all() if e["event_type"] == "approval_grant_verified"]
+    assert evs and evs[0]["payload"].get("approver_anchored") is False
+
+
+def test_forged_grant_rejected__identity_must_bind_to_key_material() -> None:
+    """SECURITY (rad 0ae5fec): the approver identity MUST be cryptographically bound to the signing
+    key material. An attacker who signs with their OWN key but overwrites `approver` + `signature.key_id`
+    to a trusted approver's (public) key_id — leaving their own pubkey embedded — must be REJECTED, even
+    when that approver is pinned. Before the fix verify_approval_grant verified the signature against the
+    grant's own embedded pubkey while only string-comparing the self-asserted approver fields, so the
+    forgery passed (a total authority bypass)."""
+    import base64
+
+    from chp_core.signing import _canon, _sign, approval_grant_header, key_id_for
+
+    legit = generate_keypair(tempfile.mkdtemp())
+    attacker = generate_keypair(tempfile.mkdtemp())
+    assert legit.key_id != attacker.key_id
+
+    g = build_approval_grant(attacker, invocation_id="inv-1", payload_commitment="pc",
+                             approval_id="ap-1", valid_until="2099-01-01T00:00:00Z")
+    # Forge the identity: claim to be `legit`, keep the attacker's embedded pubkey, re-sign with the
+    # attacker's private key over the (now legit-claiming) header.
+    g["approver"] = legit.key_id
+    g["signature"]["key_id"] = legit.key_id
+    g["signature"]["signature"] = _sign(attacker._private, _canon(approval_grant_header(g)))
+
+    # The embedded pubkey's REAL key_id is the attacker's — proof the legit approver never signed.
+    assert key_id_for(base64.b64decode(g["approver_identity"]["public_key"])) == attacker.key_id
+    v = verify_approval_grant(g, at_time="2026-07-15T00:00:00Z", expected_approver_key=legit.key_id)
+    assert not v.valid, "forged grant (approver identity not bound to key material) must be rejected"
+
+
+def test_honest_grant_still_verifies_after_key_binding() -> None:
+    """The key-material binding MUST NOT break honest grants: for a real grant,
+    key_id_for(embedded pubkey) == approver == signature.key_id already holds."""
+    k = generate_keypair(tempfile.mkdtemp())
+    g = build_approval_grant(k, invocation_id="inv-1", payload_commitment="pc",
+                             approval_id="ap-1", valid_until="2099-01-01T00:00:00Z")
+    assert verify_approval_grant(g, at_time="2026-07-15T00:00:00Z",
+                                 expected_approver_key=k.key_id).valid

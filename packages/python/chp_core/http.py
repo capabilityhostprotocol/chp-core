@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hmac
 import inspect
+import ipaddress
 import json
 import logging
 import os
@@ -537,7 +538,9 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                     "hosts": list(getattr(self.server.chp_host, "_descriptors", {}).keys()),
                 })
                 return
-            result = self.server.chp_host.store.verify_chain(correlation_id)
+            # strict: a row with a NULL content_hash must FAIL the attestation, not count as merely
+            # "unverified" while the chain still reads valid. /verify is a public assurance surface.
+            result = self.server.chp_host.store.verify_chain(correlation_id, strict=True)
             from .metrics import record_verification
             record_verification(result.valid, chain_break=not result.valid)
             self._write_json(asdict(result))
@@ -1392,14 +1395,32 @@ def create_http_server(
         from .spill import register_spill_capability
         register_spill_capability(host)
 
-    # Production posture (opt-in): refuse to serve open when the operator has
-    # declared auth mandatory — a misconfigured unit fails at start, loudly,
-    # instead of running an open host.
-    if os.environ.get("CHP_HOST_REQUIRE_AUTH") == "1" and not (
-            os.environ.get("CHP_HOST_API_KEYS") or os.environ.get("CHP_HOST_API_KEY")):
+    # Auth is "configured" if any caller key, token key, or mTLS client-cert CA is present.
+    _auth_configured = bool(
+        os.environ.get("CHP_HOST_API_KEYS") or os.environ.get("CHP_HOST_API_KEY")
+        or os.environ.get("CHP_HOST_TOKEN_KEYS") or cafile)
+
+    def _is_loopback(addr: str) -> bool:
+        if addr in ("localhost", ""):
+            return True
+        try:
+            return ipaddress.ip_address(addr).is_loopback
+        except ValueError:
+            return False
+
+    # Production posture (opt-in): refuse to serve open when the operator has declared auth mandatory.
+    if os.environ.get("CHP_HOST_REQUIRE_AUTH") == "1" and not _auth_configured:
         raise RuntimeError(
-            "CHP_HOST_REQUIRE_AUTH=1 but no API keys configured "
-            "(set CHP_HOST_API_KEYS or CHP_HOST_API_KEY)")
+            "CHP_HOST_REQUIRE_AUTH=1 but no auth configured "
+            "(set CHP_HOST_API_KEYS / CHP_HOST_API_KEY / CHP_HOST_TOKEN_KEYS, or an mTLS cafile)")
+    # Secure-by-default: a NON-loopback bind with NO auth is an unauthenticated /invoke on the network.
+    # Refuse at start (loudly) unless the operator explicitly accepts the risk. Loopback stays open so
+    # local dev is unaffected; `0.0.0.0`/a routable IP requires auth or an explicit opt-in.
+    if not _auth_configured and not _is_loopback(bind) and os.environ.get("CHP_HOST_ALLOW_ANON") != "1":
+        raise RuntimeError(
+            f"refusing to serve an UNAUTHENTICATED host on non-loopback bind {bind!r}: configure auth "
+            "(CHP_HOST_API_KEYS / CHP_HOST_TOKEN_KEYS / mTLS cafile), bind to loopback, or set "
+            "CHP_HOST_ALLOW_ANON=1 to accept the risk.")
 
     tls = ({"certfile": certfile, "keyfile": keyfile, "cafile": cafile}
            if certfile else None)

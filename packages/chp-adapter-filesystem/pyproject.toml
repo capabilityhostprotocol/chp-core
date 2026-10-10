@@ -27,6 +27,10 @@ dependencies = [
     "chp-core>=0.7.0",
 ]
 
+[project.urls]
+Homepage = "https://capabilityhostprotocol.com"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
+
 [project.entry-points."chp.adapters"]
 filesystem = "chp_adapter_filesystem:FilesystemAdapter"
 

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chp.dev/schemas/v0.1/running-instance.schema.json",
+  "title": "RunningInstance",
+  "description": "Identity + current recorded state of a live capability instance produced by an activation (CONNECT/DEPLOY/INSTANTIATE). Distinct from capability, software/artifact, offering and binding (CHP-CORE-021). Identity (id) is stable across status transitions (CHP-ENT-003 ethic); status is mutable state recorded about the instance; a transition appends a new record with the same id (history immutable).",
+  "type": "object",
+  "required": ["id", "capability_id", "host_id", "binding_digest", "strategy", "status", "activated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "capability_id": {"type": "string", "minLength": 1},
+    "host_id": {"type": "string", "minLength": 1},
+    "binding_digest": {"type": "string", "minLength": 1},
+    "strategy": {"enum": ["CONNECT", "DEPLOY", "INSTANTIATE"]},
+    "artifact": {"type": "object", "additionalProperties": true},
+    "status": {"enum": ["provisioning", "running", "degraded", "terminated"]},
+    "plan_digest": {"type": "string", "minLength": 1},
+    "activated_at": {"type": "string", "format": "date-time"}
+  }
+}

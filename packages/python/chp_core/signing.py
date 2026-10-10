@@ -1716,6 +1716,18 @@ def verify_approval_grant(grant: dict, *, at_time: str,
     pub = str(ident.get("public_key") or "")
     sig = grant.get("signature") or {}
     checks["binds_signer"] = (grant.get("approver") == sig.get("key_id"))
+    # Bind the approver IDENTITY to the signing KEY MATERIAL (SECURITY, rad 0ae5fec): the embedded
+    # public key MUST hash to the claimed ``approver`` AND the signature ``key_id``. Without this the
+    # signature is only verified against the grant's OWN embedded key while ``approver``/``key_id`` are
+    # self-asserted strings — so an attacker could claim any approver's (public) key_id, embed their own
+    # public key, and sign with their own private key and still verify. A malformed pubkey fails closed.
+    try:
+        pub_key_id = key_id_for(base64.b64decode(pub)) if pub else None
+    except Exception:  # noqa: BLE001 — unparseable public key ⇒ no binding ⇒ fail closed
+        pub_key_id = None
+    checks["key_binding"] = (pub_key_id is not None
+                             and pub_key_id == grant.get("approver")
+                             and pub_key_id == sig.get("key_id"))
     checks["signature"] = (sig.get("algorithm") == SIGNATURE_ALGORITHM and bool(pub)
                            and _verify_sig(pub, _canon(approval_grant_header(grant)),
                                            str(sig.get("signature") or "")))

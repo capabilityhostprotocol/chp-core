@@ -104,6 +104,11 @@ from .entities import EntitySubject
 from .assurance import AssuranceVector, assurance_from
 from .evidence_subject import EvidenceSubject
 from .readiness import ReadinessAssessment, VerificationPlan, plan_item
+from .instance import RunningInstance
+# NOTE: activation_gate (authorize_activation_effect / ActivationAuthorization) is intentionally NOT
+# exported here. It is a DRAFT activation-effect authority gate whose independent review returned
+# DO-NOT-WIRE (unfixed findings); it must not be advertised as public API until those are resolved and
+# it is wired under governance. In-tree callers/tests import it directly from chp_core.activation_gate.
 from .temporal import (
     TEMPORAL_DIMENSIONS,
     ClockReading,
@@ -245,6 +250,7 @@ from .types import (
     GuardrailDefinition,
     SafetyReport,
     COMPLIANCE_EVIDENCE_TYPES,
+    ACTIVATION_EVIDENCE_TYPES,
     RetentionPolicy,
     ComplianceReport,
     INCIDENT_EVIDENCE_TYPES,
@@ -333,6 +339,7 @@ __all__ = [
     "current_offers",
     "offer_validity_state",
     "ReadinessAssessment",
+    "RunningInstance",
     "VerificationPlan",
     "plan_item",
     "EvidenceSubject",
@@ -510,6 +517,7 @@ __all__ = [
     "SQLiteComplianceManager",
     "register_compliance_capability",
     "COMPLIANCE_EVIDENCE_TYPES",
+    "ACTIVATION_EVIDENCE_TYPES",
     "RetentionPolicy",
     "ComplianceReport",
     "InMemoryIncidentManager",

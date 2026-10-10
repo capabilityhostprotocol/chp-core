@@ -30,6 +30,10 @@ train = ["trl>=0.15", "peft>=0.10", "bitsandbytes>=0.43", "accelerate>=0.30", "d
 # keep quant OUT of the global adapters.json entry and pass it as a per-node extras override.
 quant = ["autoawq>=0.2", "gptqmodel>=1.0", "torch", "accelerate>=0.30"]
 
+[project.urls]
+Homepage = "https://capabilityhostprotocol.com"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
+
 [project.entry-points."chp.adapters"]
 huggingface = "chp_adapter_huggingface:HuggingFaceAdapter"
 

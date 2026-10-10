@@ -28,8 +28,13 @@ class ZenohHostServer:
 
     def __init__(self, host: Any, *, session: Any = None, config: Any = None,
                  host_id: str | None = None, prefix: str = KEY_PREFIX,
-                 declare_presence: bool = False, max_invoke_workers: int | None = None) -> None:
+                 declare_presence: bool = False, max_invoke_workers: int | None = None,
+                 invoke_key: str | None = None) -> None:
         self._host = host
+        # Caller auth for the invoke path (parity with the HTTP binding). When set, a querier MUST
+        # present this key in the zenoh query attachment or the invoke is denied. Default (unset) keeps
+        # the path open — the live fleet is not broken; nodes enable it at enrollment (Phase D).
+        self._invoke_key = invoke_key if invoke_key is not None else os.environ.get("CHP_ZENOH_INVOKE_KEY")
         self.host_id = host_id or getattr(host, "host_id", "local-chp-host")
         self._k = keys(self.host_id, prefix=prefix)
         self._session, self._owns = open_session(session, config)
@@ -98,11 +103,39 @@ class ZenohHostServer:
                 break
             self._invoke_pool.submit(self._handle_invoke, query)
 
+    def _authenticate(self, query: Any) -> "tuple[str, bool]":
+        """Return ``(principal, verified)`` for a zenoh invoke query. With an invoke key configured,
+        ``verified`` is True iff the query's ATTACHMENT matches it (constant-time). With no key (the
+        migration default) the caller is anonymous + unverified — but its asserted subject is still
+        overridden below, so an unauthenticated caller can never forge a verified attribution."""
+        import hmac
+        if self._invoke_key is None:
+            return "zenoh:anonymous", False
+        att = getattr(query, "attachment", None)
+        presented = bytes(att) if att is not None else b""
+        if presented and hmac.compare_digest(presented, self._invoke_key.encode()):
+            return "zenoh:authenticated", True
+        return "zenoh:anonymous", False
+
     def _handle_invoke(self, query: Any) -> None:
         """Run one invocation off the callback thread and reply. Never raise: a worker that dies without
         replying would leave the querier hanging to timeout, so any failure still sends a reply."""
         try:
-            env = InvocationEnvelope.from_mapping(json.loads(bytes(query.payload)))
+            body = json.loads(bytes(query.payload))
+            # Caller auth + verified-caller subject override (parity with the HTTP binding,
+            # chp_core/http.py:964-970). When an invoke key is configured, an unauthenticated querier is
+            # denied. The caller-asserted `subject` is NEVER trusted — it is overridden with the
+            # transport principal (verified iff a key matched), so evidence attributes the action to who
+            # actually authenticated, not to whatever the envelope claimed.
+            principal, verified = self._authenticate(query)
+            if self._invoke_key is not None and not verified:
+                self._reply(query, self._k["invoke"],
+                            {"success": False, "outcome": "denied",
+                             "error": "zenoh_auth_required: missing or invalid invoke key"})
+                return
+            if isinstance(body, dict):
+                body["subject"] = {"id": principal, "type": "zenoh", "verified": verified}
+            env = InvocationEnvelope.from_mapping(body)
             result = asyncio.run(self._host.ainvoke_envelope(env))
             self._reply(query, self._k["invoke"], result.to_dict())
             # Native evidence pub/sub (§4): broadcast this invocation's completed

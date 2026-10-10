@@ -1,8 +1,15 @@
 """ProcessAdapter — governed subprocess/CLI execution as a CHP capability.
 
 Safety invariants (MUST PRESERVE):
-* ``shell=False`` always — prevents shell injection via args.
-* Command must be in ``allowed_commands`` if the list is non-None.
+* ``shell`` defaults to False — argv exec, so an ``arg`` can never inject shell metacharacters.
+  ``shell=True`` is an explicit opt-in that runs the whole ``command`` string via ``/bin/sh -c``
+  for compound commands (``a && b``, pipes, globs). It adds no privilege over argv (``run`` is
+  arbitrary exec either way) and keeps every other guard: it takes NO ``args``, is REFUSED when
+  ``allowed_commands`` is configured (a shell script can't be allowlist-gated), stays
+  approval-gated, and is still screened by the host's absolute floor (``rm -rf /``, ``mkfs``,
+  fork-bombs blocked before the handler runs). The caller owns the full string — the adapter
+  interpolates nothing untrusted into it.
+* Command must be in ``allowed_commands`` if the list is non-None (non-shell mode).
 * ``cwd`` must resolve under ``working_dir`` if one is configured.
 * Timeout enforced; process killed (SIGKILL) on expiry.
 * ``env_additions`` keys in evidence, values never (may carry secrets).
@@ -95,11 +102,19 @@ class ProcessAdapter(BaseAdapter):
         input_schema={
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Command to execute (no shell)."},
+                "command": {"type": "string", "description": "Command to execute. Default: a single "
+                            "executable run via argv (no shell). With shell=true: a full shell "
+                            "command line (supports &&, pipes, globs)."},
                 "args": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Command-line arguments.",
+                    "description": "Command-line arguments (argv mode only; not allowed with shell=true).",
+                },
+                "shell": {
+                    "type": "boolean",
+                    "description": "Run `command` as a shell script via /bin/sh -c (enables &&, pipes, "
+                                   "globs). Default false (argv, no shell). Mutually exclusive with "
+                                   "`args`; refused when an allowed_commands allowlist is configured.",
                 },
                 "cwd": {
                     "type": "string",
@@ -144,6 +159,7 @@ class ProcessAdapter(BaseAdapter):
     async def run(self, ctx: Any, payload: dict) -> dict:
         command = payload["command"]
         args = payload.get("args") or []
+        shell = bool(payload.get("shell", False))
         cwd_raw = payload.get("cwd")
         timeout = min(
             float(payload.get("timeout") or self._config.max_timeout),
@@ -151,9 +167,20 @@ class ProcessAdapter(BaseAdapter):
         )
         env_additions = payload.get("env_additions") or {}
 
-        # --- allowlist check ---
+        # --- shell-mode guards + allowlist check ---
         cfg = self._config
-        if cfg.allowed_commands is not None and command not in cfg.allowed_commands:
+        if shell:
+            # A shell script can't be meaningfully allowlist-gated (`ok_cmd; evil` would slip the
+            # allowlist), and args would be ambiguous — so refuse both, keeping the allowlist invariant.
+            if args:
+                raise ValueError("shell=True takes the full command string, not args (mutually exclusive)")
+            if cfg.allowed_commands is not None:
+                ctx.emit("process_error", {
+                    "reason": "shell_disallowed_with_allowlist",
+                    "command": command,
+                }, redacted=False)
+                raise PermissionError("shell=True is refused when allowed_commands is configured")
+        elif cfg.allowed_commands is not None and command not in cfg.allowed_commands:
             ctx.emit("process_error", {
                 "reason": "command_not_allowed",
                 "command": command,
@@ -197,6 +224,7 @@ class ProcessAdapter(BaseAdapter):
         ctx.emit("process_start", {
             "command": command,
             "args": args,
+            "shell": shell,
             "cwd": cwd,
             "timeout": timeout,
             "inherit_env": bool(inherit_env),
@@ -211,13 +239,22 @@ class ProcessAdapter(BaseAdapter):
         exit_code = -1
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                command, *args,
-                cwd=cwd,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            if shell:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    cwd=cwd,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    command, *args,
+                    cwd=cwd,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
             try:
                 raw_stdout, raw_stderr = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout

@@ -8,6 +8,7 @@
  */
 
 export const RESERVED_DENIAL_CODES = [
+  "activation_not_authorized",
   "approval_required",
   "budget_exceeded",
   "capability_disabled",
@@ -29,6 +30,21 @@ export const RESERVED_DENIAL_CODES = [
 ] as const;
 
 export type ReservedDenialCode = (typeof RESERVED_DENIAL_CODES)[number];
+
+export const ACTIVATION_EVIDENCE_TYPES = [
+  "activation_admitted",
+  "activation_authorized",
+  "activation_contract_conformed",
+  "activation_denied",
+  "activation_deploy_failed",
+  "activation_deploy_succeeded",
+  "activation_health_verified",
+  "activation_operational",
+  "activation_plan_created",
+  "activation_reconciled",
+  "activation_requested",
+  "activation_terminated",
+] as const;
 
 export const AUTONOMY_EVIDENCE_TYPES = [
   "approval_denied",
@@ -188,6 +204,7 @@ export const WORKFLOW_EVIDENCE_TYPES = [
 ] as const;
 
 export const ALL_RESERVED_EVIDENCE_TYPES = [
+  ...ACTIVATION_EVIDENCE_TYPES,
   ...AUTONOMY_EVIDENCE_TYPES,
   ...COGNITION_EVIDENCE_TYPES,
   ...COMPLIANCE_EVIDENCE_TYPES,

@@ -192,6 +192,29 @@ COMPLIANCE_EVIDENCE_TYPES = {
     "compliance_report_generated",
 }
 
+# Capability Activation (Capability Activation package, Gate 0): making a
+# discovered capability OPERATIONAL via CONNECT / DEPLOY / INSTANTIATE. Each
+# member is a DISTINCT claim on the host's own hash-chained store — deploy
+# success, runtime health, contract conformance, host admission and operational
+# readiness are separately attributable and never collapsed into one another
+# (mirrors the EffectEvidence four-state ethic, CHP-CORE-014). Denial is
+# first-class (`activation_denied`), and reconciliation after an ambiguous
+# outcome ADDS a record, never rewriting a prior one (CHP-CORE-015).
+ACTIVATION_EVIDENCE_TYPES = {
+    "activation_requested",         # an activation intent was accepted (strategy + impl + host)
+    "activation_plan_created",      # a content-addressed, immutable activation plan was built
+    "activation_authorized",        # the destination host INDEPENDENTLY authorized the effect
+    "activation_denied",            # an activation effect was refused (distinct from invocation denial)
+    "activation_deploy_succeeded",  # the provisioning effect completed (NOT health, NOT admission)
+    "activation_deploy_failed",
+    "activation_health_verified",   # the running implementation is healthy (distinct claim)
+    "activation_contract_conformed",# observed behaviour matched the capability contract (distinct claim)
+    "activation_admitted",          # bound + admitted under host rules (distinct from deploy/health)
+    "activation_operational",       # operational readiness — the terminal, distinct claim
+    "activation_terminated",        # the activated instance was torn down / retired
+    "activation_reconciled",        # reconciliation after an ambiguous outcome (adds, never rewrites)
+}
+
 MemoryScope = Literal["session", "project", "user"]
 AutonomyTier = Literal["automated", "supervised", "approval_required", "human_driven"]
 RollbackPolicy = Literal["none", "checkpoint", "full"]
@@ -800,6 +823,7 @@ class DenialReason:
         "capability_version_unsupported", # capability exists but no version satisfies the requested range (resolution gate 2, proposal 0028)
         "host_unreachable",               # routing intermediary reached no owner (§11; retryable)
         "version_unsupported",            # explicit X-CHP-Version not in supported_versions (§1.1)
+        "activation_not_authorized",      # the destination host refused a privileged activation EFFECT — authority distinct from invocation (ADR-002, M1.3; activation_gate.py)
     })
 
     def to_dict(self) -> JSON:

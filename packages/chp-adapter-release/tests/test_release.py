@@ -275,6 +275,40 @@ class TestSync:
 
 
 # ---------------------------------------------------------------------------
+# land
+# ---------------------------------------------------------------------------
+
+class TestLand:
+    async def test_runs_land_with_pr_and_patch(self) -> None:
+        backend = FakeProcessBackend(responses={
+            ("bash", "scripts/sync-to-public.sh", "--land", "218", "7b3cff1"):
+                "Landed: PR #218 merged into protected main; github == rad, drift-free.",
+        })
+        host = _make_host(backend)
+        result = await host.ainvoke(
+            "chp.adapters.release.land", {"pr_number": 218, "patch_id": "7b3cff1"}
+        )
+        assert result.outcome == "success"
+        assert result.data["landed"] is True
+        assert result.data["pr_number"] == 218
+        assert ("bash", "scripts/sync-to-public.sh", "--land", "218", "7b3cff1") in backend.calls
+
+    async def test_patch_optional(self) -> None:
+        backend = FakeProcessBackend(responses={
+            ("bash", "scripts/sync-to-public.sh", "--land", "9"): "Landed: PR #9 merged.",
+        })
+        host = _make_host(backend)
+        result = await host.ainvoke("chp.adapters.release.land", {"pr_number": 9})
+        assert result.outcome == "success"
+        assert result.data["landed"] is True
+
+    async def test_pr_number_required(self) -> None:
+        host = _make_host(FakeProcessBackend())
+        result = await host.ainvoke("chp.adapters.release.land", {})
+        assert result.outcome == "denied"
+
+
+# ---------------------------------------------------------------------------
 # publish_pypi
 # ---------------------------------------------------------------------------
 
@@ -440,16 +474,17 @@ class TestSubprocessProcessBackend:
 # ---------------------------------------------------------------------------
 
 class TestShaping:
-    def test_five_capabilities_registered(self) -> None:
+    def test_capabilities_registered(self) -> None:
         adapter = ReleaseAdapter()
         caps = list(adapter.capabilities())
         ids = {c.descriptor.id for c in caps}
         assert "chp.adapters.release.bump" in ids
         assert "chp.adapters.release.sync" in ids
+        assert "chp.adapters.release.land" in ids
         assert "chp.adapters.release.tag" in ids
         assert "chp.adapters.release.publish_pypi" in ids
         assert "chp.adapters.release.publish_npm" in ids
-        assert len(ids) == 5
+        assert len(ids) == 6
 
     def test_medium_risk_for_bump(self) -> None:
         adapter = ReleaseAdapter()

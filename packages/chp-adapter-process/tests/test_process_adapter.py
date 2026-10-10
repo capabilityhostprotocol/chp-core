@@ -317,3 +317,45 @@ class TestEvidenceHygiene:
         assert len(result_events) == 1
         preview = result_events[0]["payload"].get("stdout_preview", "")
         assert len(preview) <= 500
+
+
+# --------------------------------------------------------------------------
+# 8. Shell mode (opt-in)
+# --------------------------------------------------------------------------
+
+class TestShellMode:
+    def test_shell_runs_compound_command(self):
+        host = _make_host()
+        r = _run(host, {"command": "echo one && echo two", "shell": True})
+        assert r.outcome == "success"
+        assert r.data["exit_code"] == 0
+        assert "one" in r.data["stdout"] and "two" in r.data["stdout"]
+
+    def test_shell_pipe(self):
+        host = _make_host()
+        r = _run(host, {"command": "printf 'a\\nb\\nc\\n' | wc -l", "shell": True})
+        assert r.outcome == "success"
+        assert r.data["stdout"].strip() == "3"
+
+    def test_default_is_not_shell(self):
+        # without shell, a compound string is one (nonexistent) executable, not a shell line
+        host = _make_host()
+        r = _run(host, {"command": "echo one && echo two"})
+        assert r.outcome == "failure"
+
+    def test_shell_with_args_is_rejected(self):
+        host = _make_host()
+        r = _run(host, {"command": "echo hi", "args": ["x"], "shell": True})
+        assert r.outcome == "failure"
+
+    def test_shell_refused_when_allowlist_configured(self):
+        # a shell script can't be allowlist-gated, so shell=True is refused when one is set
+        host = _make_host(ProcessConfig(allowed_commands=["echo"]))
+        r = _run(host, {"command": "echo hi && echo two", "shell": True})
+        assert r.outcome == "failure"
+
+    def test_shell_flag_in_start_evidence(self):
+        host = _make_host()
+        _run(host, {"command": "echo hi", "shell": True})
+        starts = [e for e in _cap_events(host.store) if e["event_type"] == "process_start"]
+        assert starts and starts[0]["payload"].get("shell") is True

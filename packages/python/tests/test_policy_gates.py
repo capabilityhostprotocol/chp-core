@@ -216,3 +216,21 @@ def test_nonwildcard_pattern_ignores_other_capability() -> None:
     policy = PolicyConfig(block_patterns=[
         BlockPattern("claude_code.bash", "command", r"danger", "x", decision="deny")])
     assert not evaluate_policy("gemini.run_shell_command", {"command": "danger"}, policy).should_block
+
+
+def test_absolute_floor_blocks_on_direct_invoke_without_policy() -> None:
+    """The non-negotiable floor must hold on host.invoke even with NO policy file loaded — previously
+    it lived only in the Claude Code hook, so a direct invoke bypassed it."""
+    from chp_core import CapabilityDescriptor, LocalCapabilityHost
+    from chp_core.store import SQLiteEvidenceStore
+
+    host = LocalCapabilityHost("floor-host", store=SQLiteEvidenceStore(":memory:"))
+    host.policy = None                      # force the no-policy path: ONLY the floor can block now
+
+    async def run(_ctx, _p):
+        return {"ok": True}
+    host.register(CapabilityDescriptor(id="x.run", version="1.0.0", description=""), run)
+
+    assert host.invoke("x.run", {"command": "rm -rf /"}).outcome == "denied"          # catastrophic
+    assert host.invoke("x.run", {"args": ["dd", "if=/x", "of=/dev/sda"]}).outcome == "denied"
+    assert host.invoke("x.run", {"command": "ls -la"}).outcome == "success"           # benign runs

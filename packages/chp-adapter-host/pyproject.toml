@@ -23,6 +23,10 @@ dependencies = [
     "chp-core>=0.8.0",
 ]
 
+[project.urls]
+Homepage = "https://capabilityhostprotocol.com"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
+
 [project.entry-points."chp.adapters"]
 host = "chp_adapter_host:HostAdapter"
 

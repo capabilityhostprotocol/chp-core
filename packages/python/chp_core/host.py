@@ -876,6 +876,28 @@ class LocalCapabilityHost:
                     ),
                 )
 
+        # Absolute floor — the non-negotiable minimum (catastrophic, irreversible commands:
+        # rm -rf /, mkfs, dd to a raw device, fork bomb, --no-verify). It must hold on EVERY path
+        # (host.invoke / ctx.ainvoke / HTTP /invoke), independent of whether a tunable policy file is
+        # loaded — previously it was wired only into the Claude Code hook, so a direct invoke bypassed
+        # it. Scans the payload's string (and string-list) values; fail-closed, policy-independent.
+        if isinstance(envelope.payload, dict):
+            from .policy import floor_violation
+            for _val in envelope.payload.values():
+                if isinstance(_val, str):
+                    _text = _val
+                elif isinstance(_val, (list, tuple)):
+                    # a command split across argv (["dd","if=x","of=/dev/sda"]) is the JOINED string
+                    _text = " ".join(str(x) for x in _val if isinstance(x, str))
+                else:
+                    continue
+                _reason = floor_violation(_text)
+                if _reason:
+                    return envelope, None, self._deny(
+                        envelope,
+                        DenialReason(code="policy_blocked", message=_reason, retryable=False),
+                    )
+
         # Governance gate — enforced on every invocation path (host.invoke,
         # ctx.ainvoke, HTTP /invoke), not just the Claude Code hook. Blocks by
         # allowlist / capability id / risk tier / input pattern.
@@ -989,6 +1011,15 @@ class LocalCapabilityHost:
                 if metadata.get("cache_results") is False:
                     return False
         return True
+
+    def audit_result_cache_coverage(self) -> list[dict]:
+        """Governance lint: return a finding for each REGISTERED capability that looks like it returns
+        sensitive data (id/category/tags) but does not set ``metadata={"cache_results": False}`` — so
+        its result could persist in the §13 replay cache. Read-only; see ``chp_core.cache_audit``."""
+        from .cache_audit import result_cache_coverage_violations
+        with self._registry_lock:
+            descriptors = [entry.descriptor for entry in self._capabilities.values()]
+        return result_cache_coverage_violations(descriptors)
 
     def _record_result(self, result: InvocationResult,
                        chunks: list | None = None) -> InvocationResult:
@@ -1742,7 +1773,11 @@ class LocalCapabilityHost:
                 self._emit_autonomy_event(
                     "approval_grant_verified", envelope, descriptor,
                     detail={"approval_id": grant.get("approval_id"),
-                            "approver": grant.get("approver")})
+                            "approver": grant.get("approver"),
+                            # A4: record whether the approver was ANCHORED (a pinned key) or the grant
+                            # was trusted unanchored (self-verified, no pin) — so the unanchored path
+                            # is visible in evidence even where strict mode is not yet enabled.
+                            "approver_anchored": bool(os.environ.get("CHP_HOST_APPROVER_KEYS"))})
                 return None
             self._emit_autonomy_event(
                 "approval_requested", envelope, descriptor,
@@ -1773,7 +1808,16 @@ class LocalCapabilityHost:
         from .signing import verify_approval_grant
         pinned = os.environ.get("CHP_HOST_APPROVER_KEYS")
         approvers = {k.strip() for k in pinned.split(",") if k.strip()} if pinned else None
-        if approvers is not None and grant.get("approver") not in approvers:
+        if approvers is not None:
+            if grant.get("approver") not in approvers:
+                return False
+        elif os.environ.get("CHP_HOST_REQUIRE_PINNED_APPROVER", "").strip().lower() in (
+                "1", "true", "yes", "on"):
+            # A4 (approver-identity anchoring): with no approver pinned, verify_approval_grant
+            # self-verifies against the grant's OWN embedded key — so ANY key's self-signed grant
+            # would pass. Strict mode refuses that unanchored grant (fail-closed on identity); the
+            # default (flag off) still accepts it, so the existing fleet is not broken until each
+            # node is enrolled with a pinned approver + this flag.
             return False
         v = verify_approval_grant(grant, at_time=self._decision_now())
         if not v.valid or grant.get("decision") != "granted":
