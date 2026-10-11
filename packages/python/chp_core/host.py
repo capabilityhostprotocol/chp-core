@@ -316,6 +316,9 @@ class LocalCapabilityHost:
         self.metadata = metadata or {}
         self._capabilities: dict[str, RegisteredCapability] = {}
         self._registry_lock = threading.RLock()
+        # Guards one-time init of the activation single-use store so concurrent first callers can't
+        # each build a separate (in-memory) store and double-spend a grant (M1.3 wiring review F-1).
+        self._activation_consume_lock = threading.Lock()
         # Governance: enforce policy on every invocation path (not just the
         # Claude Code hook). None → load from CHP_POLICY_FILE/.chp/~/.chp;
         # still None (no policy file) means no enforcement.
@@ -934,6 +937,22 @@ class LocalCapabilityHost:
         invariant_denial = self._check_host_invariants(descriptor, envelope)
         if invariant_denial is not None:
             return envelope, None, self._deny(envelope, invariant_denial)
+
+        # Activation-effect authority gate (M1.3, ADR-002 — HOST-002/003/004). Engages ONLY when the
+        # envelope carries an activation context; a STRICT no-op for every ordinary invocation (the
+        # existing flows never set activation_ref, so this is byte-identical for them). On ALLOW it
+        # ATOMICALLY consumes the grant's approval_id — the single-use guard the pure gate cannot do.
+        if envelope.activation_ref is not None:
+            try:
+                act_denial = self._authorize_activation(envelope)
+            except Exception:  # noqa: BLE001 — ANY failure in the activation path fails CLOSED (review F-2):
+                # a raised exception must become a governed, evidenced denial, never escape the pipeline.
+                act_denial = DenialReason(
+                    code="activation_not_authorized",  # reserved (DenialReason.RESERVED_CODES)
+                    message="activation authorization failed closed (internal error)",
+                    retryable=False)
+            if act_denial is not None:
+                return envelope, None, self._deny(envelope, act_denial)
 
         # Absolute-deadline gate (proposal 0052, CAP-006): reject before execution
         # when the envelope's absolute deadline has passed — skew-aware and
@@ -1827,6 +1846,70 @@ class LocalCapabilityHost:
         payload = envelope.payload if isinstance(envelope.payload, dict) else {}
         commitment = _payload_commitment(_stringify_floats(payload))
         return grant.get("payload_commitment") == commitment
+
+    def _activation_consume_store(self):
+        """The host's SINGLE activation single-use ledger (M1.3). Double-checked-locked init so
+        concurrent first callers share ONE store (review F-1: an unlocked lazy init let each thread
+        build a separate in-memory store and double-spend). Durable + multi-process-safe when
+        CHP_HOST_ACTIVATION_CONSUME_DB names a shared file; ``:memory:`` is single-process only."""
+        store = getattr(self, "_activation_consume", None)
+        if store is None:
+            with self._activation_consume_lock:
+                store = getattr(self, "_activation_consume", None)
+                if store is None:
+                    from .activation_consume import ActivationConsumeStore
+                    store = self._activation_consume = ActivationConsumeStore(
+                        os.environ.get("CHP_HOST_ACTIVATION_CONSUME_DB", ":memory:"))
+        return store
+
+    def _authorize_activation(self, envelope: InvocationEnvelope) -> "DenialReason | None":
+        """M1.3 / ADR-002 activation-effect gate. The host INDEPENDENTLY authorizes a privileged
+        activation effect through the pure gate, sourcing trust / scope / consumed state HOST-side
+        (never from the caller's claims), then ATOMICALLY consumes the grant's approval_id. Returns
+        a DenialReason to refuse or None to allow. Called only when envelope.activation_ref is set."""
+        from .activation_gate import ACTIVATION_NOT_AUTHORIZED, authorize_activation_effect
+        act = envelope.activation_ref if isinstance(envelope.activation_ref, dict) else {}
+        grant = envelope.approval_ref if isinstance(envelope.approval_ref, dict) else None
+        subj = envelope.subject if isinstance(envelope.subject, dict) else {}
+        # The actor's signing key_id MUST come from the VERIFIED subject only — NOT envelope.actor
+        # (caller-asserted) and NOT an unverified subject (review F-3: the HTTP verified subject
+        # carries no key_id, so the old `actor.get("key_id")` fallback made the no-self-approval
+        # check inert). No verified key_id ⇒ "" ⇒ the gate fails closed. (The transport populating
+        # the verified subject's key_id is what enables activation-over-HTTP; until then it is
+        # fail-closed, which is correct.)
+        actor_key_id = subj.get("key_id") if subj.get("verified") else ""
+        actor_key_id = actor_key_id or ""
+        # Host-operator trust/scope config (NOT caller-supplied). Unset ⇒ the gate fails closed, so
+        # activation is disabled until the destination host is explicitly configured.
+        pinned = os.environ.get("CHP_HOST_APPROVER_KEYS")
+        trusted = {k.strip() for k in pinned.split(",") if k.strip()} if pinned else None
+        pub_pinned = os.environ.get("CHP_HOST_TRUSTED_PUBLISHERS")
+        trusted_pubs = ({k.strip() for k in pub_pinned.split(",") if k.strip()}
+                        if pub_pinned else None)
+        auth = authorize_activation_effect(
+            grant=grant,
+            plan_digest=str(act.get("plan_digest") or ""),
+            effect_kind=str(act.get("effect_kind") or ""),
+            actor_key_id=actor_key_id,
+            at_time=self._decision_now(),
+            expected_audience=os.environ.get("CHP_HOST_ACTIVATION_AUDIENCE"),
+            trusted_approver_keys=trusted,
+            consumed_approval_ids=self._activation_consume_store().consumed_ids(),
+            readiness_eligible=act.get("readiness_eligible"),
+            publisher_fingerprint=act.get("publisher_fingerprint"),
+            trusted_publisher_fingerprints=trusted_pubs,
+        )
+        if not auth.authorized:
+            return auth.denial
+        # Authorized → ATOMIC single-use consume (NEG-ACT-005/013). Losing the race to a concurrent
+        # duplicate means the grant is already spent; deny rather than perform a second effect.
+        approval_id = str((grant or {}).get("approval_id") or "")
+        if not self._activation_consume_store().consume(approval_id):
+            return DenialReason(
+                code=ACTIVATION_NOT_AUTHORIZED,
+                message="the activation grant was already consumed (concurrent duplicate)",
+                retryable=False)
+        return None
 
     def _emit_safety_event(
         self,
