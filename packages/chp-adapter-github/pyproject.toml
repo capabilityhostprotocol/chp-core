@@ -28,6 +28,10 @@ dependencies = [
     "httpx>=0.27",
 ]
 
+[project.urls]
+Homepage = "https://capabilityhostprotocol.com"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
+
 [project.entry-points."chp.adapters"]
 github = "chp_adapter_github:GitHubAdapter"
 

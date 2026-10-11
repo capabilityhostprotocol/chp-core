@@ -79,6 +79,7 @@ class TestShaping:
             "chp.adapters.audit.agent_runs",
             "chp.adapters.audit.inclusion_proof",
             "chp.adapters.audit.countersign_head",
+            "chp.adapters.audit.ocsf_export",
         }
 
     def test_all_risk_low(self):

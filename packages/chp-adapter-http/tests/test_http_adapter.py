@@ -449,3 +449,20 @@ def test_stream_does_not_record_event_content_in_evidence():
     host.invoke("chp.adapters.http.stream", {"url": "https://api.x/v1/chat/completions"})
     blob = json.dumps([e["payload"] for e in store.all()])
     assert "Hello world" not in blob and "Hello" not in blob   # only counts in evidence, never content
+
+
+def test_dns_name_resolving_to_metadata_is_blocked(monkeypatch):
+    """SSRF: a hostname that RESOLVES to the cloud-metadata IP must be denied even with
+    block_private_networks=False (the name-string check alone was bypassable)."""
+    import socket as _s
+    import chp_adapter_http.adapter as A
+
+    def _fake_gai(host, port, *a, **k):
+        return [(_s.AF_INET, _s.SOCK_STREAM, 6, "", ("169.254.169.254", port or 80))]
+
+    monkeypatch.setattr(A.socket, "getaddrinfo", _fake_gai)
+    host = _make_host(HttpConfig(allowed_origins=None, block_private_networks=False,
+                                 transport=_make_transport()))
+    r = host.invoke("chp.adapters.http.request",
+                    {"method": "GET", "url": "http://metadata.attacker.example/latest/meta-data/"})
+    assert r.outcome == "failure"

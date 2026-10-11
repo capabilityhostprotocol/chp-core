@@ -28,7 +28,8 @@
         "mandate_exhausted",
         "capability_version_unsupported",
         "host_unreachable",
-        "version_unsupported"
+        "version_unsupported",
+        "activation_not_authorized"
       ]
     },
     "message": {

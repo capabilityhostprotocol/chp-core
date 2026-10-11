@@ -187,6 +187,7 @@ class SecretsAdapter(BaseAdapter):
         },
         emits=_EMITS,
         tags=["secrets"],
+        metadata={"cache_results": False},   # secret-adjacent — keep the result out of the §13 cache
     )
     async def set(self, ctx: Any, payload: dict) -> dict:
         key = payload["key"]
@@ -215,6 +216,7 @@ class SecretsAdapter(BaseAdapter):
         },
         emits=_EMITS,
         tags=["secrets"],
+        metadata={"cache_results": False},   # secret-adjacent — keep the result out of the §13 cache
     )
     async def delete(self, ctx: Any, payload: dict) -> dict:
         key = payload["key"]
@@ -244,6 +246,7 @@ class SecretsAdapter(BaseAdapter):
         },
         emits=_EMITS,
         tags=["secrets"],
+        metadata={"cache_results": False},   # secret-adjacent (key names) — keep out of the §13 cache
     )
     async def list_secrets(self, ctx: Any, payload: dict) -> dict:
         prefix = payload.get("prefix", "")

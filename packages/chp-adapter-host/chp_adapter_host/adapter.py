@@ -28,6 +28,39 @@ from typing import Any
 
 from chp_core import BaseAdapter, capability
 from chp_core.stats import collect_host_stats
+from . import bootstrap as _bootstrap
+
+
+def _dest_is_mesh(base_url: str) -> bool:
+    """True only when `base_url` is a MESH destination the node's OWN mesh key may authenticate to:
+    an explicitly allowlisted host (CHP_MESH_DEST_ALLOWLIST, comma-separated), or an address in the
+    Tailscale CGNAT range (100.64.0.0/10) or loopback. Everything else → the node key is withheld, so
+    it can never be exfiltrated as an X-CHP-Key header to a caller-chosen origin."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+    try:
+        host = (urlsplit(base_url).hostname or "").lower()
+    except Exception:  # noqa: BLE001
+        return False
+    if not host:
+        return False
+    allow = {h.strip().lower() for h in os.environ.get("CHP_MESH_DEST_ALLOWLIST", "").split(",") if h.strip()}
+    if host in allow:
+        return True
+    tailnet = ipaddress.ip_network("100.64.0.0/10")
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if ip.is_loopback or (isinstance(ip, ipaddress.IPv4Address) and ip in tailnet):
+            return True
+    return False
 
 
 def _host_version() -> str:
@@ -322,6 +355,44 @@ class HostAdapter(BaseAdapter):
         return {"count": len(caps), "adapters": adapters, "capabilities": slim}
 
     @capability(
+        id="chp.adapters.host.bootstrap",
+        version="1.0.0",
+        description="Bootstrap this node's SYSTEM prerequisites for an install tier "
+                    "(node | containment | assurance, + optional sovereign inference): detect what's "
+                    "present, plan per-OS (apt/dnf/brew/winget), run hardened installs, and RE-VERIFY "
+                    "that each prereq actually took (a zero exit is not proof). Every phase is recorded "
+                    "as CHP evidence on this host — inspectable via replay. Fails closed, honestly "
+                    "skipping what the hardware/OS can't provide (e.g. W4 on a device with no TPM).",
+        category="infrastructure",
+        risk="high",
+        side_effects=["process_execution", "package_install"],
+        emits=["bootstrap_detected", "bootstrap_planned", "bootstrap_step",
+               "bootstrap_verified", "bootstrap_complete"],
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tier": {"type": "string", "enum": ["node", "containment", "assurance"],
+                         "description": "how deep to provision (cumulative)"},
+                "inference": {"type": "boolean", "description": "also provision a sovereign LLM backend"},
+                "dry_run": {"type": "boolean", "description": "plan + record, install nothing"},
+            },
+            "required": ["tier"],
+            "additionalProperties": False,
+        },
+        tags=["host", "bootstrap", "onboarding", "deploy"],
+    )
+    async def bootstrap(self, ctx: Any, payload: dict) -> dict:
+        # The engine does detection/planning/hardened execution; ctx.emit records each phase as this
+        # host's signed, chained ExecutionEvidence (no hand-rolled ledger). Runs the installs in-cap,
+        # so declare it high-risk with package_install side effects — a node's policy can gate it.
+        return _bootstrap.execute(
+            payload["tier"],
+            inference=bool(payload.get("inference")),
+            dry_run=bool(payload.get("dry_run")),
+            emit=ctx.emit,
+        )
+
+    @capability(
         id="chp.adapters.host.version",
         version="1.0.0",
         description="Report this node's chp-host version, platform, and installed adapters.",
@@ -377,18 +448,26 @@ class HostAdapter(BaseAdapter):
         from chp_core.http import RemoteCapabilityHost
         base_url = str(payload["base_url"])
         capability_id = str(payload["capability_id"])
-        # federated auth: default the bearer to the node's mesh HTTP key when the caller doesn't supply
-        # one — so cross-node invocation self-authenticates node-side and the shared key never rides in
-        # the caller's payload/evidence. Source order mirrors mesh_auth: CHP_MESH_HTTP_KEY env, then the
-        # node's own secrets store (mesh/http_control_key, composed via the local secrets cap).
-        api_key = payload.get("api_key") or os.environ.get("CHP_MESH_HTTP_KEY")
+        # federated auth: an explicit caller api_key is always honored. Otherwise the node's OWN mesh
+        # key may self-authenticate the call — but ONLY to a MESH destination. Sending it to an
+        # arbitrary caller-supplied base_url would exfiltrate the node credential (it rides as an
+        # X-CHP-Key header), so for a non-mesh destination the key is WITHHELD.
+        api_key = payload.get("api_key")
         if not api_key:
-            try:
-                r = await ctx.ainvoke("chp.adapters.secrets.get", {"key": "mesh/http_control_key"})
-                if getattr(r, "success", False):
-                    api_key = (r.data or {}).get("value") or (r.data or {}).get("secret")
-            except Exception as exc:  # no secrets cap / not set → auth simply not configured
-                ctx.emit("host_mesh_key_lookup_skipped", {"error": str(exc)[:120]}, redacted=False)
+            if _dest_is_mesh(base_url):
+                api_key = os.environ.get("CHP_MESH_HTTP_KEY")
+                if not api_key:
+                    try:
+                        r = await ctx.ainvoke("chp.adapters.secrets.get", {"key": "mesh/http_control_key"})
+                        if getattr(r, "success", False):
+                            api_key = (r.data or {}).get("value") or (r.data or {}).get("secret")
+                    except Exception as exc:  # no secrets cap / not set → auth simply not configured
+                        ctx.emit("host_mesh_key_lookup_skipped", {"error": str(exc)[:120]}, redacted=False)
+            else:
+                ctx.emit("host_mesh_key_lookup_skipped",
+                         {"reason": "destination is not a mesh peer — node key withheld; pass api_key "
+                                    "explicitly or add the host to CHP_MESH_DEST_ALLOWLIST"},
+                         redacted=False)
         remote = RemoteCapabilityHost(base_url, timeout=int(payload.get("timeout") or 120),
                                       api_key=api_key or None)
         result = await remote.ainvoke(capability_id, payload.get("payload") or {},

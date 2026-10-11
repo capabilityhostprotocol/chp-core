@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-process"
-version = "0.53.0"
+version = "0.54.0"
 description = "CHP capability adapter — governed subprocess/CLI execution"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,10 @@ classifiers = [
 dependencies = [
     "chp-core>=0.7.0",
 ]
+
+[project.urls]
+Homepage = "https://capabilityhostprotocol.com"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
 
 [project.entry-points."chp.adapters"]
 process = "chp_adapter_process:ProcessAdapter"

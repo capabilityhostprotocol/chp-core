@@ -9,7 +9,7 @@ import { edVerify, sha256hex, ecdsaP256VerifyPem } from './crypto.js';
 import { canon, canonFor, canonJcs, type JsonValue } from './canon.js';
 import { EVENT_HASH_V2, payloadCommitment, rootHash, type EvidenceEvent } from './hash.js';
 import { verifyChain } from './chain.js';
-import { attenuates, bundleHeader, computeStoreHead, computeTaskRootHash, mandateHeader, publicKeyFromB64, taskBundleHeader, COMPLETENESS_SCHEME } from './signing.js';
+import { attenuates, bundleHeader, computeStoreHead, computeTaskRootHash, keyIdFor, mandateHeader, publicKeyFromB64, taskBundleHeader, COMPLETENESS_SCHEME } from './signing.js';
 import { verifyStoreHeadInclusion, verifyStoreHeadConsistency, verifyInclusion, CHP_STORE_HEAD_V2, type StoreHeadInclusion, type StoreHeadConsistency } from './merkle.js';
 import { didKeyToRaw, verifySshsig, STORE_HEAD_ANCHOR_NAMESPACE } from './sshsig.js';
 import { orderEvents } from './ordering.js';
@@ -708,6 +708,14 @@ function verifyApprovalGrantImpl(
     payload_commitment: grant.payload_commitment, canonicalization: grant.canonicalization,
   };
   checks.binds_signer = grant.approver === sig.key_id;
+  // Bind the approver IDENTITY to the signing KEY MATERIAL (SECURITY, rad 0ae5fec; parity with Python
+  // verify_approval_grant): the embedded public key MUST hash to the claimed approver AND signature
+  // key_id. Without this the signature is only checked against the grant's own embedded key while
+  // approver/key_id are self-asserted strings — forgeable by any key. Malformed pubkey ⇒ fail closed.
+  let pubKeyId: string | undefined;
+  try { pubKeyId = pub ? keyIdFor(publicKeyFromB64(pub)) : undefined; } catch { pubKeyId = undefined; }
+  checks.key_binding = pubKeyId !== undefined
+    && pubKeyId === grant.approver && pubKeyId === sig.key_id;
   checks.signature = sig.algorithm === 'ed25519' && !!pub
     && verifyCanon(pub, header, String(sig.signature ?? ''));
   checks.temporal = !!grant.valid_until && opts.atTime <= String(grant.valid_until);

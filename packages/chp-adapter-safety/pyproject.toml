@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-safety"
-version = "0.54.0"
-description = "CHP capability adapter — risk assessment and guardrail evaluation"
+version = "0.57.1"
+description = "CHP capability adapter — risk assessment, guardrails, and hardware-attested (W4) witness attest + verify"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -23,12 +23,24 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+# pyOpenSSL (+ its cryptography) backs verify_tpm_witness's EK-chain validation — OpenSSL's path
+# builder is lenient about the non-canonical DER real TPM EK certs use, which pyca rejects.
 dependencies = [
     "chp-core>=0.7.0",
+    "pyopenssl>=24.0",
 ]
+
+[project.urls]
+Homepage = "https://capabilityhostprotocol.com"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
 
 [project.entry-points."chp.adapters"]
 safety = "chp_adapter_safety:SafetyAdapter"
+
+# Adapter-first: safety OWNS its runtime-assurance substrate prerequisites (W4 TPM + own-kernel
+# microVM). The generic bootstrap engine (chp-adapter-host) discovers these at plan/provision time.
+[project.entry-points."chp.prereqs"]
+safety = "chp_adapter_safety.prereqs:declare"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
@@ -40,4 +52,8 @@ asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["chp_adapter_safety"]
+# the pinned manufacturer trust anchors (binary DER) are package data verify_tpm_witness loads at
+# runtime; hatchling bundles non-.py files under the package dir by default, but name them as
+# artifacts so a VCS-excluded build still ships them.
+artifacts = ["chp_adapter_safety/trust_anchors/*.der"]
 

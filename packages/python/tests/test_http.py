@@ -586,3 +586,25 @@ class RetryBackoffTests(unittest.TestCase):
         result, sleeps = self._run(host, [self._denied(code="policy_blocked", retryable=False)])
         self.assertEqual(result.denial.code, "policy_blocked")
         self.assertEqual(sleeps, [])
+
+
+def test_nonloopback_bind_without_auth_is_refused(monkeypatch):
+    """Secure-by-default: an unauthenticated host must not bind a routable address silently."""
+    import pytest
+    for k in ("CHP_HOST_API_KEYS", "CHP_HOST_API_KEY", "CHP_HOST_TOKEN_KEYS",
+              "CHP_HOST_ALLOW_ANON", "CHP_HOST_REQUIRE_AUTH"):
+        monkeypatch.delenv(k, raising=False)
+    host = LocalCapabilityHost("anon-host", store=SQLiteEvidenceStore(":memory:"))
+
+    with pytest.raises(RuntimeError, match="UNAUTHENTICATED"):
+        create_http_server(host, bind="0.0.0.0", port=0)
+
+    monkeypatch.setenv("CHP_HOST_ALLOW_ANON", "1")                 # explicit opt-in → allowed
+    create_http_server(host, bind="0.0.0.0", port=0).server_close()
+
+    monkeypatch.delenv("CHP_HOST_ALLOW_ANON", raising=False)
+    monkeypatch.setenv("CHP_HOST_API_KEY", "k")                    # configured auth → allowed
+    create_http_server(host, bind="0.0.0.0", port=0).server_close()
+
+    monkeypatch.delenv("CHP_HOST_API_KEY", raising=False)          # loopback stays open (dev)
+    create_http_server(host, bind="127.0.0.1", port=0).server_close()

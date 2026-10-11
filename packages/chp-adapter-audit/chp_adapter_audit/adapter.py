@@ -695,6 +695,84 @@ class AuditAdapter(BaseAdapter):
                  redacted=False)
         return {"agent_runs": spans, "count": len(spans), "total_tokens": total_tokens}
 
+    # ------------------------------------------------------------------
+    # ocsf_export — governed decisions → OCSF 1.3.0 API Activity (SIEM/auditor interop)
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.audit.ocsf_export",
+        version="1.0.0",
+        description=(
+            "Map CHP governed decisions / effect records to OCSF 1.3.0 API Activity events "
+            "(category_uid 6, class_uid 6003) so a SIEM or auditor can ingest CHP evidence with no "
+            "CHP-specific parser. Each decision becomes one OCSF event: status_id 1/2 for allow/deny, "
+            "the governed decision preserved verbatim as a `chp.governed_decision` enrichment, and the "
+            "required cloud/osint fields populated honestly (on-prem, no OSINT). Returns the events plus "
+            "a conformance flag against OCSF's documented required-attribute set + enums. Pure mapping — "
+            "needs no store; validates shape, not a byte-for-byte run of the published JSON Schema, and "
+            "is not a claim of certified OCSF conformance."
+        ),
+        category="observability",
+        risk="low",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "decisions": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Governed decision/effect records (op / decision ALLOW|DENY / "
+                                   "capability / secret_ref / …). Other keys are preserved in the enrichment.",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Identifier of the producing component (host id, cell id, product). "
+                                   "Default 'chp-host'.",
+                },
+            },
+            "required": ["decisions"],
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["audit", "governance", "observability", "ocsf", "interop"],
+    )
+    async def ocsf_export(self, ctx: Any, payload: dict) -> dict:
+        from ._ocsf import OCSF_VERSION, decisions_to_ocsf, ocsf_conformance
+
+        decisions = payload.get("decisions")
+        if not isinstance(decisions, list):
+            ctx.emit("audit_error", {"reason": "decisions_not_a_list"}, redacted=False)
+            raise ValueError("ocsf_export: 'decisions' must be an array of decision objects")
+        if any(not isinstance(d, dict) for d in decisions):
+            ctx.emit("audit_error", {"reason": "decision_not_an_object"}, redacted=False)
+            raise ValueError("ocsf_export: every decision must be an object")
+
+        source = str(payload.get("source") or "chp-host")
+        ctx.emit("audit_query", {"op": "ocsf_export", "count": len(decisions), "source": source},
+                 redacted=False)
+
+        events = decisions_to_ocsf(decisions, source=source)
+        nonconformant = []
+        for i, ev in enumerate(events):
+            ok, problems = ocsf_conformance(ev)
+            if not ok:
+                nonconformant.append({"index": i, "problems": problems})
+        all_conformant = not nonconformant
+
+        ctx.emit("audit_result", {
+            "op": "ocsf_export",
+            "count": len(events),
+            "all_conformant": all_conformant,
+            "ocsf_version": OCSF_VERSION,
+        }, redacted=False)
+
+        return {
+            "ocsf_version": OCSF_VERSION,
+            "events": events,
+            "count": len(events),
+            "all_conformant": all_conformant,
+            "nonconformant": nonconformant,
+        }
+
 
 # --------------------------------------------------------------------------
 # Helpers

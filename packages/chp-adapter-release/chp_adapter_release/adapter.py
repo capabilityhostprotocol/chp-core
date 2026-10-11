@@ -300,6 +300,61 @@ class ReleaseAdapter(BaseAdapter):
         return result
 
     # ------------------------------------------------------------------
+    # land
+    # ------------------------------------------------------------------
+
+    @capability(
+        id="chp.adapters.release.land",
+        version="0.1.0",
+        description=(
+            "Run scripts/sync-to-public.sh --land <pr> [patch]: merge an accepted chp-core sync PR "
+            "into protected main (gh pr merge --squash, required checks honored) AND atomically "
+            "mirror rad = github/main + archive the rad patch — github and rad end content-identical, "
+            "no drift. Evidence: PR number + landed flag only — merge/mirror output is NOT captured."
+        ),
+        category="developer_tooling",
+        risk="high",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string"},
+                "pr_number": {
+                    "type": "integer",
+                    "description": "The chp-core PR number to land (must be mergeable: CI green).",
+                },
+                "patch_id": {
+                    "type": "string",
+                    "description": "The rad patch id to archive once merged (optional).",
+                },
+            },
+            "required": ["pr_number"],
+            "additionalProperties": False,
+        },
+        emits=_EMITS,
+        tags=["release", "land", "merge", "chp-core"],
+    )
+    async def land(self, ctx: Any, payload: dict) -> dict:
+        repo = self._repo(payload)
+        pr_number = int(payload["pr_number"])
+        patch_id: str | None = payload.get("patch_id")
+
+        ctx.emit("release_request", {"operation": "land", "pr_number": pr_number})
+
+        try:
+            args = ["bash", "scripts/sync-to-public.sh", "--land", str(pr_number)]
+            if patch_id:
+                args.append(patch_id)
+            output = self._run(*args, cwd=repo)
+        except RuntimeError as exc:
+            ctx.emit("release_error", {"operation": "land", "error": _short_reason(exc)})
+            raise
+
+        landed = "Landed:" in output  # the script prints "Landed: PR #N merged … github == rad"
+        result: dict = {"pr_number": pr_number, "landed": landed, "success": True}
+        ctx.emit("release_response", {"operation": "land", "pr_number": pr_number, "landed": landed})
+        return result
+
+    # ------------------------------------------------------------------
     # tag
     # ------------------------------------------------------------------
 

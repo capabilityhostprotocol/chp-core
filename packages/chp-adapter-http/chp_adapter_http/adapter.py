@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
 import socket
 import threading
 import time as _time
@@ -36,6 +37,16 @@ _METADATA_HOSTS = frozenset({
     "fd00:ec2::254",     # EC2 IMDSv2 IPv6
     "metadata.google.internal",
     "metadata",
+})
+
+# The same endpoints as RESOLVED addresses — a hostname that resolves to one of these (or to any
+# link-local address) is a metadata-SSRF bypass of the name check above, so it is blocked ALWAYS
+# (independent of block_private_networks). The IPv6 IMDS address is a ULA (fd00:ec2::254), so it is
+# listed explicitly; 169.254.0.0/16 + fe80::/10 are caught generically by `is_link_local`.
+_METADATA_IPS = frozenset({
+    ipaddress.ip_address("169.254.169.254"),
+    ipaddress.ip_address("169.254.170.2"),
+    ipaddress.ip_address("fd00:ec2::254"),
 })
 
 _EMITS = ["http_request", "http_response", "http_error", "http_circuit_open", "http_stream", "http_stream_done"]
@@ -84,7 +95,11 @@ class HttpConfig:
     allowed_origins: list[str] | None = None
     default_headers: dict[str, str] = field(default_factory=dict)
     timeout: float = 30.0
-    max_response_bytes: int = 1 * 1024 * 1024  # 1 MB
+    # Bounded for memory safety, but configurable — large API metadata (e.g. a PyPI package with a
+    # big release history) exceeds 1 MiB. Default 8 MiB; override per-instance or with
+    # CHP_HTTP_MAX_RESPONSE_BYTES.
+    max_response_bytes: int = field(
+        default_factory=lambda: int(os.environ.get("CHP_HTTP_MAX_RESPONSE_BYTES", str(8 * 1024 * 1024))))
     transport: Any = None
     # When True, additionally deny loopback / private / link-local / CGNAT
     # targets (resolving hostnames first). Off by default because sovereign
@@ -104,13 +119,25 @@ class HttpConfig:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
 
-        # 1. Always deny cloud metadata endpoints (SSRF crown jewel).
+        # 1. Always deny cloud metadata + link-local — by NAME and by RESOLVED IP. The name check
+        #    alone was bypassable (a DNS name resolving to 169.254.169.254); resolve and reject the
+        #    actual address too. Link-local / IMDS is never a legitimate target here (unlike loopback
+        #    + Tailscale mesh, which stay allowed by default and are gated in step 2).
         if host in _METADATA_HOSTS:
             raise PermissionError(f"host {host!r} is a blocked metadata endpoint")
+        try:
+            resolved = self._resolve_ips(host, parsed.port)
+        except PermissionError:
+            # unresolvable: nothing to IP-check here; the connection attempt fails later (step 2
+            # fails closed on unresolvable only when strict sandboxing is on).
+            resolved = []
+        for addr in resolved:
+            if addr in _METADATA_IPS or addr.is_link_local:
+                raise PermissionError(f"host {host!r} resolves to blocked metadata/link-local address {addr}")
 
-        # 2. Optional strict sandbox: deny loopback/private/link-local/CGNAT.
+        # 2. Optional strict sandbox: additionally deny loopback/private/CGNAT/reserved.
         if self.block_private_networks:
-            for addr in self._resolve_ips(host, parsed.port):
+            for addr in (resolved or self._resolve_ips(host, parsed.port)):
                 if (
                     addr.is_private or addr.is_loopback or addr.is_link_local
                     or addr.is_reserved or addr.is_multicast

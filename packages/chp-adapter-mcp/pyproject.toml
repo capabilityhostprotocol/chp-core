@@ -32,6 +32,10 @@ dependencies = [
 # server config, so the primary registration path is manual
 # register_adapter(host, MCPAdapter(config)); the entry point exposes the class
 # for tooling and introspection.
+[project.urls]
+Homepage = "https://capabilityhostprotocol.com"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
+
 [project.entry-points."chp.adapters"]
 mcp = "chp_adapter_mcp:MCPAdapter"
 

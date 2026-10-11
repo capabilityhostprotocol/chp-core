@@ -91,7 +91,7 @@ residual risk.
 ## Denial vocabulary (attribution of refusals)
 
 A governed refusal is attributable to a reserved code, so *"the host refused, and
-why"* is itself provable. The reserved codes are `approval_required`,
+why"* is itself provable. The reserved codes are `activation_not_authorized`, `approval_required`,
 `budget_exceeded`, `deadline_exceeded`, `capability_disabled`, `capability_not_found`,
 `capability_version_unsupported`, `escalation_required`, `evidence_required`,
 `host_unreachable`, `input_schema_validation_failed`, `invariant_failed`,

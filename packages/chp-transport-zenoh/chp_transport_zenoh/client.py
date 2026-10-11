@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, Callable
 
 from chp_core.types import InvocationEnvelope, InvocationResult, JSON
@@ -25,12 +26,15 @@ class ZenohTransport:
 
     def __init__(self, host_id: str, *, session: Any = None, config: Any = None,
                  name: str | None = None, prefix: str = KEY_PREFIX,
-                 timeout: float = 30.0) -> None:
+                 timeout: float = 30.0, invoke_key: str | None = None) -> None:
         self.host_id = host_id
         self._k = keys(host_id, prefix=prefix)
         self._prefix = prefix
         self._session, self._owns = open_session(session, config)
         self._timeout = timeout
+        # Caller credential presented in the query attachment when the host requires auth (B1); the
+        # host overrides the evidence subject with the verified principal. Default unset = no attachment.
+        self._invoke_key = invoke_key if invoke_key is not None else os.environ.get("CHP_ZENOH_INVOKE_KEY")
         self.name = name or f"zenoh://{host_id}"
 
     def _get(self, key: str, payload: JSON | None = None) -> JSON:
@@ -38,6 +42,8 @@ class ZenohTransport:
         kwargs: dict[str, Any] = {"timeout": self._timeout}
         if payload is not None:
             kwargs["payload"] = json.dumps(payload).encode()
+        if self._invoke_key is not None:
+            kwargs["attachment"] = self._invoke_key.encode()
         return first_reply(self._session.get(key, **kwargs))
 
     async def ainvoke_envelope(self, envelope: InvocationEnvelope) -> InvocationResult:

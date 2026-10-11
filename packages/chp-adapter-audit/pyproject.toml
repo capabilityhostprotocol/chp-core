@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chp-adapter-audit"
-version = "0.58.0"
+version = "0.59.1"
 description = "CHP capability adapter — queryable audit log over the host evidence store"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,10 @@ classifiers = [
 dependencies = [
     "chp-core>=0.7.0",
 ]
+
+[project.urls]
+Homepage = "https://capabilityhostprotocol.com"
+Issues = "https://github.com/capabilityhostprotocol/chp-core/issues"
 
 [project.entry-points."chp.adapters"]
 audit = "chp_adapter_audit:AuditAdapter"

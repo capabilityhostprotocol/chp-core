@@ -66,6 +66,59 @@ def test_invoke_roundtrip_byte_identical(tmp_path):
         transport.close(); server.close()
 
 
+def test_invoke_requires_key_when_configured():
+    """B1: with an invoke key configured, a querier that doesn't present it is DENIED; the right key
+    (in the query attachment) succeeds — parity with the HTTP binding's caller auth."""
+    host = _host("zt-auth")
+    server = ZenohHostServer(host, invoke_key="s3cret")
+    bad = ZenohTransport("zt-auth")                         # no credential
+    good = ZenohTransport("zt-auth", invoke_key="s3cret")   # right credential in the attachment
+    time.sleep(0.4)
+    try:
+        env = InvocationEnvelope.from_mapping(
+            {"capability_id": "math.add", "payload": {"a": 1, "b": 2},
+             "correlation": {"correlation_id": "zt-auth-c"}})
+        r_bad = asyncio.run(bad.ainvoke_envelope(env))
+        assert not r_bad.success and r_bad.outcome == "denied"
+        r_good = asyncio.run(good.ainvoke_envelope(env))
+        assert r_good.success and r_good.data == {"sum": 3}
+    finally:
+        bad.close(); good.close(); server.close()
+
+
+def test_no_invoke_key_stays_open():
+    """Migration default: no key configured → invoke works without a credential (fleet not broken)."""
+    host = _host("zt-open")
+    server = ZenohHostServer(host)                          # no invoke_key
+    t = ZenohTransport("zt-open")
+    time.sleep(0.4)
+    try:
+        env = InvocationEnvelope.from_mapping(
+            {"capability_id": "math.add", "payload": {"a": 2, "b": 3},
+             "correlation": {"correlation_id": "zt-open-c"}})
+        r = asyncio.run(t.ainvoke_envelope(env))
+        assert r.success and r.data == {"sum": 5}
+    finally:
+        t.close(); server.close()
+
+
+def test_authenticate_maps_principal_and_verified():
+    """The auth mapping (no session needed): no key → anonymous/unverified; right attachment →
+    authenticated/verified; wrong/missing → anonymous. The principal is what the handler writes as the
+    overriding evidence subject, so a caller can never assert a verified identity it doesn't hold."""
+    srv = ZenohHostServer.__new__(ZenohHostServer)
+
+    class _Q:
+        def __init__(self, att): self.attachment = att
+
+    srv._invoke_key = None
+    assert srv._authenticate(_Q(None)) == ("zenoh:anonymous", False)
+    srv._invoke_key = "k"
+    assert srv._authenticate(_Q(b"k")) == ("zenoh:authenticated", True)
+    assert srv._authenticate(_Q(b"wrong")) == ("zenoh:anonymous", False)
+    assert srv._authenticate(_Q(None)) == ("zenoh:anonymous", False)
+
+
 def test_discover_and_health_over_zenoh():
     host = _host("zt-b")
     server = ZenohHostServer(host)
