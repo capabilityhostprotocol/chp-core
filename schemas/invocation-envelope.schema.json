@@ -56,6 +56,11 @@
       "$ref": "https://chp.dev/schemas/v0.1/capability-binding.schema.json",
       "description": "OPTIONAL resolved CapabilityBinding (proposal 0043): the exact provider+host topology this attempt targets, typically from a resolver/market. When present the host binds invocation_digest to it; absent, a self-hosted binding is synthesized (provider == host). Omitted = today's behavior (additive)."
     },
+    "activation_ref": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "OPTIONAL activation context (M1.3, ADR-002): present ONLY when this invocation is a privileged ACTIVATION EFFECT (CONNECT/DEPLOY/INSTANTIATE) the destination host must INDEPENDENTLY authorize via the activation-effect gate (authority distinct from invocation authority). Carries {plan_digest, effect_kind, readiness_eligible, publisher_fingerprint?}; the approver-signed grant rides approval_ref. Omitted = an ordinary invocation (additive)."
+    },
     "action_digest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$",

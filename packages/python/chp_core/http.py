@@ -295,6 +295,11 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         self._caller: str | None = None
         self._caller_scope: list[str] | None = None
         self._caller_type: str = "api_key"
+        # The verified caller's CHP ed25519 key_id, set ONLY by an auth method that establishes a
+        # signing key (the bearer-token path, from the pinned pubkey). Carried onto the verified
+        # subject so the activation-effect gate's key-based checks (self-approval) work over HTTP
+        # (a419e02). Host-derived; never taken from the token/client.
+        self._caller_key_id: str | None = None
 
         # Mutual TLS (§5, proposal 0031): the connection already completed a
         # CERT_REQUIRED handshake, so a peer cert here is CA-verified. Bind its
@@ -353,6 +358,14 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
                                               expected_caller_key=pin)
                         if v.valid:
                             self._caller = sub
+                            # Derive the caller's CHP key_id from the PINNED pubkey (host-side, not
+                            # from the token) so the activation gate can do its key-based checks over
+                            # HTTP (a419e02). A bad pin just leaves it unset → activation fail-closed.
+                            try:
+                                from .signing import key_id_for
+                                self._caller_key_id = key_id_for(base64.b64decode(pin))
+                            except Exception:  # noqa: BLE001
+                                self._caller_key_id = None
                             return True
                 except Exception:
                     pass
@@ -963,11 +976,28 @@ class CapabilityHostRequestHandler(BaseHTTPRequestHandler):
         # not to whatever the request body claimed. Accountability, not assertion.
         caller = getattr(self, "_caller", None)
         if caller is not None:
-            envelope_body["subject"] = {
+            subj = {
                 "id": caller,
                 "type": getattr(self, "_caller_type", "api_key"),  # "mtls" for a client cert (0031)
                 "verified": True,
             }
+            # A verified signing key_id (bearer-token auth) rides the subject so the activation gate
+            # can compare it to the approver (no-self-approval) over HTTP (a419e02). Absent for
+            # api-key / mTLS callers → activation stays fail-closed for them, which is correct.
+            caller_key_id = getattr(self, "_caller_key_id", None)
+            if caller_key_id:
+                subj["key_id"] = caller_key_id
+            envelope_body["subject"] = subj
+        else:
+            # No verified caller (unauthenticated / open mode): an untrusted client MUST NOT be able
+            # to self-assert a verified identity or a signing key_id — the activation gate keys off
+            # exactly those. Strip them from any client-supplied subject so a forged value can never
+            # reach the gate (a419e02); the id/other attributes are kept but unverified.
+            client_subject = envelope_body.get("subject")
+            if isinstance(client_subject, dict) and ("verified" in client_subject
+                                                      or "key_id" in client_subject):
+                envelope_body["subject"] = {k: v for k, v in client_subject.items()
+                                            if k not in ("verified", "key_id")}
         envelope = InvocationEnvelope.from_mapping(envelope_body)
         scope = getattr(self, "_caller_scope", None)
         if scope is not None and not _scope_allows(scope, envelope.capability_id):

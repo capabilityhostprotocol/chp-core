@@ -996,6 +996,14 @@ class InvocationEnvelope:
     # gate can reject work whose budget has passed (CAP-006). None = today's behavior
     # (omit-when-absent → byte-identical wire pre-0052).
     deadline: str | None = None
+    # OPTIONAL activation context (M1.3, ADR-002): present ONLY when this invocation is a
+    # privileged ACTIVATION EFFECT (CONNECT / DEPLOY / INSTANTIATE) the destination host must
+    # INDEPENDENTLY authorize via the activation-effect gate — an authority distinct from
+    # invocation authority. Carries {plan_digest, effect_kind, readiness_eligible,
+    # publisher_fingerprint?}; the approver-signed grant rides `approval_ref`. None (default) =
+    # an ordinary invocation → the activation gate is skipped entirely (omit-when-absent →
+    # byte-identical wire pre-M1.3).
+    activation_ref: JSON | None = None
 
     @classmethod
     def from_mapping(cls, value: JSON) -> "InvocationEnvelope":
@@ -1046,6 +1054,10 @@ class InvocationEnvelope:
             # deadline must be a parseable instant, else reject (→ 400) rather than
             # let a malformed budget reach the gate.
             deadline=_validated_deadline(value.get("deadline")),
+            # Activation context (M1.3): opaque structured dict, validated as an object at the
+            # trust boundary; omit-when-absent so ordinary invocations are byte-identical.
+            activation_ref=(_obj(value.get("activation_ref"), "activation_ref")
+                            if value.get("activation_ref") else None),
         )
 
     def to_dict(self) -> JSON:
@@ -1065,6 +1077,8 @@ class InvocationEnvelope:
             del data["binding"]  # additive (proposal 0043): absent stays absent
         if data.get("deadline") is None:
             del data["deadline"]  # additive (proposal 0052): absent stays absent
+        if data.get("activation_ref") is None:
+            del data["activation_ref"]  # additive (M1.3): absent stays absent
         return data
 
 
